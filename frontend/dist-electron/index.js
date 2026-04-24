@@ -1,10 +1,76 @@
-import { app, ipcMain, BrowserWindow } from "electron";
-import path, { join } from "node:path";
-import Database from "better-sqlite3";
-import crypto from "node:crypto";
-const __vite_glob_0_0 = "-- 001_init.sql\n-- Preserva el esquema actual (products, sales, sale_items) y la data semilla.\n-- No cambia estructura: solo mueve la creacion a una migracion versionada.\n-- Los redisenios de negocio iran en migraciones posteriores.\n\nCREATE TABLE IF NOT EXISTS products (\n  id    INTEGER PRIMARY KEY AUTOINCREMENT,\n  code  TEXT    NOT NULL UNIQUE,\n  name  TEXT    NOT NULL,\n  price REAL    NOT NULL,\n  stock INTEGER NOT NULL DEFAULT 0\n);\n\nCREATE TABLE IF NOT EXISTS sales (\n  id    INTEGER PRIMARY KEY AUTOINCREMENT,\n  total REAL    NOT NULL,\n  date  TEXT    DEFAULT CURRENT_TIMESTAMP\n);\n\nCREATE TABLE IF NOT EXISTS sale_items (\n  id         INTEGER PRIMARY KEY AUTOINCREMENT,\n  sale_id    INTEGER NOT NULL,\n  product_id INTEGER NOT NULL,\n  qty        INTEGER NOT NULL,\n  price      REAL    NOT NULL,\n  FOREIGN KEY (sale_id)    REFERENCES sales(id),\n  FOREIGN KEY (product_id) REFERENCES products(id)\n);\n\n-- Data semilla. INSERT OR IGNORE garantiza idempotencia si alguna instalacion\n-- ya la tuviera (por ejemplo una DB preexistente del bootstrap antiguo).\nINSERT OR IGNORE INTO products (code, name, price, stock) VALUES\n  ('ACE-001', 'Aceite de Motor 10W40 Chevron',    45.00,  12),\n  ('FIL-002', 'Filtro de Aceite ECOBREX',         15.50,   5),\n  ('FRE-003', 'Pastillas de Freno Ceramicas',    120.00,   8),\n  ('BAT-004', 'Bateria 12V 70Ah LTH',            650.00,   2),\n  ('SRV-001', 'Servicio de Diagnostico Escaner', 150.00, 999);\n";
-const __vite_glob_0_1 = "-- 002_settings.sql\n-- Tabla de configuracion parametrica. `type` restringe los valores que el\n-- service aceptara y como deserializa `value` (que siempre se almacena TEXT).\n-- CHECK evita que la capa de datos quede en estado invalido incluso si alguien\n-- escribe sin pasar por el service.\n\nCREATE TABLE IF NOT EXISTS settings (\n  key         TEXT PRIMARY KEY,\n  value       TEXT NOT NULL,\n  type        TEXT NOT NULL CHECK (type IN ('string', 'number', 'boolean', 'json')),\n  category    TEXT NOT NULL,\n  description TEXT NOT NULL DEFAULT '',\n  updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\n);\n\nCREATE INDEX IF NOT EXISTS idx_settings_category ON settings(category);\n\n-- Valores por defecto. INSERT OR IGNORE para no sobrescribir nada que el\n-- usuario haya editado antes (ej. tras reinstalar con DB preservada).\n-- Booleans se almacenan como '0'/'1' por consistencia con el serializador.\nINSERT OR IGNORE INTO settings (key, value, type, category, description) VALUES\n  ('tax_rate',               '0.12',  'number',  'tax',      'IVA aplicado a ventas (decimal, ej. 0.12 = 12%)'),\n  ('tax_included_in_price',  '0',     'boolean', 'tax',      'Si los precios ya incluyen IVA'),\n  ('currency_code',          'GTQ',   'string',  'currency', 'Codigo ISO 4217 de la moneda'),\n  ('currency_symbol',        'Q',     'string',  'currency', 'Simbolo que se muestra en UI/tickets'),\n  ('decimal_places',         '2',     'number',  'currency', 'Decimales para mostrar importes'),\n  ('allow_negative_stock',   '0',     'boolean', 'inventory','Permitir vender sin stock disponible'),\n  ('business_name',          '',      'string',  'business', 'Razon social / nombre comercial'),\n  ('business_nit',           '',      'string',  'business', 'NIT del emisor'),\n  ('business_address',       '',      'string',  'business', 'Direccion fiscal'),\n  ('business_phone',         '',      'string',  'business', 'Telefono de contacto');\n";
-const __vite_glob_0_2 = `-- 003_sales_tax_snapshot.sql
+import { app as T, ipcMain as u, BrowserWindow as F } from "electron";
+import q, { join as S } from "node:path";
+import x from "better-sqlite3";
+import V from "node:crypto";
+const X = `-- 001_init.sql
+-- Preserva el esquema actual (products, sales, sale_items) y la data semilla.
+-- No cambia estructura: solo mueve la creacion a una migracion versionada.
+-- Los redisenios de negocio iran en migraciones posteriores.
+
+CREATE TABLE IF NOT EXISTS products (
+  id    INTEGER PRIMARY KEY AUTOINCREMENT,
+  code  TEXT    NOT NULL UNIQUE,
+  name  TEXT    NOT NULL,
+  price REAL    NOT NULL,
+  stock INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS sales (
+  id    INTEGER PRIMARY KEY AUTOINCREMENT,
+  total REAL    NOT NULL,
+  date  TEXT    DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sale_items (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  sale_id    INTEGER NOT NULL,
+  product_id INTEGER NOT NULL,
+  qty        INTEGER NOT NULL,
+  price      REAL    NOT NULL,
+  FOREIGN KEY (sale_id)    REFERENCES sales(id),
+  FOREIGN KEY (product_id) REFERENCES products(id)
+);
+
+-- Data semilla. INSERT OR IGNORE garantiza idempotencia si alguna instalacion
+-- ya la tuviera (por ejemplo una DB preexistente del bootstrap antiguo).
+INSERT OR IGNORE INTO products (code, name, price, stock) VALUES
+  ('ACE-001', 'Aceite de Motor 10W40 Chevron',    45.00,  12),
+  ('FIL-002', 'Filtro de Aceite ECOBREX',         15.50,   5),
+  ('FRE-003', 'Pastillas de Freno Ceramicas',    120.00,   8),
+  ('BAT-004', 'Bateria 12V 70Ah LTH',            650.00,   2),
+  ('SRV-001', 'Servicio de Diagnostico Escaner', 150.00, 999);
+`, P = `-- 002_settings.sql
+-- Tabla de configuracion parametrica. \`type\` restringe los valores que el
+-- service aceptara y como deserializa \`value\` (que siempre se almacena TEXT).
+-- CHECK evita que la capa de datos quede en estado invalido incluso si alguien
+-- escribe sin pasar por el service.
+
+CREATE TABLE IF NOT EXISTS settings (
+  key         TEXT PRIMARY KEY,
+  value       TEXT NOT NULL,
+  type        TEXT NOT NULL CHECK (type IN ('string', 'number', 'boolean', 'json')),
+  category    TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_settings_category ON settings(category);
+
+-- Valores por defecto. INSERT OR IGNORE para no sobrescribir nada que el
+-- usuario haya editado antes (ej. tras reinstalar con DB preservada).
+-- Booleans se almacenan como '0'/'1' por consistencia con el serializador.
+INSERT OR IGNORE INTO settings (key, value, type, category, description) VALUES
+  ('tax_rate',               '0.12',  'number',  'tax',      'IVA aplicado a ventas (decimal, ej. 0.12 = 12%)'),
+  ('tax_included_in_price',  '0',     'boolean', 'tax',      'Si los precios ya incluyen IVA'),
+  ('currency_code',          'GTQ',   'string',  'currency', 'Codigo ISO 4217 de la moneda'),
+  ('currency_symbol',        'Q',     'string',  'currency', 'Simbolo que se muestra en UI/tickets'),
+  ('decimal_places',         '2',     'number',  'currency', 'Decimales para mostrar importes'),
+  ('allow_negative_stock',   '0',     'boolean', 'inventory','Permitir vender sin stock disponible'),
+  ('business_name',          '',      'string',  'business', 'Razon social / nombre comercial'),
+  ('business_nit',           '',      'string',  'business', 'NIT del emisor'),
+  ('business_address',       '',      'string',  'business', 'Direccion fiscal'),
+  ('business_phone',         '',      'string',  'business', 'Telefono de contacto');
+`, k = `-- 003_sales_tax_snapshot.sql
 -- Snapshotea impuesto y moneda al momento de la venta. Motivo: reimprimir
 -- un ticket mañana con la tasa vigente hoy da totales distintos al cobrado,
 -- lo cual es legalmente y contablemente invalido. Ver Prompt 1, seccion
@@ -20,19 +86,58 @@ ALTER TABLE sales ADD COLUMN currency_code    TEXT NOT NULL DEFAULT 'GTQ';
 -- fielmente historico; en una migracion de produccion habria que coordinar
 -- con contabilidad un criterio acordado (ej. retro-aplicar tax_rate actual).
 UPDATE sales SET subtotal = total WHERE subtotal = 0;
+`, $ = `-- 004_customers.sql
+-- Tabla de clientes + enlace desde sales con snapshot de nombre/NIT.
+--
+-- Motivo snapshot: un cliente puede renombrarse o darse de baja despues de
+-- emitir la venta. La reimpresion del ticket/factura debe mostrar el nombre
+-- y NIT tal como estaban al momento del cobro. Misma logica que tax_rate
+-- (ver migracion 003).
+--
+-- Sobre NIT: en Guatemala "C/F" (Consumidor Final) es un NIT valido y se
+-- repite, asi que NO hay UNIQUE sobre la columna. Validacion fina queda en
+-- la capa de servicio si se requiere.
+
+CREATE TABLE IF NOT EXISTS customers (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  nit         TEXT    NOT NULL DEFAULT 'C/F',
+  name        TEXT    NOT NULL,
+  email       TEXT,
+  phone       TEXT,
+  address     TEXT,
+  active      INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+  created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name);
+CREATE INDEX IF NOT EXISTS idx_customers_nit  ON customers(nit);
+
+-- Seed del cliente "Consumidor Final". id=1 reservado: los handlers lo
+-- usan como fallback cuando el POS no identifica al cliente. Nunca
+-- borrarlo; marcarlo como inactive no tiene sentido aqui.
+INSERT OR IGNORE INTO customers (id, nit, name) VALUES (1, 'C/F', 'Consumidor Final');
+
+-- Columnas en sales. Nullable a nivel DB; la capa service siempre las
+-- persiste no-null (con Consumidor Final como fallback).
+ALTER TABLE sales ADD COLUMN customer_id             INTEGER REFERENCES customers(id);
+ALTER TABLE sales ADD COLUMN customer_name_snapshot  TEXT;
+ALTER TABLE sales ADD COLUMN customer_nit_snapshot   TEXT;
+
+-- Backfill: ventas pre-migracion se asocian a Consumidor Final.
+UPDATE sales
+   SET customer_id            = 1,
+       customer_name_snapshot = 'Consumidor Final',
+       customer_nit_snapshot  = 'C/F'
+ WHERE customer_id IS NULL;
 `;
-let instance = null;
-function getDb() {
-  if (instance) return instance;
-  const dbPath = path.join(app.getPath("userData"), "taller_pos.sqlite");
-  const db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-  db.pragma("synchronous = NORMAL");
-  instance = db;
-  return db;
+let _ = null;
+function H() {
+  if (_) return _;
+  const t = q.join(T.getPath("userData"), "taller_pos.sqlite"), e = new x(t);
+  return e.pragma("journal_mode = WAL"), e.pragma("foreign_keys = ON"), e.pragma("synchronous = NORMAL"), _ = e, e;
 }
-const CREATE_CONTROL_TABLE = `
+const Y = `
   CREATE TABLE IF NOT EXISTS schema_migrations (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT    NOT NULL UNIQUE,
@@ -40,50 +145,42 @@ const CREATE_CONTROL_TABLE = `
     executed_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 `;
-function checksumOf(sql) {
-  const normalized = sql.replace(/\r\n/g, "\n");
-  return crypto.createHash("sha256").update(normalized, "utf8").digest("hex");
+function j(t) {
+  const e = t.replace(/\r\n/g, `
+`);
+  return V.createHash("sha256").update(e, "utf8").digest("hex");
 }
-function runMigrations(db, migrations) {
-  db.exec(CREATE_CONTROL_TABLE);
-  const findByName = db.prepare("SELECT checksum FROM schema_migrations WHERE name = ?");
-  const insertRecord = db.prepare(
+function G(t, e) {
+  t.exec(Y);
+  const n = t.prepare("SELECT checksum FROM schema_migrations WHERE name = ?"), s = t.prepare(
     "INSERT INTO schema_migrations (name, checksum) VALUES (?, ?)"
-  );
-  const sorted = [...migrations].sort((a, b) => a.name.localeCompare(b.name));
-  const applied = [];
-  const skipped = [];
-  for (const migration of sorted) {
-    const checksum = checksumOf(migration.sql);
-    const existing = findByName.get(migration.name);
-    if (existing) {
-      if (existing.checksum !== checksum) {
+  ), o = [...e].sort((i, c) => i.name.localeCompare(c.name)), r = [], a = [];
+  for (const i of o) {
+    const c = j(i.sql), l = n.get(i.name);
+    if (l) {
+      if (l.checksum !== c)
         throw new Error(
-          `Migration tampering detected: "${migration.name}" fue aplicada con checksum ${existing.checksum} pero el archivo actual tiene ${checksum}. Nunca modifiques migraciones ya aplicadas; crea una nueva.`
+          `Migration tampering detected: "${i.name}" fue aplicada con checksum ${l.checksum} pero el archivo actual tiene ${c}. Nunca modifiques migraciones ya aplicadas; crea una nueva.`
         );
-      }
-      skipped.push(migration.name);
+      a.push(i.name);
       continue;
     }
-    const apply = db.transaction(() => {
-      db.exec(migration.sql);
-      insertRecord.run(migration.name, checksum);
-    });
-    apply();
-    applied.push(migration.name);
+    t.transaction(() => {
+      t.exec(i.sql), s.run(i.name, c);
+    })(), r.push(i.name);
   }
-  return { applied, skipped };
+  return { applied: r, skipped: a };
 }
-function createSettingsRepository(db) {
-  const stmts = {
-    selectAll: db.prepare("SELECT key, value, type, category, description, updated_at FROM settings"),
-    selectByKey: db.prepare(
+function W(t) {
+  const e = {
+    selectAll: t.prepare("SELECT key, value, type, category, description, updated_at FROM settings"),
+    selectByKey: t.prepare(
       "SELECT key, value, type, category, description, updated_at FROM settings WHERE key = ?"
     ),
-    selectByCategory: db.prepare(
+    selectByCategory: t.prepare(
       "SELECT key, value, type, category, description, updated_at FROM settings WHERE category = ?"
     ),
-    updateValue: db.prepare(
+    updateValue: t.prepare(
       `UPDATE settings
          SET value = ?,
              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -93,21 +190,21 @@ function createSettingsRepository(db) {
   return {
     /** @returns {SettingRow[]} */
     findAll() {
-      return stmts.selectAll.all();
+      return e.selectAll.all();
     },
     /**
      * @param {string} key
      * @returns {SettingRow | undefined}
      */
-    findByKey(key) {
-      return stmts.selectByKey.get(key);
+    findByKey(n) {
+      return e.selectByKey.get(n);
     },
     /**
      * @param {string} category
      * @returns {SettingRow[]}
      */
-    findByCategory(category) {
-      return stmts.selectByCategory.all(category);
+    findByCategory(n) {
+      return e.selectByCategory.all(n);
     },
     /**
      * Actualiza solo el valor (ya serializado a TEXT).
@@ -116,123 +213,112 @@ function createSettingsRepository(db) {
      * @param {string} serializedValue
      * @returns {number} filas afectadas (0 si key no existe)
      */
-    updateValue(key, serializedValue) {
-      const info = stmts.updateValue.run(serializedValue, key);
-      return info.changes;
+    updateValue(n, s) {
+      return e.updateValue.run(s, n).changes;
     }
   };
 }
-class SettingError extends Error {
+class D extends Error {
   /**
    * @param {string} code
    * @param {string} message
    */
-  constructor(code, message) {
-    super(message);
-    this.name = "SettingError";
-    this.code = code;
+  constructor(e, n) {
+    super(n), this.name = "SettingError", this.code = e;
   }
 }
-class SettingNotFoundError extends SettingError {
+class L extends D {
   /** @param {string} key */
-  constructor(key) {
-    super("SETTING_NOT_FOUND", `Setting no encontrado: "${key}"`);
-    this.name = "SettingNotFoundError";
-    this.key = key;
+  constructor(e) {
+    super("SETTING_NOT_FOUND", `Setting no encontrado: "${e}"`), this.name = "SettingNotFoundError", this.key = e;
   }
 }
-class SettingValidationError extends SettingError {
+class m extends D {
   /**
    * @param {string} key
    * @param {string} expectedType
    * @param {unknown} receivedValue
    */
-  constructor(key, expectedType, receivedValue) {
+  constructor(e, n, s) {
     super(
       "SETTING_INVALID_VALUE",
-      `Setting "${key}" requiere tipo "${expectedType}" pero recibio ${typeof receivedValue} (${String(
-        receivedValue
+      `Setting "${e}" requiere tipo "${n}" pero recibio ${typeof s} (${String(
+        s
       )})`
-    );
-    this.name = "SettingValidationError";
-    this.key = key;
-    this.expectedType = expectedType;
+    ), this.name = "SettingValidationError", this.key = e, this.expectedType = n;
   }
 }
-function deserialize(row) {
-  return { ...row, value: parseValue(row.value, row.type, row.key) };
+function O(t) {
+  return { ...t, value: K(t.value, t.type, t.key) };
 }
-function parseValue(raw, type, key) {
-  switch (type) {
+function K(t, e, n) {
+  switch (e) {
     case "string":
-      return raw;
+      return t;
     case "number": {
-      const n = Number(raw);
-      if (!Number.isFinite(n)) {
-        throw new SettingValidationError(key, "number", raw);
-      }
-      return n;
+      const s = Number(t);
+      if (!Number.isFinite(s))
+        throw new m(n, "number", t);
+      return s;
     }
     case "boolean":
-      return raw === "1" || raw === "true";
+      return t === "1" || t === "true";
     case "json":
       try {
-        return JSON.parse(raw);
+        return JSON.parse(t);
       } catch {
-        throw new SettingValidationError(key, "json", raw);
+        throw new m(n, "json", t);
       }
     default:
-      throw new SettingValidationError(key, type, raw);
+      throw new m(n, e, t);
   }
 }
-function serialize(value, type, key) {
-  switch (type) {
+function z(t, e, n) {
+  switch (e) {
     case "string":
-      if (typeof value !== "string") throw new SettingValidationError(key, "string", value);
-      return value;
+      if (typeof t != "string") throw new m(n, "string", t);
+      return t;
     case "number":
-      if (typeof value !== "number" || !Number.isFinite(value)) {
-        throw new SettingValidationError(key, "number", value);
-      }
-      return String(value);
+      if (typeof t != "number" || !Number.isFinite(t))
+        throw new m(n, "number", t);
+      return String(t);
     case "boolean":
-      if (typeof value !== "boolean") throw new SettingValidationError(key, "boolean", value);
-      return value ? "1" : "0";
+      if (typeof t != "boolean") throw new m(n, "boolean", t);
+      return t ? "1" : "0";
     case "json":
       try {
-        return JSON.stringify(value);
+        return JSON.stringify(t);
       } catch {
-        throw new SettingValidationError(key, "json", value);
+        throw new m(n, "json", t);
       }
     default:
-      throw new SettingValidationError(key, type, value);
+      throw new m(n, e, t);
   }
 }
-function createSettingsService(repo) {
-  const cache = /* @__PURE__ */ new Map();
-  let initialized = false;
-  function init() {
-    cache.clear();
-    for (const row of repo.findAll()) {
-      cache.set(row.key, deserialize(row));
-    }
-    initialized = true;
+function Z(t) {
+  const e = /* @__PURE__ */ new Map();
+  let n = !1;
+  function s() {
+    e.clear();
+    for (const r of t.findAll())
+      e.set(r.key, O(r));
+    n = !0;
   }
-  function ensureInit() {
-    if (!initialized) init();
+  function o() {
+    n || s();
   }
   return {
-    init,
+    init: s,
     /**
      * @param {string} key
      * @returns {TypedSetting['value']}
      * @throws {SettingNotFoundError}
      */
-    get(key) {
-      ensureInit();
-      const entry = cache.get(key);
-      if (!entry) throw new SettingNotFoundError(key);
-      return entry.value;
+    get(r) {
+      o();
+      const a = e.get(r);
+      if (!a) throw new L(r);
+      return a.value;
     },
     /**
      * Devuelve settings agrupados por `category`:
@@ -240,25 +326,22 @@ function createSettingsService(repo) {
      * @returns {Record<string, Record<string, TypedSetting['value']>>}
      */
     getAll() {
-      ensureInit();
-      const grouped = {};
-      for (const entry of cache.values()) {
-        if (!grouped[entry.category]) grouped[entry.category] = {};
-        grouped[entry.category][entry.key] = entry.value;
-      }
-      return grouped;
+      o();
+      const r = {};
+      for (const a of e.values())
+        r[a.category] || (r[a.category] = {}), r[a.category][a.key] = a.value;
+      return r;
     },
     /**
      * @param {string} category
      * @returns {Record<string, TypedSetting['value']>}
      */
-    getByCategory(category) {
-      ensureInit();
-      const out = {};
-      for (const entry of cache.values()) {
-        if (entry.category === category) out[entry.key] = entry.value;
-      }
-      return out;
+    getByCategory(r) {
+      o();
+      const a = {};
+      for (const i of e.values())
+        i.category === r && (a[i.key] = i.value);
+      return a;
     },
     /**
      * Valida tipo, persiste y actualiza el cache. Si la key no existe en DB
@@ -268,285 +351,556 @@ function createSettingsService(repo) {
      * @param {unknown} value
      * @throws {SettingNotFoundError | SettingValidationError}
      */
-    set(key, value) {
-      ensureInit();
-      const entry = cache.get(key);
-      if (!entry) throw new SettingNotFoundError(key);
-      const serialized = serialize(value, entry.type, key);
-      const changes = repo.updateValue(key, serialized);
-      if (changes === 0) {
-        cache.delete(key);
-        throw new SettingNotFoundError(key);
-      }
-      const fresh = repo.findByKey(key);
-      cache.set(key, deserialize(fresh));
+    set(r, a) {
+      o();
+      const i = e.get(r);
+      if (!i) throw new L(r);
+      const c = z(a, i.type, r);
+      if (t.updateValue(r, c) === 0)
+        throw e.delete(r), new L(r);
+      const E = t.findByKey(r);
+      e.set(r, O(E));
     }
   };
 }
-function wrap(handler) {
-  return (...args) => {
+function d(t) {
+  return (...e) => {
     try {
-      const data = handler(...args);
-      return { ok: true, data };
-    } catch (err) {
-      const code = err && typeof err === "object" && "code" in err && typeof err.code === "string" ? err.code : "UNEXPECTED_ERROR";
-      const message = err instanceof Error ? err.message : String(err);
-      if (!(err && typeof err === "object" && "code" in err)) {
-        console.error(...oo_tx(`755487567_28_8_28_53_11`, "[ipc] unexpected error:", err));
-      }
-      return { ok: false, error: { code, message } };
+      return { ok: !0, data: t(...e) };
+    } catch (n) {
+      const s = n && typeof n == "object" && "code" in n && typeof n.code == "string" ? n.code : "UNEXPECTED_ERROR", o = n instanceof Error ? n.message : String(n);
+      return n && typeof n == "object" && "code" in n || console.error("[ipc] unexpected error:", n), { ok: !1, error: { code: s, message: o } };
     }
   };
 }
-function oo_cm$1() {
-  try {
-    return (0, eval)("globalThis._console_ninja") || (0, eval)(`/* https://github.com/wallabyjs/console-ninja#how-does-it-work */'use strict';function _0x4187(_0x52e140,_0x15844d){var _0x1edd14=_0x1edd();return _0x4187=function(_0x418736,_0x252226){_0x418736=_0x418736-0x1dc;var _0x1c174c=_0x1edd14[_0x418736];return _0x1c174c;},_0x4187(_0x52e140,_0x15844d);}var _0x3890c8=_0x4187;function _0x1edd(){var _0xd02a82=['background:\\x20rgb(30,30,30);\\x20color:\\x20rgb(255,213,92)','_connectToHostNow','NEGATIVE_INFINITY',{"resolveGetters":false,"defaultLimits":{"props":100,"elements":100,"strLength":51200,"totalStrLength":51200,"autoExpandLimit":5000,"autoExpandMaxDepth":10},"reducedLimits":{"props":5,"elements":5,"strLength":256,"totalStrLength":768,"autoExpandLimit":30,"autoExpandMaxDepth":2},"reducePolicy":{"perLogpoint":{"reduceOnCount":50,"reduceOnAccumulatedProcessingTimeMs":100,"resetWhenQuietMs":500,"resetOnProcessingTimeAverageMs":100},"global":{"reduceOnCount":1000,"reduceOnAccumulatedProcessingTimeMs":300,"resetWhenQuietMs":50,"resetOnProcessingTimeAverageMs":100}}},'_getOwnPropertyDescriptor','warn','_p_length','_regExpToString','38gkPcrc',',\\x20see\\x20https://tinyurl.com/2vt8jxzw\\x20for\\x20more\\x20info.','funcName','_isSet','hasOwnProperty','unshift','[object\\x20Array]','_maxConnectAttemptCount','ws://','autoExpandMaxDepth','default','stackTraceLimit','\\x20server','_addProperty','origin','reducedLimits','resolveGetters','disabledLog','cappedElements','indexOf','reload','Set','Symbol','_isArray','stack','port','function','resetOnProcessingTimeAverageMs','slice','onerror','_connectAttemptCount','emulator','reducePolicy','_processTreeNodeResult','count','_setNodeExpressionPath','HTMLAllCollection','String','strLength','_WebSocketClass','_addLoadNode','expo','ninjaSuppressConsole','_isUndefined','_connected','_keyStrRegExp','next.js','Number','9jOUldT','_isNegativeZero','_p_name','_ws','substr','import(\\x27url\\x27)','_consoleNinjaAllowedToStart','date','parse','_treeNodePropertiesBeforeFullValue','_setNodeLabel','_blacklistedProperty','Buffer','33763','20667vPUjDv','time','Promise','set','2035290pGkmlm','','logger\\x20failed\\x20to\\x20connect\\x20to\\x20host,\\x20see\\x20','angular','negativeInfinity','test','resolve','WebSocket','array','parent','bind','host','resetWhenQuietMs','failed\\x20to\\x20connect\\x20to\\x20host:\\x20','process','bigint','136cjwhMD','toString','object','readyState','_inBrowser','send','_attemptToReconnectShortly','_HTMLAllCollection','hostname','_allowedToSend','edge','name','stringify','_setNodeId','elapsed','constructor','182420mjmqKf','_numberRegExp',"/home/henry-tercero/.vscode/extensions/wallabyjs.console-ninja-1.0.525/node_modules",'type','prototype','astro','pop','expressionsToEvaluate','osName','reduceOnAccumulatedProcessingTimeMs','env','Map','_sendErrorMessage','RegExp','node','[object\\x20Date]','_sortProps','_console_ninja','autoExpandLimit','path','8098092eUysyP','_disposeWebsocket','_isPrimitiveWrapperType','autoExpandPropertyCount','return\\x20import(url.pathToFileURL(path.join(nodeModules,\\x20\\x27ws/index.js\\x27)).toString());','perLogpoint','map','_extendedWarning','android','join','rootExpression','_type','_capIfString','nan','_socket','root_exp_id','concat','_console_ninja_session','error','trace','_objectToString','isArray','_ninjaIgnoreNextError','onmessage','fromCharCode','\\x20browser','getWebSocketClass','catch','unknown','versions','_dateToString','_cleanNode','1.0.0','react-native','Console\\x20Ninja\\x20failed\\x20to\\x20send\\x20logs,\\x20refreshing\\x20the\\x20page\\x20may\\x20help;\\x20also\\x20see\\x20','isExpressionToEvaluate','now','then','serialize','toLowerCase','index','hrtime','close','allStrLength','valueOf','ExpoDevice','_p_','_inNextEdge','[object\\x20BigInt]','Console\\x20Ninja\\x20extension\\x20is\\x20connected\\x20to\\x20','timeStamp','autoExpand','1777052887699','_getOwnPropertySymbols','7574025BLeRlk','sortProps','replace','NEXT_RUNTIME','_connecting','_additionalMetadata','forEach','level','symbol','modules','_Symbol','undefined','[object\\x20Set]','eventReceivedCallback','remix','_setNodeQueryPath','[object\\x20Map]','log','depth','Boolean','dockerizedApp','global','null','args','gateway.docker.internal','_addFunctionsNode','perf_hooks','5058944NenKCb','_hasMapOnItsPath','_setNodeExpandableState','push',["localhost","127.0.0.1","example.cypress.io","10.0.2.2","henry-tercero-Victus-by-HP-Gaming-Laptop-15-fa2xxx","192.168.1.11"],'unref','_webSocketErrorDocsLink','','_treeNodePropertiesAfterFullValue','%c\\x20Console\\x20Ninja\\x20extension\\x20is\\x20connected\\x20to\\x20','Error','number','value','_isMap','defaultLimits','_addObjectProperty','totalStrLength','some','boolean','_WebSocket','autoExpandPreviousObjects','sort','_setNodePermissions','_allowedToConnectOnSend','disabledTrace','console','reduceOnCount','location','10.0.2.2','get','call','_propertyName','length','props','_hasSymbolPropertyOnItsPath','_reconnectTimeout','string','getOwnPropertyDescriptor','import(\\x27path\\x27)','noFunctions','nodeModules','elements','endsWith','POSITIVE_INFINITY','21223450LJhzYJ','expId','_isPrimitiveType','onopen','bound\\x20Promise','message','current','reduceLimits','_getOwnPropertyNames','data','url','_quotedRegExp','hits','match','_property','getOwnPropertySymbols','performance','toUpperCase','capped','includes'];_0x1edd=function(){return _0xd02a82;};return _0x1edd();}(function(_0x593217,_0xb66b98){var _0x477746=_0x4187,_0x4015ef=_0x593217();while(!![]){try{var _0x55fb6d=parseInt(_0x477746(0x254))/0x1*(-parseInt(_0x477746(0x216))/0x2)+parseInt(_0x477746(0x258))/0x3+-parseInt(_0x477746(0x2dd))/0x4+parseInt(_0x477746(0x2c2))/0x5+-parseInt(_0x477746(0x28c))/0x6+-parseInt(_0x477746(0x278))/0x7*(parseInt(_0x477746(0x268))/0x8)+parseInt(_0x477746(0x246))/0x9*(parseInt(_0x477746(0x1fa))/0xa);if(_0x55fb6d===_0xb66b98)break;else _0x4015ef['push'](_0x4015ef['shift']());}catch(_0x3d51fa){_0x4015ef['push'](_0x4015ef['shift']());}}}(_0x1edd,0xd34bd));function z(_0x592fc3,_0x315c78,_0x20b8bb,_0x322b6b,_0x3f5c59,_0x2ff362){var _0x1e9d9b=_0x4187,_0x1f3283,_0x1d630f,_0x518481,_0x138db6;this[_0x1e9d9b(0x2d7)]=_0x592fc3,this[_0x1e9d9b(0x263)]=_0x315c78,this[_0x1e9d9b(0x22f)]=_0x20b8bb,this['nodeModules']=_0x322b6b,this['dockerizedApp']=_0x3f5c59,this['eventReceivedCallback']=_0x2ff362,this[_0x1e9d9b(0x271)]=!0x0,this[_0x1e9d9b(0x1e5)]=!0x0,this[_0x1e9d9b(0x242)]=!0x1,this[_0x1e9d9b(0x2c6)]=!0x1,this[_0x1e9d9b(0x2bb)]=((_0x1d630f=(_0x1f3283=_0x592fc3['process'])==null?void 0x0:_0x1f3283[_0x1e9d9b(0x282)])==null?void 0x0:_0x1d630f['NEXT_RUNTIME'])===_0x1e9d9b(0x272),this[_0x1e9d9b(0x26c)]=!((_0x138db6=(_0x518481=this[_0x1e9d9b(0x2d7)][_0x1e9d9b(0x266)])==null?void 0x0:_0x518481[_0x1e9d9b(0x2a9)])!=null&&_0x138db6[_0x1e9d9b(0x286)])&&!this[_0x1e9d9b(0x2bb)],this[_0x1e9d9b(0x23d)]=null,this['_connectAttemptCount']=0x0,this[_0x1e9d9b(0x21d)]=0x14,this[_0x1e9d9b(0x2e3)]='https://tinyurl.com/37x8b79t',this[_0x1e9d9b(0x284)]=(this['_inBrowser']?_0x1e9d9b(0x2ae):'Console\\x20Ninja\\x20failed\\x20to\\x20send\\x20logs,\\x20restarting\\x20the\\x20process\\x20may\\x20help;\\x20also\\x20see\\x20')+this[_0x1e9d9b(0x2e3)];}z[_0x3890c8(0x27c)][_0x3890c8(0x2a6)]=async function(){var _0x47df01=_0x3890c8,_0x4c9b9c,_0x348789;if(this['_WebSocketClass'])return this[_0x47df01(0x23d)];let _0x5b4a33;if(this[_0x47df01(0x26c)]||this[_0x47df01(0x2bb)])_0x5b4a33=this[_0x47df01(0x2d7)][_0x47df01(0x25f)];else{if((_0x4c9b9c=this['global'][_0x47df01(0x266)])!=null&&_0x4c9b9c['_WebSocket'])_0x5b4a33=(_0x348789=this[_0x47df01(0x2d7)]['process'])==null?void 0x0:_0x348789[_0x47df01(0x1e1)];else try{_0x5b4a33=(await new Function('path',_0x47df01(0x204),_0x47df01(0x1f6),_0x47df01(0x290))(await(0x0,eval)(_0x47df01(0x1f4)),await(0x0,eval)(_0x47df01(0x24b)),this[_0x47df01(0x1f6)]))[_0x47df01(0x220)];}catch{try{_0x5b4a33=require(require(_0x47df01(0x28b))[_0x47df01(0x295)](this[_0x47df01(0x1f6)],'ws'));}catch{throw new Error('failed\\x20to\\x20find\\x20and\\x20load\\x20WebSocket');}}}return this[_0x47df01(0x23d)]=_0x5b4a33,_0x5b4a33;},z[_0x3890c8(0x27c)][_0x3890c8(0x20f)]=function(){var _0x1d32f3=_0x3890c8;this[_0x1d32f3(0x2c6)]||this[_0x1d32f3(0x242)]||this[_0x1d32f3(0x234)]>=this[_0x1d32f3(0x21d)]||(this[_0x1d32f3(0x1e5)]=!0x1,this[_0x1d32f3(0x2c6)]=!0x0,this[_0x1d32f3(0x234)]++,this[_0x1d32f3(0x249)]=new Promise((_0x1dfeca,_0x1ed537)=>{var _0x162cdd=_0x1d32f3;this[_0x162cdd(0x2a6)]()[_0x162cdd(0x2b1)](_0x47460b=>{var _0x1fc8dc=_0x162cdd;let _0xe561b2=new _0x47460b(_0x1fc8dc(0x21e)+(!this[_0x1fc8dc(0x26c)]&&this[_0x1fc8dc(0x2d6)]?_0x1fc8dc(0x2da):this[_0x1fc8dc(0x263)])+':'+this['port']);_0xe561b2[_0x1fc8dc(0x233)]=()=>{var _0x53cfe7=_0x1fc8dc;this[_0x53cfe7(0x271)]=!0x1,this[_0x53cfe7(0x28d)](_0xe561b2),this['_attemptToReconnectShortly'](),_0x1ed537(new Error('logger\\x20websocket\\x20error'));},_0xe561b2[_0x1fc8dc(0x1fd)]=()=>{var _0x1456f8=_0x1fc8dc;this[_0x1456f8(0x26c)]||_0xe561b2[_0x1456f8(0x29a)]&&_0xe561b2['_socket']['unref']&&_0xe561b2['_socket'][_0x1456f8(0x2e2)](),_0x1dfeca(_0xe561b2);},_0xe561b2['onclose']=()=>{var _0x1475d1=_0x1fc8dc;this[_0x1475d1(0x1e5)]=!0x0,this[_0x1475d1(0x28d)](_0xe561b2),this['_attemptToReconnectShortly']();},_0xe561b2[_0x1fc8dc(0x2a3)]=_0x175d79=>{var _0x2e3b9f=_0x1fc8dc;try{if(!(_0x175d79!=null&&_0x175d79[_0x2e3b9f(0x203)])||!this[_0x2e3b9f(0x2cf)])return;let _0x44f4d4=JSON[_0x2e3b9f(0x24e)](_0x175d79['data']);this[_0x2e3b9f(0x2cf)](_0x44f4d4['method'],_0x44f4d4[_0x2e3b9f(0x2d9)],this[_0x2e3b9f(0x2d7)],this[_0x2e3b9f(0x26c)]);}catch{}};})[_0x162cdd(0x2b1)](_0x2e6e48=>(this[_0x162cdd(0x242)]=!0x0,this[_0x162cdd(0x2c6)]=!0x1,this['_allowedToConnectOnSend']=!0x1,this[_0x162cdd(0x271)]=!0x0,this[_0x162cdd(0x234)]=0x0,_0x2e6e48))[_0x162cdd(0x2a7)](_0x890b60=>(this['_connected']=!0x1,this['_connecting']=!0x1,console[_0x162cdd(0x213)](_0x162cdd(0x25a)+this[_0x162cdd(0x2e3)]),_0x1ed537(new Error(_0x162cdd(0x265)+(_0x890b60&&_0x890b60[_0x162cdd(0x1ff)])))));}));},z[_0x3890c8(0x27c)]['_disposeWebsocket']=function(_0x1b2f6c){var _0x5b014b=_0x3890c8;this['_connected']=!0x1,this[_0x5b014b(0x2c6)]=!0x1;try{_0x1b2f6c['onclose']=null,_0x1b2f6c[_0x5b014b(0x233)]=null,_0x1b2f6c['onopen']=null;}catch{}try{_0x1b2f6c[_0x5b014b(0x26b)]<0x2&&_0x1b2f6c[_0x5b014b(0x2b6)]();}catch{}},z[_0x3890c8(0x27c)]['_attemptToReconnectShortly']=function(){var _0x124bb9=_0x3890c8;clearTimeout(this[_0x124bb9(0x1f1)]),!(this[_0x124bb9(0x234)]>=this[_0x124bb9(0x21d)])&&(this[_0x124bb9(0x1f1)]=setTimeout(()=>{var _0x4d4e90=_0x124bb9,_0xf6aafa;this[_0x4d4e90(0x242)]||this['_connecting']||(this[_0x4d4e90(0x20f)](),(_0xf6aafa=this[_0x4d4e90(0x249)])==null||_0xf6aafa['catch'](()=>this[_0x4d4e90(0x26e)]()));},0x1f4),this[_0x124bb9(0x1f1)][_0x124bb9(0x2e2)]&&this[_0x124bb9(0x1f1)][_0x124bb9(0x2e2)]());},z[_0x3890c8(0x27c)][_0x3890c8(0x26d)]=async function(_0x1bb714){var _0x9a6194=_0x3890c8;try{if(!this[_0x9a6194(0x271)])return;this[_0x9a6194(0x1e5)]&&this[_0x9a6194(0x20f)](),(await this[_0x9a6194(0x249)])[_0x9a6194(0x26d)](JSON[_0x9a6194(0x274)](_0x1bb714));}catch(_0x1b6312){this[_0x9a6194(0x293)]?console[_0x9a6194(0x213)](this[_0x9a6194(0x284)]+':\\x20'+(_0x1b6312&&_0x1b6312[_0x9a6194(0x1ff)])):(this['_extendedWarning']=!0x0,console[_0x9a6194(0x213)](this[_0x9a6194(0x284)]+':\\x20'+(_0x1b6312&&_0x1b6312[_0x9a6194(0x1ff)]),_0x1bb714)),this[_0x9a6194(0x271)]=!0x1,this[_0x9a6194(0x26e)]();}};function H(_0x20ad1f,_0x2292c5,_0x44fc0e,_0x23d982,_0x5cf68c,_0x2bf037,_0x2ca164,_0x17c366=ne){var _0x1889e1=_0x3890c8;let _0x540a51=_0x44fc0e['split'](',')[_0x1889e1(0x292)](_0x2d32cd=>{var _0xd94d2e=_0x1889e1,_0x5aa30d,_0x16905d,_0x42434e,_0x1ab968,_0x405adf,_0x2a8f7e,_0x117873,_0x5423c9;try{if(!_0x20ad1f[_0xd94d2e(0x29d)]){let _0x41ebfe=((_0x16905d=(_0x5aa30d=_0x20ad1f['process'])==null?void 0x0:_0x5aa30d[_0xd94d2e(0x2a9)])==null?void 0x0:_0x16905d[_0xd94d2e(0x286)])||((_0x1ab968=(_0x42434e=_0x20ad1f['process'])==null?void 0x0:_0x42434e[_0xd94d2e(0x282)])==null?void 0x0:_0x1ab968[_0xd94d2e(0x2c5)])==='edge';(_0x5cf68c===_0xd94d2e(0x244)||_0x5cf68c===_0xd94d2e(0x2d0)||_0x5cf68c===_0xd94d2e(0x27d)||_0x5cf68c===_0xd94d2e(0x25b))&&(_0x5cf68c+=_0x41ebfe?_0xd94d2e(0x222):_0xd94d2e(0x2a5));let _0x3b5c0e='';_0x5cf68c==='react-native'&&(_0x3b5c0e=(((_0x117873=(_0x2a8f7e=(_0x405adf=_0x20ad1f[_0xd94d2e(0x23f)])==null?void 0x0:_0x405adf['modules'])==null?void 0x0:_0x2a8f7e[_0xd94d2e(0x2b9)])==null?void 0x0:_0x117873[_0xd94d2e(0x280)])||_0xd94d2e(0x235))[_0xd94d2e(0x2b3)](),_0x3b5c0e&&(_0x5cf68c+='\\x20'+_0x3b5c0e,(_0x3b5c0e===_0xd94d2e(0x294)||_0x3b5c0e===_0xd94d2e(0x235)&&((_0x5423c9=_0x20ad1f[_0xd94d2e(0x1e9)])==null?void 0x0:_0x5423c9['hostname'])===_0xd94d2e(0x1ea))&&(_0x2292c5=_0xd94d2e(0x1ea)))),_0x20ad1f[_0xd94d2e(0x29d)]={'id':+new Date(),'tool':_0x5cf68c},_0x2ca164&&_0x5cf68c&&!_0x41ebfe&&(_0x3b5c0e?console['log'](_0xd94d2e(0x2bd)+_0x3b5c0e+_0xd94d2e(0x217)):console[_0xd94d2e(0x2d3)](_0xd94d2e(0x2e6)+(_0x5cf68c['charAt'](0x0)[_0xd94d2e(0x20b)]()+_0x5cf68c[_0xd94d2e(0x24a)](0x1))+',',_0xd94d2e(0x20e),'see\\x20https://tinyurl.com/2vt8jxzw\\x20for\\x20more\\x20info.'));}let _0x326972=new z(_0x20ad1f,_0x2292c5,_0x2d32cd,_0x23d982,_0x2bf037,_0x17c366);return _0x326972[_0xd94d2e(0x26d)]['bind'](_0x326972);}catch(_0x266308){return console[_0xd94d2e(0x213)]('logger\\x20failed\\x20to\\x20connect\\x20to\\x20host',_0x266308&&_0x266308[_0xd94d2e(0x1ff)]),()=>{};}});return _0x3b9c7f=>_0x540a51['forEach'](_0x742346=>_0x742346(_0x3b9c7f));}function ne(_0x31e108,_0x3ec168,_0x417cab,_0xfd62c4){var _0x4be061=_0x3890c8;_0xfd62c4&&_0x31e108===_0x4be061(0x22a)&&_0x417cab[_0x4be061(0x1e9)][_0x4be061(0x22a)]();}function b(_0x30160c){var _0x151986=_0x3890c8,_0x2c787f,_0x2a95b9;let _0x2b4527=function(_0x1f6955,_0x424bf1){return _0x424bf1-_0x1f6955;},_0x19085c;if(_0x30160c[_0x151986(0x20a)])_0x19085c=function(){var _0x56aa7e=_0x151986;return _0x30160c[_0x56aa7e(0x20a)][_0x56aa7e(0x2b0)]();};else{if(_0x30160c[_0x151986(0x266)]&&_0x30160c[_0x151986(0x266)][_0x151986(0x2b5)]&&((_0x2a95b9=(_0x2c787f=_0x30160c[_0x151986(0x266)])==null?void 0x0:_0x2c787f[_0x151986(0x282)])==null?void 0x0:_0x2a95b9['NEXT_RUNTIME'])!==_0x151986(0x272))_0x19085c=function(){var _0x2687a2=_0x151986;return _0x30160c[_0x2687a2(0x266)][_0x2687a2(0x2b5)]();},_0x2b4527=function(_0x841d75,_0x2991da){return 0x3e8*(_0x2991da[0x0]-_0x841d75[0x0])+(_0x2991da[0x1]-_0x841d75[0x1])/0xf4240;};else try{let {performance:_0xd3a2df}=require(_0x151986(0x2dc));_0x19085c=function(){var _0x52330d=_0x151986;return _0xd3a2df[_0x52330d(0x2b0)]();};}catch{_0x19085c=function(){return+new Date();};}}return{'elapsed':_0x2b4527,'timeStamp':_0x19085c,'now':()=>Date[_0x151986(0x2b0)]()};}function X(_0x31ddec,_0x301594,_0x57b351){var _0xd50045=_0x3890c8,_0x21878c,_0x18f50c,_0x1295d0,_0x2b81d1,_0x429f3b,_0x1a0b9b,_0x4dbdad;if(_0x31ddec[_0xd50045(0x24c)]!==void 0x0)return _0x31ddec[_0xd50045(0x24c)];let _0x36bf8=((_0x18f50c=(_0x21878c=_0x31ddec['process'])==null?void 0x0:_0x21878c[_0xd50045(0x2a9)])==null?void 0x0:_0x18f50c[_0xd50045(0x286)])||((_0x2b81d1=(_0x1295d0=_0x31ddec[_0xd50045(0x266)])==null?void 0x0:_0x1295d0[_0xd50045(0x282)])==null?void 0x0:_0x2b81d1['NEXT_RUNTIME'])===_0xd50045(0x272),_0xd67b84=!!(_0x57b351===_0xd50045(0x2ad)&&((_0x429f3b=_0x31ddec[_0xd50045(0x23f)])==null?void 0x0:_0x429f3b[_0xd50045(0x2cb)]));function _0x224a39(_0x3f855b){var _0x554bf3=_0xd50045;if(_0x3f855b['startsWith']('/')&&_0x3f855b[_0x554bf3(0x1f8)]('/')){let _0x1a86b1=new RegExp(_0x3f855b['slice'](0x1,-0x1));return _0xda75d7=>_0x1a86b1[_0x554bf3(0x25d)](_0xda75d7);}else{if(_0x3f855b[_0x554bf3(0x20d)]('*')||_0x3f855b[_0x554bf3(0x20d)]('?')){let _0x1cb7b0=new RegExp('^'+_0x3f855b['replace'](/\\./g,String[_0x554bf3(0x2a4)](0x5c)+'.')['replace'](/\\*/g,'.*')['replace'](/\\?/g,'.')+String[_0x554bf3(0x2a4)](0x24));return _0x3d762c=>_0x1cb7b0['test'](_0x3d762c);}else return _0x362679=>_0x362679===_0x3f855b;}}let _0x8cb568=_0x301594[_0xd50045(0x292)](_0x224a39);return _0x31ddec[_0xd50045(0x24c)]=_0x36bf8||!_0x301594,!_0x31ddec[_0xd50045(0x24c)]&&((_0x1a0b9b=_0x31ddec[_0xd50045(0x1e9)])==null?void 0x0:_0x1a0b9b[_0xd50045(0x270)])&&(_0x31ddec[_0xd50045(0x24c)]=_0x8cb568[_0xd50045(0x1df)](_0x16149e=>_0x16149e(_0x31ddec[_0xd50045(0x1e9)][_0xd50045(0x270)]))),_0xd67b84&&!_0x31ddec[_0xd50045(0x24c)]&&!((_0x4dbdad=_0x31ddec[_0xd50045(0x1e9)])!=null&&_0x4dbdad[_0xd50045(0x270)])&&(_0x31ddec[_0xd50045(0x24c)]=!0x0),_0x31ddec[_0xd50045(0x24c)];}function J(_0x1b046d,_0x3af781,_0x5b51f5,_0x4cee6a,_0x39e136,_0x5d8b23){var _0x1f5d44=_0x3890c8;_0x1b046d=_0x1b046d,_0x3af781=_0x3af781,_0x5b51f5=_0x5b51f5,_0x4cee6a=_0x4cee6a,_0x39e136=_0x39e136,_0x39e136=_0x39e136||{},_0x39e136['defaultLimits']=_0x39e136['defaultLimits']||{},_0x39e136[_0x1f5d44(0x225)]=_0x39e136[_0x1f5d44(0x225)]||{},_0x39e136[_0x1f5d44(0x236)]=_0x39e136[_0x1f5d44(0x236)]||{},_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x291)]=_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x291)]||{},_0x39e136[_0x1f5d44(0x236)]['global']=_0x39e136[_0x1f5d44(0x236)]['global']||{};let _0x4756a1={'perLogpoint':{'reduceOnCount':_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x291)][_0x1f5d44(0x1e8)]||0x32,'reduceOnAccumulatedProcessingTimeMs':_0x39e136['reducePolicy'][_0x1f5d44(0x291)][_0x1f5d44(0x281)]||0x64,'resetWhenQuietMs':_0x39e136[_0x1f5d44(0x236)]['perLogpoint']['resetWhenQuietMs']||0x1f4,'resetOnProcessingTimeAverageMs':_0x39e136[_0x1f5d44(0x236)]['perLogpoint']['resetOnProcessingTimeAverageMs']||0x64},'global':{'reduceOnCount':_0x39e136['reducePolicy'][_0x1f5d44(0x2d7)][_0x1f5d44(0x1e8)]||0x3e8,'reduceOnAccumulatedProcessingTimeMs':_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x2d7)]['reduceOnAccumulatedProcessingTimeMs']||0x12c,'resetWhenQuietMs':_0x39e136[_0x1f5d44(0x236)]['global'][_0x1f5d44(0x264)]||0x32,'resetOnProcessingTimeAverageMs':_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x2d7)][_0x1f5d44(0x231)]||0x64}},_0x41af91=b(_0x1b046d),_0x13f85b=_0x41af91[_0x1f5d44(0x276)],_0x5553e9=_0x41af91[_0x1f5d44(0x2be)];function _0x39602c(){var _0x293841=_0x1f5d44;this[_0x293841(0x243)]=/^(?!(?:do|if|in|for|let|new|try|var|case|else|enum|eval|false|null|this|true|void|with|break|catch|class|const|super|throw|while|yield|delete|export|import|public|return|static|switch|typeof|default|extends|finally|package|private|continue|debugger|function|arguments|interface|protected|implements|instanceof)$)[_$a-zA-Z\\xA0-\\uFFFF][_$a-zA-Z0-9\\xA0-\\uFFFF]*$/,this[_0x293841(0x279)]=/^(0|[1-9][0-9]*)$/,this[_0x293841(0x205)]=/'([^\\\\']|\\\\')*'/,this['_undefined']=_0x1b046d[_0x293841(0x2cd)],this[_0x293841(0x26f)]=_0x1b046d[_0x293841(0x23a)],this['_getOwnPropertyDescriptor']=Object[_0x293841(0x1f3)],this[_0x293841(0x202)]=Object['getOwnPropertyNames'],this['_Symbol']=_0x1b046d[_0x293841(0x22c)],this[_0x293841(0x215)]=RegExp[_0x293841(0x27c)][_0x293841(0x269)],this['_dateToString']=Date[_0x293841(0x27c)][_0x293841(0x269)];}_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2b2)]=function(_0x254f7f,_0x1babfb,_0x2e90c6,_0xdb54a9){var _0x33bfa3=_0x1f5d44,_0x168568=this,_0x471824=_0x2e90c6[_0x33bfa3(0x2bf)];function _0x3a3c67(_0x142852,_0x2cc0b4,_0x381677){var _0x16d30c=_0x33bfa3;_0x2cc0b4[_0x16d30c(0x27b)]=_0x16d30c(0x2a8),_0x2cc0b4[_0x16d30c(0x29e)]=_0x142852[_0x16d30c(0x1ff)],_0x3b2ef2=_0x381677[_0x16d30c(0x286)]['current'],_0x381677[_0x16d30c(0x286)][_0x16d30c(0x200)]=_0x2cc0b4,_0x168568[_0x16d30c(0x24f)](_0x2cc0b4,_0x381677);}let _0x361300,_0x7450c3,_0x1f473b=_0x1b046d[_0x33bfa3(0x240)];_0x1b046d[_0x33bfa3(0x240)]=!0x0,_0x1b046d[_0x33bfa3(0x1e7)]&&(_0x361300=_0x1b046d[_0x33bfa3(0x1e7)][_0x33bfa3(0x29e)],_0x7450c3=_0x1b046d['console'][_0x33bfa3(0x213)],_0x361300&&(_0x1b046d[_0x33bfa3(0x1e7)][_0x33bfa3(0x29e)]=function(){}),_0x7450c3&&(_0x1b046d[_0x33bfa3(0x1e7)][_0x33bfa3(0x213)]=function(){}));try{try{_0x2e90c6[_0x33bfa3(0x2c9)]++,_0x2e90c6[_0x33bfa3(0x2bf)]&&_0x2e90c6[_0x33bfa3(0x1e2)]['push'](_0x1babfb);var _0x2e727d,_0x4ce0a7,_0x5c981d,_0x3de9f4,_0x2ee350=[],_0x1fd1ab=[],_0x5481d5,_0x4e2612=this[_0x33bfa3(0x297)](_0x1babfb),_0x443a68=_0x4e2612==='array',_0xf19808=!0x1,_0x10ecde=_0x4e2612===_0x33bfa3(0x230),_0x4ec234=this[_0x33bfa3(0x1fc)](_0x4e2612),_0x13a3ac=this[_0x33bfa3(0x28e)](_0x4e2612),_0x21daba=_0x4ec234||_0x13a3ac,_0x5d7eb8={},_0x4a200a=0x0,_0x2e69b1=!0x1,_0x3b2ef2,_0x1ec59c=/^(([1-9]{1}[0-9]*)|0)$/;if(_0x2e90c6['depth']){if(_0x443a68){if(_0x4ce0a7=_0x1babfb[_0x33bfa3(0x1ee)],_0x4ce0a7>_0x2e90c6['elements']){for(_0x5c981d=0x0,_0x3de9f4=_0x2e90c6[_0x33bfa3(0x1f7)],_0x2e727d=_0x5c981d;_0x2e727d<_0x3de9f4;_0x2e727d++)_0x1fd1ab['push'](_0x168568[_0x33bfa3(0x223)](_0x2ee350,_0x1babfb,_0x4e2612,_0x2e727d,_0x2e90c6));_0x254f7f[_0x33bfa3(0x228)]=!0x0;}else{for(_0x5c981d=0x0,_0x3de9f4=_0x4ce0a7,_0x2e727d=_0x5c981d;_0x2e727d<_0x3de9f4;_0x2e727d++)_0x1fd1ab['push'](_0x168568[_0x33bfa3(0x223)](_0x2ee350,_0x1babfb,_0x4e2612,_0x2e727d,_0x2e90c6));}_0x2e90c6['autoExpandPropertyCount']+=_0x1fd1ab[_0x33bfa3(0x1ee)];}if(!(_0x4e2612===_0x33bfa3(0x2d8)||_0x4e2612===_0x33bfa3(0x2cd))&&!_0x4ec234&&_0x4e2612!=='String'&&_0x4e2612!==_0x33bfa3(0x252)&&_0x4e2612!==_0x33bfa3(0x267)){var _0x2d45fa=_0xdb54a9[_0x33bfa3(0x1ef)]||_0x2e90c6[_0x33bfa3(0x1ef)];if(this['_isSet'](_0x1babfb)?(_0x2e727d=0x0,_0x1babfb[_0x33bfa3(0x2c8)](function(_0x3b3e4c){var _0x118b02=_0x33bfa3;if(_0x4a200a++,_0x2e90c6['autoExpandPropertyCount']++,_0x4a200a>_0x2d45fa){_0x2e69b1=!0x0;return;}if(!_0x2e90c6[_0x118b02(0x2af)]&&_0x2e90c6['autoExpand']&&_0x2e90c6[_0x118b02(0x28f)]>_0x2e90c6[_0x118b02(0x28a)]){_0x2e69b1=!0x0;return;}_0x1fd1ab[_0x118b02(0x2e0)](_0x168568[_0x118b02(0x223)](_0x2ee350,_0x1babfb,'Set',_0x2e727d++,_0x2e90c6,function(_0xba6f7b){return function(){return _0xba6f7b;};}(_0x3b3e4c)));})):this[_0x33bfa3(0x2ea)](_0x1babfb)&&_0x1babfb[_0x33bfa3(0x2c8)](function(_0x26b876,_0x1cd31e){var _0x13d9e6=_0x33bfa3;if(_0x4a200a++,_0x2e90c6[_0x13d9e6(0x28f)]++,_0x4a200a>_0x2d45fa){_0x2e69b1=!0x0;return;}if(!_0x2e90c6[_0x13d9e6(0x2af)]&&_0x2e90c6[_0x13d9e6(0x2bf)]&&_0x2e90c6[_0x13d9e6(0x28f)]>_0x2e90c6[_0x13d9e6(0x28a)]){_0x2e69b1=!0x0;return;}var _0x5245d5=_0x1cd31e[_0x13d9e6(0x269)]();_0x5245d5['length']>0x64&&(_0x5245d5=_0x5245d5[_0x13d9e6(0x232)](0x0,0x64)+'...'),_0x1fd1ab[_0x13d9e6(0x2e0)](_0x168568['_addProperty'](_0x2ee350,_0x1babfb,_0x13d9e6(0x283),_0x5245d5,_0x2e90c6,function(_0x437b32){return function(){return _0x437b32;};}(_0x26b876)));}),!_0xf19808){try{for(_0x5481d5 in _0x1babfb)if(!(_0x443a68&&_0x1ec59c[_0x33bfa3(0x25d)](_0x5481d5))&&!this[_0x33bfa3(0x251)](_0x1babfb,_0x5481d5,_0x2e90c6)){if(_0x4a200a++,_0x2e90c6['autoExpandPropertyCount']++,_0x4a200a>_0x2d45fa){_0x2e69b1=!0x0;break;}if(!_0x2e90c6['isExpressionToEvaluate']&&_0x2e90c6[_0x33bfa3(0x2bf)]&&_0x2e90c6[_0x33bfa3(0x28f)]>_0x2e90c6[_0x33bfa3(0x28a)]){_0x2e69b1=!0x0;break;}_0x1fd1ab[_0x33bfa3(0x2e0)](_0x168568[_0x33bfa3(0x1dd)](_0x2ee350,_0x5d7eb8,_0x1babfb,_0x4e2612,_0x5481d5,_0x2e90c6));}}catch{}if(_0x5d7eb8[_0x33bfa3(0x214)]=!0x0,_0x10ecde&&(_0x5d7eb8[_0x33bfa3(0x248)]=!0x0),!_0x2e69b1){var _0x4a9287=[][_0x33bfa3(0x29c)](this[_0x33bfa3(0x202)](_0x1babfb))['concat'](this[_0x33bfa3(0x2c1)](_0x1babfb));for(_0x2e727d=0x0,_0x4ce0a7=_0x4a9287[_0x33bfa3(0x1ee)];_0x2e727d<_0x4ce0a7;_0x2e727d++)if(_0x5481d5=_0x4a9287[_0x2e727d],!(_0x443a68&&_0x1ec59c[_0x33bfa3(0x25d)](_0x5481d5['toString']()))&&!this[_0x33bfa3(0x251)](_0x1babfb,_0x5481d5,_0x2e90c6)&&!_0x5d7eb8[typeof _0x5481d5!=_0x33bfa3(0x2ca)?_0x33bfa3(0x2ba)+_0x5481d5['toString']():_0x5481d5]){if(_0x4a200a++,_0x2e90c6[_0x33bfa3(0x28f)]++,_0x4a200a>_0x2d45fa){_0x2e69b1=!0x0;break;}if(!_0x2e90c6[_0x33bfa3(0x2af)]&&_0x2e90c6[_0x33bfa3(0x2bf)]&&_0x2e90c6[_0x33bfa3(0x28f)]>_0x2e90c6[_0x33bfa3(0x28a)]){_0x2e69b1=!0x0;break;}_0x1fd1ab['push'](_0x168568[_0x33bfa3(0x1dd)](_0x2ee350,_0x5d7eb8,_0x1babfb,_0x4e2612,_0x5481d5,_0x2e90c6));}}}}}if(_0x254f7f['type']=_0x4e2612,_0x21daba?(_0x254f7f[_0x33bfa3(0x2e9)]=_0x1babfb[_0x33bfa3(0x2b8)](),this[_0x33bfa3(0x298)](_0x4e2612,_0x254f7f,_0x2e90c6,_0xdb54a9)):_0x4e2612===_0x33bfa3(0x24d)?_0x254f7f[_0x33bfa3(0x2e9)]=this[_0x33bfa3(0x2aa)]['call'](_0x1babfb):_0x4e2612===_0x33bfa3(0x267)?_0x254f7f[_0x33bfa3(0x2e9)]=_0x1babfb['toString']():_0x4e2612===_0x33bfa3(0x285)?_0x254f7f['value']=this[_0x33bfa3(0x215)][_0x33bfa3(0x1ec)](_0x1babfb):_0x4e2612===_0x33bfa3(0x2ca)&&this[_0x33bfa3(0x2cc)]?_0x254f7f[_0x33bfa3(0x2e9)]=this[_0x33bfa3(0x2cc)]['prototype'][_0x33bfa3(0x269)]['call'](_0x1babfb):!_0x2e90c6[_0x33bfa3(0x2d4)]&&!(_0x4e2612===_0x33bfa3(0x2d8)||_0x4e2612===_0x33bfa3(0x2cd))&&(delete _0x254f7f[_0x33bfa3(0x2e9)],_0x254f7f[_0x33bfa3(0x20c)]=!0x0),_0x2e69b1&&(_0x254f7f['cappedProps']=!0x0),_0x3b2ef2=_0x2e90c6[_0x33bfa3(0x286)][_0x33bfa3(0x200)],_0x2e90c6['node'][_0x33bfa3(0x200)]=_0x254f7f,this['_treeNodePropertiesBeforeFullValue'](_0x254f7f,_0x2e90c6),_0x1fd1ab['length']){for(_0x2e727d=0x0,_0x4ce0a7=_0x1fd1ab['length'];_0x2e727d<_0x4ce0a7;_0x2e727d++)_0x1fd1ab[_0x2e727d](_0x2e727d);}_0x2ee350[_0x33bfa3(0x1ee)]&&(_0x254f7f[_0x33bfa3(0x1ef)]=_0x2ee350);}catch(_0x36e778){_0x3a3c67(_0x36e778,_0x254f7f,_0x2e90c6);}this[_0x33bfa3(0x2c7)](_0x1babfb,_0x254f7f),this[_0x33bfa3(0x2e5)](_0x254f7f,_0x2e90c6),_0x2e90c6[_0x33bfa3(0x286)][_0x33bfa3(0x200)]=_0x3b2ef2,_0x2e90c6[_0x33bfa3(0x2c9)]--,_0x2e90c6[_0x33bfa3(0x2bf)]=_0x471824,_0x2e90c6['autoExpand']&&_0x2e90c6[_0x33bfa3(0x1e2)][_0x33bfa3(0x27e)]();}finally{_0x361300&&(_0x1b046d['console'][_0x33bfa3(0x29e)]=_0x361300),_0x7450c3&&(_0x1b046d[_0x33bfa3(0x1e7)][_0x33bfa3(0x213)]=_0x7450c3),_0x1b046d[_0x33bfa3(0x240)]=_0x1f473b;}return _0x254f7f;},_0x39602c[_0x1f5d44(0x27c)]['_getOwnPropertySymbols']=function(_0xd19fef){var _0x1f8178=_0x1f5d44;return Object['getOwnPropertySymbols']?Object[_0x1f8178(0x209)](_0xd19fef):[];},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x219)]=function(_0x5ece89){var _0x396459=_0x1f5d44;return!!(_0x5ece89&&_0x1b046d['Set']&&this[_0x396459(0x2a0)](_0x5ece89)===_0x396459(0x2ce)&&_0x5ece89[_0x396459(0x2c8)]);},_0x39602c['prototype'][_0x1f5d44(0x251)]=function(_0x5e3ecf,_0x457efe,_0x503699){var _0x58ab93=_0x1f5d44;if(!_0x503699[_0x58ab93(0x226)]){let _0x40a764=this['_getOwnPropertyDescriptor'](_0x5e3ecf,_0x457efe);if(_0x40a764&&_0x40a764[_0x58ab93(0x1eb)])return!0x0;}return _0x503699[_0x58ab93(0x1f5)]?typeof _0x5e3ecf[_0x457efe]==_0x58ab93(0x230):!0x1;},_0x39602c['prototype'][_0x1f5d44(0x297)]=function(_0x55aea2){var _0x3223a6=_0x1f5d44,_0x435cfc='';return _0x435cfc=typeof _0x55aea2,_0x435cfc===_0x3223a6(0x26a)?this[_0x3223a6(0x2a0)](_0x55aea2)==='[object\\x20Array]'?_0x435cfc=_0x3223a6(0x260):this['_objectToString'](_0x55aea2)===_0x3223a6(0x287)?_0x435cfc=_0x3223a6(0x24d):this['_objectToString'](_0x55aea2)===_0x3223a6(0x2bc)?_0x435cfc=_0x3223a6(0x267):_0x55aea2===null?_0x435cfc='null':_0x55aea2[_0x3223a6(0x277)]&&(_0x435cfc=_0x55aea2[_0x3223a6(0x277)][_0x3223a6(0x273)]||_0x435cfc):_0x435cfc===_0x3223a6(0x2cd)&&this[_0x3223a6(0x26f)]&&_0x55aea2 instanceof this[_0x3223a6(0x26f)]&&(_0x435cfc=_0x3223a6(0x23a)),_0x435cfc;},_0x39602c['prototype'][_0x1f5d44(0x2a0)]=function(_0x2bac5a){var _0x4622cb=_0x1f5d44;return Object['prototype'][_0x4622cb(0x269)][_0x4622cb(0x1ec)](_0x2bac5a);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x1fc)]=function(_0x2ccf2c){var _0x674b58=_0x1f5d44;return _0x2ccf2c===_0x674b58(0x1e0)||_0x2ccf2c===_0x674b58(0x1f2)||_0x2ccf2c===_0x674b58(0x2e8);},_0x39602c[_0x1f5d44(0x27c)]['_isPrimitiveWrapperType']=function(_0x5299e2){var _0x55fd87=_0x1f5d44;return _0x5299e2===_0x55fd87(0x2d5)||_0x5299e2==='String'||_0x5299e2===_0x55fd87(0x245);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x223)]=function(_0x157555,_0x1174b0,_0x2697a9,_0x20ea02,_0x1e29d4,_0x5f3380){var _0x174700=this;return function(_0x3816dd){var _0x4b6516=_0x4187,_0x57f376=_0x1e29d4[_0x4b6516(0x286)][_0x4b6516(0x200)],_0xed0e7b=_0x1e29d4[_0x4b6516(0x286)]['index'],_0x57849c=_0x1e29d4['node'][_0x4b6516(0x261)];_0x1e29d4['node']['parent']=_0x57f376,_0x1e29d4[_0x4b6516(0x286)]['index']=typeof _0x20ea02==_0x4b6516(0x2e8)?_0x20ea02:_0x3816dd,_0x157555[_0x4b6516(0x2e0)](_0x174700[_0x4b6516(0x208)](_0x1174b0,_0x2697a9,_0x20ea02,_0x1e29d4,_0x5f3380)),_0x1e29d4[_0x4b6516(0x286)]['parent']=_0x57849c,_0x1e29d4['node'][_0x4b6516(0x2b4)]=_0xed0e7b;};},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x1dd)]=function(_0x16666b,_0x37b24a,_0xca6b76,_0x5eaca8,_0x47f24d,_0x518bd1,_0x3aad4c){var _0x5a59c9=_0x1f5d44,_0x5d7f32=this;return _0x37b24a[typeof _0x47f24d!=_0x5a59c9(0x2ca)?_0x5a59c9(0x2ba)+_0x47f24d['toString']():_0x47f24d]=!0x0,function(_0x186abb){var _0x227537=_0x5a59c9,_0x93753=_0x518bd1[_0x227537(0x286)]['current'],_0x3a8b46=_0x518bd1[_0x227537(0x286)][_0x227537(0x2b4)],_0x5cf7ec=_0x518bd1[_0x227537(0x286)]['parent'];_0x518bd1[_0x227537(0x286)]['parent']=_0x93753,_0x518bd1['node'][_0x227537(0x2b4)]=_0x186abb,_0x16666b[_0x227537(0x2e0)](_0x5d7f32[_0x227537(0x208)](_0xca6b76,_0x5eaca8,_0x47f24d,_0x518bd1,_0x3aad4c)),_0x518bd1[_0x227537(0x286)][_0x227537(0x261)]=_0x5cf7ec,_0x518bd1[_0x227537(0x286)]['index']=_0x3a8b46;};},_0x39602c[_0x1f5d44(0x27c)]['_property']=function(_0x1e9096,_0x2437b1,_0x5a258e,_0x306875,_0xeb1ab2){var _0x2e8b77=_0x1f5d44,_0x1ab203=this;_0xeb1ab2||(_0xeb1ab2=function(_0x2125a7,_0x5a8e51){return _0x2125a7[_0x5a8e51];});var _0x1a70b4=_0x5a258e[_0x2e8b77(0x269)](),_0x4a3b80=_0x306875[_0x2e8b77(0x27f)]||{},_0x4ec463=_0x306875[_0x2e8b77(0x2d4)],_0x436a10=_0x306875['isExpressionToEvaluate'];try{var _0x4a65f6=this[_0x2e8b77(0x2ea)](_0x1e9096),_0x14070f=_0x1a70b4;_0x4a65f6&&_0x14070f[0x0]==='\\x27'&&(_0x14070f=_0x14070f[_0x2e8b77(0x24a)](0x1,_0x14070f['length']-0x2));var _0x33f2fd=_0x306875[_0x2e8b77(0x27f)]=_0x4a3b80[_0x2e8b77(0x2ba)+_0x14070f];_0x33f2fd&&(_0x306875['depth']=_0x306875[_0x2e8b77(0x2d4)]+0x1),_0x306875['isExpressionToEvaluate']=!!_0x33f2fd;var _0x761c47=typeof _0x5a258e==_0x2e8b77(0x2ca),_0x2a07c1={'name':_0x761c47||_0x4a65f6?_0x1a70b4:this['_propertyName'](_0x1a70b4)};if(_0x761c47&&(_0x2a07c1[_0x2e8b77(0x2ca)]=!0x0),!(_0x2437b1===_0x2e8b77(0x260)||_0x2437b1===_0x2e8b77(0x2e7))){var _0x336b0f=this[_0x2e8b77(0x212)](_0x1e9096,_0x5a258e);if(_0x336b0f&&(_0x336b0f[_0x2e8b77(0x257)]&&(_0x2a07c1['setter']=!0x0),_0x336b0f[_0x2e8b77(0x1eb)]&&!_0x33f2fd&&!_0x306875[_0x2e8b77(0x226)]))return _0x2a07c1['getter']=!0x0,this[_0x2e8b77(0x237)](_0x2a07c1,_0x306875),_0x2a07c1;}var _0x42b0f3;try{_0x42b0f3=_0xeb1ab2(_0x1e9096,_0x5a258e);}catch(_0x470aa0){return _0x2a07c1={'name':_0x1a70b4,'type':_0x2e8b77(0x2a8),'error':_0x470aa0[_0x2e8b77(0x1ff)]},this[_0x2e8b77(0x237)](_0x2a07c1,_0x306875),_0x2a07c1;}var _0x3f69d6=this[_0x2e8b77(0x297)](_0x42b0f3),_0x26ec12=this[_0x2e8b77(0x1fc)](_0x3f69d6);if(_0x2a07c1['type']=_0x3f69d6,_0x26ec12)this['_processTreeNodeResult'](_0x2a07c1,_0x306875,_0x42b0f3,function(){var _0x27d61e=_0x2e8b77;_0x2a07c1[_0x27d61e(0x2e9)]=_0x42b0f3[_0x27d61e(0x2b8)](),!_0x33f2fd&&_0x1ab203[_0x27d61e(0x298)](_0x3f69d6,_0x2a07c1,_0x306875,{});});else{var _0x353800=_0x306875[_0x2e8b77(0x2bf)]&&_0x306875[_0x2e8b77(0x2c9)]<_0x306875[_0x2e8b77(0x21f)]&&_0x306875[_0x2e8b77(0x1e2)][_0x2e8b77(0x229)](_0x42b0f3)<0x0&&_0x3f69d6!==_0x2e8b77(0x230)&&_0x306875['autoExpandPropertyCount']<_0x306875[_0x2e8b77(0x28a)];_0x353800||_0x306875[_0x2e8b77(0x2c9)]<_0x4ec463||_0x33f2fd?this['serialize'](_0x2a07c1,_0x42b0f3,_0x306875,_0x33f2fd||{}):this[_0x2e8b77(0x237)](_0x2a07c1,_0x306875,_0x42b0f3,function(){var _0x26b4af=_0x2e8b77;_0x3f69d6==='null'||_0x3f69d6===_0x26b4af(0x2cd)||(delete _0x2a07c1[_0x26b4af(0x2e9)],_0x2a07c1[_0x26b4af(0x20c)]=!0x0);});}return _0x2a07c1;}finally{_0x306875[_0x2e8b77(0x27f)]=_0x4a3b80,_0x306875[_0x2e8b77(0x2d4)]=_0x4ec463,_0x306875[_0x2e8b77(0x2af)]=_0x436a10;}},_0x39602c[_0x1f5d44(0x27c)]['_capIfString']=function(_0x400724,_0x56f824,_0x52035a,_0x2a5d1b){var _0x1c76fb=_0x1f5d44,_0x5d1231=_0x2a5d1b[_0x1c76fb(0x23c)]||_0x52035a[_0x1c76fb(0x23c)];if((_0x400724===_0x1c76fb(0x1f2)||_0x400724===_0x1c76fb(0x23b))&&_0x56f824[_0x1c76fb(0x2e9)]){let _0x1dff43=_0x56f824[_0x1c76fb(0x2e9)][_0x1c76fb(0x1ee)];_0x52035a[_0x1c76fb(0x2b7)]+=_0x1dff43,_0x52035a[_0x1c76fb(0x2b7)]>_0x52035a[_0x1c76fb(0x1de)]?(_0x56f824[_0x1c76fb(0x20c)]='',delete _0x56f824[_0x1c76fb(0x2e9)]):_0x1dff43>_0x5d1231&&(_0x56f824[_0x1c76fb(0x20c)]=_0x56f824['value'][_0x1c76fb(0x24a)](0x0,_0x5d1231),delete _0x56f824[_0x1c76fb(0x2e9)]);}},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2ea)]=function(_0x2b582){var _0x4f59b4=_0x1f5d44;return!!(_0x2b582&&_0x1b046d[_0x4f59b4(0x283)]&&this[_0x4f59b4(0x2a0)](_0x2b582)===_0x4f59b4(0x2d2)&&_0x2b582[_0x4f59b4(0x2c8)]);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x1ed)]=function(_0xd0769c){var _0x56daad=_0x1f5d44;if(_0xd0769c[_0x56daad(0x207)](/^\\d+$/))return _0xd0769c;var _0x44321c;try{_0x44321c=JSON[_0x56daad(0x274)](''+_0xd0769c);}catch{_0x44321c='\\x22'+this[_0x56daad(0x2a0)](_0xd0769c)+'\\x22';}return _0x44321c[_0x56daad(0x207)](/^"([a-zA-Z_][a-zA-Z_0-9]*)"$/)?_0x44321c=_0x44321c[_0x56daad(0x24a)](0x1,_0x44321c[_0x56daad(0x1ee)]-0x2):_0x44321c=_0x44321c[_0x56daad(0x2c4)](/'/g,'\\x5c\\x27')[_0x56daad(0x2c4)](/\\\\"/g,'\\x22')[_0x56daad(0x2c4)](/(^"|"$)/g,'\\x27'),_0x44321c;},_0x39602c[_0x1f5d44(0x27c)]['_processTreeNodeResult']=function(_0x35d4de,_0x18bf2b,_0x4b4ba8,_0x5e4ad4){var _0x3ae3b4=_0x1f5d44;this[_0x3ae3b4(0x24f)](_0x35d4de,_0x18bf2b),_0x5e4ad4&&_0x5e4ad4(),this[_0x3ae3b4(0x2c7)](_0x4b4ba8,_0x35d4de),this['_treeNodePropertiesAfterFullValue'](_0x35d4de,_0x18bf2b);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x24f)]=function(_0x3fef10,_0x16c344){var _0x25886e=_0x1f5d44;this[_0x25886e(0x275)](_0x3fef10,_0x16c344),this[_0x25886e(0x2d1)](_0x3fef10,_0x16c344),this[_0x25886e(0x239)](_0x3fef10,_0x16c344),this['_setNodePermissions'](_0x3fef10,_0x16c344);},_0x39602c['prototype'][_0x1f5d44(0x275)]=function(_0x4a95cf,_0x5175f9){},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2d1)]=function(_0x4dd70e,_0x1d0a77){},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x250)]=function(_0x2add9b,_0x21294a){},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x241)]=function(_0x57f907){return _0x57f907===this['_undefined'];},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2e5)]=function(_0x47895e,_0x5ee6d0){var _0x3bb2e6=_0x1f5d44;this[_0x3bb2e6(0x250)](_0x47895e,_0x5ee6d0),this['_setNodeExpandableState'](_0x47895e),_0x5ee6d0[_0x3bb2e6(0x2c3)]&&this[_0x3bb2e6(0x288)](_0x47895e),this[_0x3bb2e6(0x2db)](_0x47895e,_0x5ee6d0),this[_0x3bb2e6(0x23e)](_0x47895e,_0x5ee6d0),this[_0x3bb2e6(0x2ab)](_0x47895e);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2c7)]=function(_0x406f89,_0x5dc600){var _0x3d052f=_0x1f5d44;try{_0x406f89&&typeof _0x406f89[_0x3d052f(0x1ee)]==_0x3d052f(0x2e8)&&(_0x5dc600[_0x3d052f(0x1ee)]=_0x406f89['length']);}catch{}if(_0x5dc600[_0x3d052f(0x27b)]===_0x3d052f(0x2e8)||_0x5dc600[_0x3d052f(0x27b)]===_0x3d052f(0x245)){if(isNaN(_0x5dc600['value']))_0x5dc600[_0x3d052f(0x299)]=!0x0,delete _0x5dc600[_0x3d052f(0x2e9)];else switch(_0x5dc600['value']){case Number[_0x3d052f(0x1f9)]:_0x5dc600['positiveInfinity']=!0x0,delete _0x5dc600['value'];break;case Number['NEGATIVE_INFINITY']:_0x5dc600[_0x3d052f(0x25c)]=!0x0,delete _0x5dc600[_0x3d052f(0x2e9)];break;case 0x0:this[_0x3d052f(0x247)](_0x5dc600['value'])&&(_0x5dc600['negativeZero']=!0x0);break;}}else _0x5dc600[_0x3d052f(0x27b)]===_0x3d052f(0x230)&&typeof _0x406f89[_0x3d052f(0x273)]=='string'&&_0x406f89[_0x3d052f(0x273)]&&_0x5dc600[_0x3d052f(0x273)]&&_0x406f89[_0x3d052f(0x273)]!==_0x5dc600['name']&&(_0x5dc600[_0x3d052f(0x218)]=_0x406f89[_0x3d052f(0x273)]);},_0x39602c['prototype'][_0x1f5d44(0x247)]=function(_0x58bf0d){var _0x1eeae2=_0x1f5d44;return 0x1/_0x58bf0d===Number[_0x1eeae2(0x210)];},_0x39602c[_0x1f5d44(0x27c)]['_sortProps']=function(_0x4d7dd2){var _0x5c6f19=_0x1f5d44;!_0x4d7dd2['props']||!_0x4d7dd2[_0x5c6f19(0x1ef)]['length']||_0x4d7dd2['type']===_0x5c6f19(0x260)||_0x4d7dd2[_0x5c6f19(0x27b)]===_0x5c6f19(0x283)||_0x4d7dd2[_0x5c6f19(0x27b)]===_0x5c6f19(0x22b)||_0x4d7dd2[_0x5c6f19(0x1ef)][_0x5c6f19(0x1e3)](function(_0xb25f8,_0x3feabb){var _0x34181c=_0x5c6f19,_0x30ed1b=_0xb25f8[_0x34181c(0x273)][_0x34181c(0x2b3)](),_0x28978d=_0x3feabb['name'][_0x34181c(0x2b3)]();return _0x30ed1b<_0x28978d?-0x1:_0x30ed1b>_0x28978d?0x1:0x0;});},_0x39602c[_0x1f5d44(0x27c)]['_addFunctionsNode']=function(_0x5294e5,_0x377958){var _0x476737=_0x1f5d44;if(!(_0x377958[_0x476737(0x1f5)]||!_0x5294e5[_0x476737(0x1ef)]||!_0x5294e5['props'][_0x476737(0x1ee)])){for(var _0x23c633=[],_0x1cff31=[],_0x44160d=0x0,_0x4684cd=_0x5294e5['props'][_0x476737(0x1ee)];_0x44160d<_0x4684cd;_0x44160d++){var _0x36796e=_0x5294e5['props'][_0x44160d];_0x36796e[_0x476737(0x27b)]===_0x476737(0x230)?_0x23c633[_0x476737(0x2e0)](_0x36796e):_0x1cff31[_0x476737(0x2e0)](_0x36796e);}if(!(!_0x1cff31[_0x476737(0x1ee)]||_0x23c633[_0x476737(0x1ee)]<=0x1)){_0x5294e5[_0x476737(0x1ef)]=_0x1cff31;var _0x1e6ca0={'functionsNode':!0x0,'props':_0x23c633};this[_0x476737(0x275)](_0x1e6ca0,_0x377958),this[_0x476737(0x250)](_0x1e6ca0,_0x377958),this[_0x476737(0x2df)](_0x1e6ca0),this[_0x476737(0x1e4)](_0x1e6ca0,_0x377958),_0x1e6ca0['id']+='\\x20f',_0x5294e5[_0x476737(0x1ef)][_0x476737(0x21b)](_0x1e6ca0);}}},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x23e)]=function(_0xc708e1,_0x1404ba){},_0x39602c['prototype']['_setNodeExpandableState']=function(_0x44d604){},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x22d)]=function(_0x3c17fb){var _0x14eb98=_0x1f5d44;return Array[_0x14eb98(0x2a1)](_0x3c17fb)||typeof _0x3c17fb==_0x14eb98(0x26a)&&this['_objectToString'](_0x3c17fb)===_0x14eb98(0x21c);},_0x39602c[_0x1f5d44(0x27c)]['_setNodePermissions']=function(_0x1360b0,_0x443f96){},_0x39602c[_0x1f5d44(0x27c)]['_cleanNode']=function(_0x26f307){var _0x360d43=_0x1f5d44;delete _0x26f307[_0x360d43(0x1f0)],delete _0x26f307['_hasSetOnItsPath'],delete _0x26f307[_0x360d43(0x2de)];},_0x39602c['prototype'][_0x1f5d44(0x239)]=function(_0x21594a,_0x1ea38a){};let _0x4fccde=new _0x39602c(),_0x5aef3e={'props':_0x39e136['defaultLimits'][_0x1f5d44(0x1ef)]||0x64,'elements':_0x39e136['defaultLimits']['elements']||0x64,'strLength':_0x39e136[_0x1f5d44(0x1dc)][_0x1f5d44(0x23c)]||0x400*0x32,'totalStrLength':_0x39e136['defaultLimits'][_0x1f5d44(0x1de)]||0x400*0x32,'autoExpandLimit':_0x39e136['defaultLimits'][_0x1f5d44(0x28a)]||0x1388,'autoExpandMaxDepth':_0x39e136['defaultLimits'][_0x1f5d44(0x21f)]||0xa},_0x374151={'props':_0x39e136[_0x1f5d44(0x225)][_0x1f5d44(0x1ef)]||0x5,'elements':_0x39e136[_0x1f5d44(0x225)][_0x1f5d44(0x1f7)]||0x5,'strLength':_0x39e136[_0x1f5d44(0x225)]['strLength']||0x100,'totalStrLength':_0x39e136[_0x1f5d44(0x225)][_0x1f5d44(0x1de)]||0x100*0x3,'autoExpandLimit':_0x39e136['reducedLimits'][_0x1f5d44(0x28a)]||0x1e,'autoExpandMaxDepth':_0x39e136['reducedLimits']['autoExpandMaxDepth']||0x2};if(_0x5d8b23){let _0x275f95=_0x4fccde['serialize'][_0x1f5d44(0x262)](_0x4fccde);_0x4fccde[_0x1f5d44(0x2b2)]=function(_0x1c90b2,_0x4276f3,_0x30aacd,_0x55932d){return _0x275f95(_0x1c90b2,_0x5d8b23(_0x4276f3),_0x30aacd,_0x55932d);};}function _0x1a7762(_0x577f01,_0x418059,_0x269690,_0x32321b,_0x4cd5b2,_0x52912d){var _0x4ce86f=_0x1f5d44;let _0x3eb726,_0xb700fa;try{_0xb700fa=_0x5553e9(),_0x3eb726=_0x5b51f5[_0x418059],!_0x3eb726||_0xb700fa-_0x3eb726['ts']>_0x4756a1[_0x4ce86f(0x291)][_0x4ce86f(0x264)]&&_0x3eb726['count']&&_0x3eb726[_0x4ce86f(0x255)]/_0x3eb726[_0x4ce86f(0x238)]<_0x4756a1['perLogpoint']['resetOnProcessingTimeAverageMs']?(_0x5b51f5[_0x418059]=_0x3eb726={'count':0x0,'time':0x0,'ts':_0xb700fa},_0x5b51f5[_0x4ce86f(0x206)]={}):_0xb700fa-_0x5b51f5['hits']['ts']>_0x4756a1['global']['resetWhenQuietMs']&&_0x5b51f5['hits']['count']&&_0x5b51f5[_0x4ce86f(0x206)]['time']/_0x5b51f5['hits'][_0x4ce86f(0x238)]<_0x4756a1['global'][_0x4ce86f(0x231)]&&(_0x5b51f5[_0x4ce86f(0x206)]={});let _0x41ced7=[],_0x1fbc3d=_0x3eb726['reduceLimits']||_0x5b51f5['hits']['reduceLimits']?_0x374151:_0x5aef3e,_0x2da3f7=_0x3d6b99=>{var _0x44db24=_0x4ce86f;let _0x4c46fe={};return _0x4c46fe[_0x44db24(0x1ef)]=_0x3d6b99[_0x44db24(0x1ef)],_0x4c46fe['elements']=_0x3d6b99[_0x44db24(0x1f7)],_0x4c46fe[_0x44db24(0x23c)]=_0x3d6b99[_0x44db24(0x23c)],_0x4c46fe['totalStrLength']=_0x3d6b99[_0x44db24(0x1de)],_0x4c46fe[_0x44db24(0x28a)]=_0x3d6b99[_0x44db24(0x28a)],_0x4c46fe[_0x44db24(0x21f)]=_0x3d6b99[_0x44db24(0x21f)],_0x4c46fe[_0x44db24(0x2c3)]=!0x1,_0x4c46fe[_0x44db24(0x1f5)]=!_0x3af781,_0x4c46fe[_0x44db24(0x2d4)]=0x1,_0x4c46fe['level']=0x0,_0x4c46fe[_0x44db24(0x1fb)]=_0x44db24(0x29b),_0x4c46fe[_0x44db24(0x296)]='root_exp',_0x4c46fe[_0x44db24(0x2bf)]=!0x0,_0x4c46fe[_0x44db24(0x1e2)]=[],_0x4c46fe[_0x44db24(0x28f)]=0x0,_0x4c46fe[_0x44db24(0x226)]=_0x39e136[_0x44db24(0x226)],_0x4c46fe[_0x44db24(0x2b7)]=0x0,_0x4c46fe[_0x44db24(0x286)]={'current':void 0x0,'parent':void 0x0,'index':0x0},_0x4c46fe;};for(var _0x42e392=0x0;_0x42e392<_0x4cd5b2[_0x4ce86f(0x1ee)];_0x42e392++)_0x41ced7[_0x4ce86f(0x2e0)](_0x4fccde[_0x4ce86f(0x2b2)]({'timeNode':_0x577f01==='time'||void 0x0},_0x4cd5b2[_0x42e392],_0x2da3f7(_0x1fbc3d),{}));if(_0x577f01===_0x4ce86f(0x29f)||_0x577f01===_0x4ce86f(0x29e)){let _0x4f7582=Error['stackTraceLimit'];try{Error[_0x4ce86f(0x221)]=0x1/0x0,_0x41ced7['push'](_0x4fccde[_0x4ce86f(0x2b2)]({'stackNode':!0x0},new Error()[_0x4ce86f(0x22e)],_0x2da3f7(_0x1fbc3d),{'strLength':0x1/0x0}));}finally{Error[_0x4ce86f(0x221)]=_0x4f7582;}}return{'method':_0x4ce86f(0x2d3),'version':_0x4cee6a,'args':[{'ts':_0x269690,'session':_0x32321b,'args':_0x41ced7,'id':_0x418059,'context':_0x52912d}]};}catch(_0x2a8c31){return{'method':_0x4ce86f(0x2d3),'version':_0x4cee6a,'args':[{'ts':_0x269690,'session':_0x32321b,'args':[{'type':_0x4ce86f(0x2a8),'error':_0x2a8c31&&_0x2a8c31['message']}],'id':_0x418059,'context':_0x52912d}]};}finally{try{if(_0x3eb726&&_0xb700fa){let _0x28b06b=_0x5553e9();_0x3eb726[_0x4ce86f(0x238)]++,_0x3eb726['time']+=_0x13f85b(_0xb700fa,_0x28b06b),_0x3eb726['ts']=_0x28b06b,_0x5b51f5[_0x4ce86f(0x206)]['count']++,_0x5b51f5[_0x4ce86f(0x206)][_0x4ce86f(0x255)]+=_0x13f85b(_0xb700fa,_0x28b06b),_0x5b51f5[_0x4ce86f(0x206)]['ts']=_0x28b06b,(_0x3eb726['count']>_0x4756a1['perLogpoint'][_0x4ce86f(0x1e8)]||_0x3eb726[_0x4ce86f(0x255)]>_0x4756a1[_0x4ce86f(0x291)][_0x4ce86f(0x281)])&&(_0x3eb726[_0x4ce86f(0x201)]=!0x0),(_0x5b51f5[_0x4ce86f(0x206)][_0x4ce86f(0x238)]>_0x4756a1[_0x4ce86f(0x2d7)][_0x4ce86f(0x1e8)]||_0x5b51f5[_0x4ce86f(0x206)][_0x4ce86f(0x255)]>_0x4756a1[_0x4ce86f(0x2d7)]['reduceOnAccumulatedProcessingTimeMs'])&&(_0x5b51f5[_0x4ce86f(0x206)]['reduceLimits']=!0x0);}}catch{}}}return _0x1a7762;}function G(_0x372717){var _0x766cc9=_0x3890c8;if(_0x372717&&typeof _0x372717=='object'&&_0x372717[_0x766cc9(0x277)])switch(_0x372717[_0x766cc9(0x277)]['name']){case _0x766cc9(0x256):return _0x372717[_0x766cc9(0x21a)](Symbol['iterator'])?Promise['resolve']():_0x372717;case _0x766cc9(0x1fe):return Promise[_0x766cc9(0x25e)]();}return _0x372717;}((_0xc5752,_0xa30047,_0x3f3995,_0x363a2d,_0x27a42d,_0x5b6f79,_0x45d099,_0x2bc6fb,_0x126cff,_0x1d3c75,_0x2e3f19,_0x464da7)=>{var _0xd5f224=_0x3890c8;if(_0xc5752[_0xd5f224(0x289)])return _0xc5752[_0xd5f224(0x289)];let _0x41b2d1={'consoleLog':()=>{},'consoleTrace':()=>{},'consoleTime':()=>{},'consoleTimeEnd':()=>{},'autoLog':()=>{},'autoLogMany':()=>{},'autoTraceMany':()=>{},'coverage':()=>{},'autoTrace':()=>{},'autoTime':()=>{},'autoTimeEnd':()=>{}};if(!X(_0xc5752,_0x2bc6fb,_0x27a42d))return _0xc5752[_0xd5f224(0x289)]=_0x41b2d1,_0xc5752['_console_ninja'];let _0x3886d2=b(_0xc5752),_0x2794c3=_0x3886d2[_0xd5f224(0x276)],_0x44129f=_0x3886d2[_0xd5f224(0x2be)],_0x277b60=_0x3886d2[_0xd5f224(0x2b0)],_0x5b8e52={'hits':{},'ts':{}},_0x1f8b30=J(_0xc5752,_0x126cff,_0x5b8e52,_0x5b6f79,_0x464da7,_0x27a42d===_0xd5f224(0x244)?G:void 0x0),_0x46c143=(_0x82e8dd,_0x59b610,_0x51fdcc,_0x5c78c9,_0x42589f,_0x28db7b)=>{var _0xf273d1=_0xd5f224;let _0x39c71d=_0xc5752[_0xf273d1(0x289)];try{return _0xc5752['_console_ninja']=_0x41b2d1,_0x1f8b30(_0x82e8dd,_0x59b610,_0x51fdcc,_0x5c78c9,_0x42589f,_0x28db7b);}finally{_0xc5752[_0xf273d1(0x289)]=_0x39c71d;}},_0x186fbf=_0x4900f9=>{_0x5b8e52['ts'][_0x4900f9]=_0x44129f();},_0x21fa3c=(_0x242207,_0x1074db)=>{var _0x67dc13=_0xd5f224;let _0x44431a=_0x5b8e52['ts'][_0x1074db];if(delete _0x5b8e52['ts'][_0x1074db],_0x44431a){let _0x41f6fe=_0x2794c3(_0x44431a,_0x44129f());_0x13354f(_0x46c143(_0x67dc13(0x255),_0x242207,_0x277b60(),_0x728f74,[_0x41f6fe],_0x1074db));}},_0x341135=_0x55d522=>{var _0x594af4=_0xd5f224,_0x22d04b;return _0x27a42d==='next.js'&&_0xc5752[_0x594af4(0x224)]&&((_0x22d04b=_0x55d522==null?void 0x0:_0x55d522[_0x594af4(0x2d9)])==null?void 0x0:_0x22d04b[_0x594af4(0x1ee)])&&(_0x55d522[_0x594af4(0x2d9)][0x0][_0x594af4(0x224)]=_0xc5752['origin']),_0x55d522;};_0xc5752['_console_ninja']={'consoleLog':(_0x18a087,_0x257091)=>{var _0x240148=_0xd5f224;_0xc5752[_0x240148(0x1e7)]['log'][_0x240148(0x273)]!==_0x240148(0x227)&&_0x13354f(_0x46c143(_0x240148(0x2d3),_0x18a087,_0x277b60(),_0x728f74,_0x257091));},'consoleTrace':(_0x16338a,_0x54e3f4)=>{var _0x1399d8=_0xd5f224,_0x26a166,_0x49fc60;_0xc5752[_0x1399d8(0x1e7)]['log'][_0x1399d8(0x273)]!==_0x1399d8(0x1e6)&&((_0x49fc60=(_0x26a166=_0xc5752[_0x1399d8(0x266)])==null?void 0x0:_0x26a166[_0x1399d8(0x2a9)])!=null&&_0x49fc60[_0x1399d8(0x286)]&&(_0xc5752[_0x1399d8(0x2a2)]=!0x0),_0x13354f(_0x341135(_0x46c143(_0x1399d8(0x29f),_0x16338a,_0x277b60(),_0x728f74,_0x54e3f4))));},'consoleError':(_0x19664d,_0x4a89b4)=>{var _0x53d07d=_0xd5f224;_0xc5752[_0x53d07d(0x2a2)]=!0x0,_0x13354f(_0x341135(_0x46c143(_0x53d07d(0x29e),_0x19664d,_0x277b60(),_0x728f74,_0x4a89b4)));},'consoleTime':_0x4b8fda=>{_0x186fbf(_0x4b8fda);},'consoleTimeEnd':(_0x53faf9,_0x3ec558)=>{_0x21fa3c(_0x3ec558,_0x53faf9);},'autoLog':(_0x5aeaac,_0x2074bc)=>{_0x13354f(_0x46c143('log',_0x2074bc,_0x277b60(),_0x728f74,[_0x5aeaac]));},'autoLogMany':(_0x3634a2,_0x3fd372)=>{var _0x24da29=_0xd5f224;_0x13354f(_0x46c143(_0x24da29(0x2d3),_0x3634a2,_0x277b60(),_0x728f74,_0x3fd372));},'autoTrace':(_0x5bfb94,_0xee276a)=>{var _0xc67014=_0xd5f224;_0x13354f(_0x341135(_0x46c143(_0xc67014(0x29f),_0xee276a,_0x277b60(),_0x728f74,[_0x5bfb94])));},'autoTraceMany':(_0x29b396,_0x5dc6f1)=>{var _0x6097b4=_0xd5f224;_0x13354f(_0x341135(_0x46c143(_0x6097b4(0x29f),_0x29b396,_0x277b60(),_0x728f74,_0x5dc6f1)));},'autoTime':(_0x1ec463,_0x159318,_0xf6b2dc)=>{_0x186fbf(_0xf6b2dc);},'autoTimeEnd':(_0x3f6263,_0x4ce919,_0x1e750a)=>{_0x21fa3c(_0x4ce919,_0x1e750a);},'coverage':_0x25e683=>{_0x13354f({'method':'coverage','version':_0x5b6f79,'args':[{'id':_0x25e683}]});}};let _0x13354f=H(_0xc5752,_0xa30047,_0x3f3995,_0x363a2d,_0x27a42d,_0x1d3c75,_0x2e3f19),_0x728f74=_0xc5752[_0xd5f224(0x29d)];return _0xc5752[_0xd5f224(0x289)];})(globalThis,'127.0.0.1',_0x3890c8(0x253),_0x3890c8(0x27a),'vite',_0x3890c8(0x2ac),_0x3890c8(0x2c0),_0x3890c8(0x2e1),_0x3890c8(0x259),_0x3890c8(0x2e4),'1',_0x3890c8(0x211));`);
-  } catch (e) {
-    console.error(e);
-  }
+function Q(t) {
+  u.handle("settings:get-all", d(() => t.getAll())), u.handle("settings:get", d((e, n) => t.get(n))), u.handle("settings:get-by-category", d((e, n) => t.getByCategory(n))), u.handle("settings:set", d((e, n, s) => (t.set(n, s), !0)));
 }
-function oo_tx(i, ...v) {
-  try {
-    oo_cm$1().consoleError(i, v);
-  } catch (e) {
-  }
-  return v;
-}
-function registerSettingsIpc(service) {
-  ipcMain.handle("settings:get-all", wrap(() => service.getAll()));
-  ipcMain.handle("settings:get", wrap((_e, key) => service.get(key)));
-  ipcMain.handle("settings:get-by-category", wrap((_e, category) => service.getByCategory(category)));
-  ipcMain.handle("settings:set", wrap((_e, key, value) => {
-    service.set(key, value);
-    return true;
-  }));
-}
-function createProductsRepository(db) {
-  const stmts = {
-    selectAll: db.prepare("SELECT id, code, name, price, stock FROM products"),
-    searchByName: db.prepare(
+function J(t) {
+  const e = {
+    selectAll: t.prepare("SELECT id, code, name, price, stock FROM products"),
+    selectById: t.prepare("SELECT id, code, name, price, stock FROM products WHERE id = ?"),
+    searchByName: t.prepare(
       "SELECT id, code, name, price, stock FROM products WHERE name LIKE ? OR code LIKE ?"
     )
   };
   return {
     /** @returns {ProductRow[]} */
     findAll() {
-      return stmts.selectAll.all();
+      return e.selectAll.all();
+    },
+    /**
+     * @param {number} id
+     * @returns {ProductRow | undefined}
+     */
+    findById(n) {
+      return e.selectById.get(n);
     },
     /**
      * Busca por substring en name o code.
      * @param {string} query
      * @returns {ProductRow[]}
      */
-    search(query) {
-      const like = `%${query}%`;
-      return stmts.searchByName.all(like, like);
+    search(n) {
+      const s = `%${n}%`;
+      return e.searchByName.all(s, s);
     }
   };
 }
-function createProductsService(repo) {
+function ee(t) {
   return {
     list() {
-      return repo.findAll();
+      return t.findAll();
     },
     /**
      * @param {string} query
      */
-    search(query) {
-      const q = typeof query === "string" ? query.trim() : "";
-      if (q.length === 0) return repo.findAll();
-      return repo.search(q);
+    search(e) {
+      const n = typeof e == "string" ? e.trim() : "";
+      return n.length === 0 ? t.findAll() : t.search(n);
+    },
+    /**
+     * Devuelve el producto o null si no existe. No lanza "not found":
+     * el caller frecuentemente quiere distinguir 404 de error real y el
+     * patron null es mas simple que un error tipado para un read sync.
+     *
+     * @param {number} id
+     * @returns {import('./products.repository.js').ProductRow | null}
+     */
+    getById(e) {
+      if (!Number.isInteger(e) || e <= 0)
+        throw Object.assign(new Error(`product id invalido: ${e}`), {
+          code: "PRODUCT_INVALID_ID"
+        });
+      return t.findById(e) ?? null;
     }
   };
 }
-function registerProductsIpc(service) {
-  ipcMain.handle("products:list", wrap(() => service.list()));
-  ipcMain.handle("products:search", wrap((_e, query) => service.search(query)));
+function te(t) {
+  u.handle("products:list", d(() => t.list())), u.handle("products:search", d((e, n) => t.search(n))), u.handle("products:get-by-id", d((e, n) => t.getById(n)));
 }
-function createSalesRepository(db) {
-  const stmts = {
-    insertSale: db.prepare(
-      `INSERT INTO sales (total, subtotal, tax_rate_applied, tax_amount, currency_code)
+const f = "id, nit, name, email, phone, address, active, created_at, updated_at";
+function ne(t) {
+  const e = {
+    selectAllActive: t.prepare(`SELECT ${f} FROM customers WHERE active = 1 ORDER BY name`),
+    selectAllAny: t.prepare(`SELECT ${f} FROM customers ORDER BY name`),
+    selectById: t.prepare(`SELECT ${f} FROM customers WHERE id = ?`),
+    searchActive: t.prepare(
+      `SELECT ${f} FROM customers
+        WHERE (name LIKE ? OR nit LIKE ?) AND active = 1
+     ORDER BY name
+        LIMIT 50`
+    ),
+    searchAny: t.prepare(
+      `SELECT ${f} FROM customers
+        WHERE (name LIKE ? OR nit LIKE ?)
+     ORDER BY name
+        LIMIT 50`
+    ),
+    insert: t.prepare(
+      `INSERT INTO customers (nit, name, email, phone, address)
        VALUES (?, ?, ?, ?, ?)`
     ),
-    insertItem: db.prepare(
+    setActive: t.prepare(
+      `UPDATE customers
+          SET active = ?,
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE id = ?`
+    )
+  };
+  return {
+    /**
+     * @param {{ includeInactive?: boolean }} [opts]
+     * @returns {CustomerRow[]}
+     */
+    findAll(n = {}) {
+      return (n.includeInactive ? e.selectAllAny : e.selectAllActive).all();
+    },
+    /**
+     * @param {number} id
+     * @returns {CustomerRow | undefined}
+     */
+    findById(n) {
+      return e.selectById.get(n);
+    },
+    /**
+     * @param {string} query
+     * @param {{ includeInactive?: boolean }} [opts]
+     * @returns {CustomerRow[]}
+     */
+    search(n, s = {}) {
+      const o = `%${n}%`;
+      return (s.includeInactive ? e.searchAny : e.searchActive).all(o, o);
+    },
+    /**
+     * @param {CustomerCreateInput} input
+     * @returns {number|bigint} id insertado
+     */
+    insert(n) {
+      return e.insert.run(
+        n.nit,
+        n.name,
+        n.email ?? null,
+        n.phone ?? null,
+        n.address ?? null
+      ).lastInsertRowid;
+    },
+    /**
+     * UPDATE dinamico. Solo toca las columnas provistas en `patch` — evita
+     * sobrescribir con undefined y requiere una unica sentencia por forma.
+     *
+     * @param {number} id
+     * @param {CustomerUpdateInput} patch
+     * @returns {number} rows affected
+     */
+    update(n, s) {
+      const o = [], r = [];
+      for (const [c, l] of Object.entries(s))
+        l !== void 0 && (o.push(`${c} = ?`), r.push(l));
+      if (o.length === 0) return 0;
+      o.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')");
+      const a = `UPDATE customers SET ${o.join(", ")} WHERE id = ?`;
+      return r.push(n), t.prepare(a).run(...r).changes;
+    },
+    /**
+     * @param {number} id
+     * @param {boolean} active
+     * @returns {number} rows affected
+     */
+    setActive(n, s) {
+      return e.setActive.run(s ? 1 : 0, n).changes;
+    }
+  };
+}
+class M extends Error {
+  /**
+   * @param {string} code
+   * @param {string} message
+   */
+  constructor(e, n) {
+    super(n), this.name = "CustomerError", this.code = e;
+  }
+}
+class g extends M {
+  /** @param {number} id */
+  constructor(e) {
+    super("CUSTOMER_NOT_FOUND", `Cliente no encontrado: #${e}`), this.id = e;
+  }
+}
+class p extends M {
+  /**
+   * @param {string} field
+   * @param {string} message
+   */
+  constructor(e, n) {
+    super("CUSTOMER_INVALID", `${e}: ${n}`), this.field = e;
+  }
+}
+const se = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function C(t) {
+  const e = (t ?? "").trim().toUpperCase();
+  return e.length === 0 ? "C/F" : e;
+}
+function b(t) {
+  if (typeof t != "string" || t.trim().length < 2)
+    throw new p("name", "nombre requerido (minimo 2 caracteres)");
+}
+function w(t) {
+  if (!(t == null || t === "") && !se.test(t))
+    throw new p("email", "formato de email invalido");
+}
+function re(t) {
+  return {
+    /**
+     * @param {{ includeInactive?: boolean }} [opts]
+     * @returns {CustomerRow[]}
+     */
+    list(e = {}) {
+      return t.findAll(e);
+    },
+    /**
+     * @param {string} query
+     * @param {{ includeInactive?: boolean }} [opts]
+     * @returns {CustomerRow[]}
+     */
+    search(e, n = {}) {
+      const s = typeof e == "string" ? e.trim() : "";
+      return s.length === 0 ? t.findAll(n) : t.search(s, n);
+    },
+    /**
+     * @param {number} id
+     * @returns {CustomerRow | null}
+     */
+    getById(e) {
+      if (!Number.isInteger(e) || e <= 0)
+        throw new p("id", `id invalido: ${e}`);
+      return t.findById(e) ?? null;
+    },
+    /**
+     * Version "throw on not found" usada internamente por sales.service.create
+     * cuando necesita snapshot garantizado (el POS ya seleccionó un cliente).
+     *
+     * @param {number} id
+     * @returns {CustomerRow}
+     * @throws {CustomerNotFoundError}
+     */
+    requireById(e) {
+      const n = t.findById(e);
+      if (!n) throw new g(e);
+      return n;
+    },
+    /**
+     * @param {CustomerCreateInput} input
+     * @returns {CustomerRow}
+     */
+    create(e) {
+      var a, i, c;
+      b(e.name), w(e.email);
+      const n = C(e.nit), s = t.insert({
+        nit: n,
+        name: e.name.trim(),
+        email: ((a = e.email) == null ? void 0 : a.trim()) || null,
+        phone: ((i = e.phone) == null ? void 0 : i.trim()) || null,
+        address: ((c = e.address) == null ? void 0 : c.trim()) || null
+      }), o = typeof s == "bigint" ? Number(s) : s, r = t.findById(o);
+      if (!r) throw new Error("Cliente recien insertado no encontrado (race imposible)");
+      return r;
+    },
+    /**
+     * @param {number} id
+     * @param {CustomerUpdateInput} patch
+     * @returns {CustomerRow}
+     */
+    update(e, n) {
+      var a, i, c;
+      if (!Number.isInteger(e) || e <= 0)
+        throw new p("id", `id invalido: ${e}`);
+      if (e === 1)
+        throw new p("id", 'No se puede editar "Consumidor Final"');
+      n.name !== void 0 && b(n.name), n.email !== void 0 && w(n.email);
+      const s = {};
+      if (n.nit !== void 0 && (s.nit = C(n.nit)), n.name !== void 0 && (s.name = n.name.trim()), n.email !== void 0 && (s.email = ((a = n.email) == null ? void 0 : a.trim()) || null), n.phone !== void 0 && (s.phone = ((i = n.phone) == null ? void 0 : i.trim()) || null), n.address !== void 0 && (s.address = ((c = n.address) == null ? void 0 : c.trim()) || null), n.active !== void 0 && (s.active = n.active ? 1 : 0), t.update(e, s) === 0) throw new g(e);
+      const r = t.findById(e);
+      if (!r) throw new g(e);
+      return r;
+    },
+    /**
+     * @param {number} id
+     * @param {boolean} active
+     */
+    setActive(e, n) {
+      if (!Number.isInteger(e) || e <= 0)
+        throw new p("id", `id invalido: ${e}`);
+      if (e === 1)
+        throw new p("id", 'No se puede desactivar "Consumidor Final"');
+      if (t.setActive(e, n) === 0) throw new g(e);
+      return !0;
+    }
+  };
+}
+function ae(t) {
+  u.handle("customers:list", d((e, n) => t.list(n))), u.handle("customers:search", d((e, n, s) => t.search(n, s))), u.handle("customers:get-by-id", d((e, n) => t.getById(n))), u.handle("customers:create", d((e, n) => t.create(n))), u.handle("customers:update", d((e, n, s) => t.update(n, s))), u.handle("customers:set-active", d((e, n, s) => t.setActive(n, s)));
+}
+const U = `
+  id, subtotal, tax_rate_applied, tax_amount, total, currency_code, date,
+  customer_id, customer_name_snapshot, customer_nit_snapshot
+`;
+function oe(t) {
+  const e = {
+    insertSale: t.prepare(
+      `INSERT INTO sales (
+         total, subtotal, tax_rate_applied, tax_amount, currency_code,
+         customer_id, customer_name_snapshot, customer_nit_snapshot
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ),
+    insertItem: t.prepare(
       "INSERT INTO sale_items (sale_id, product_id, qty, price) VALUES (?, ?, ?, ?)"
     ),
-    updateStock: db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?")
+    updateStock: t.prepare("UPDATE products SET stock = stock - ? WHERE id = ?"),
+    selectById: t.prepare(`SELECT ${U} FROM sales WHERE id = ?`),
+    /**
+     * LEFT JOIN a products para mostrar nombre/codigo actuales. NO es
+     * snapshot; para el snapshot real a nivel linea, agregar columnas
+     * product_code_snapshot/product_name_snapshot a sale_items en migracion
+     * futura. Hoy vive como deuda conocida.
+     */
+    selectItems: t.prepare(
+      `SELECT si.id, si.sale_id, si.product_id, si.qty, si.price,
+              p.code AS product_code, p.name AS product_name
+         FROM sale_items si
+    LEFT JOIN products p ON p.id = si.product_id
+        WHERE si.sale_id = ?
+     ORDER BY si.id ASC`
+    ),
+    selectPage: t.prepare(
+      `SELECT ${U}
+         FROM sales
+     ORDER BY id DESC
+        LIMIT ? OFFSET ?`
+    ),
+    countAll: t.prepare("SELECT COUNT(*) AS total FROM sales")
   };
-  const insertSale = db.transaction((record) => {
-    const info = stmts.insertSale.run(
-      record.total,
-      record.subtotal,
-      record.taxRate,
-      record.taxAmount,
-      record.currencyCode
-    );
-    const saleId = info.lastInsertRowid;
-    for (const item of record.items) {
-      stmts.insertItem.run(saleId, item.id, item.qty, item.price);
-      stmts.updateStock.run(item.qty, item.id);
+  return {
+    insertSale: t.transaction((s) => {
+      const r = e.insertSale.run(
+        s.total,
+        s.subtotal,
+        s.taxRate,
+        s.taxAmount,
+        s.currencyCode,
+        s.customerId,
+        s.customerNameSnapshot,
+        s.customerNitSnapshot
+      ).lastInsertRowid;
+      for (const a of s.items)
+        e.insertItem.run(r, a.id, a.qty, a.price), e.updateStock.run(a.qty, a.id);
+      return r;
+    }),
+    /**
+     * @param {number} id
+     * @returns {SaleRow | undefined}
+     */
+    findSaleById(s) {
+      return e.selectById.get(s);
+    },
+    /**
+     * @param {number} saleId
+     * @returns {SaleItemRow[]}
+     */
+    findSaleItems(s) {
+      return e.selectItems.all(s);
+    },
+    /**
+     * @param {PageOptions} opts
+     * @returns {SaleRow[]}
+     */
+    findPage({ limit: s, offset: o }) {
+      return e.selectPage.all(s, o);
+    },
+    /** @returns {number} */
+    countAll() {
+      return /** @type {{ total: number }} */ e.countAll.get().total;
     }
-    return saleId;
-  });
-  return { insertSale };
+  };
 }
-function assertValidInput(input) {
-  if (!input || !Array.isArray(input.items) || input.items.length === 0) {
+const ie = 200, ce = 1;
+function le(t) {
+  if (!t || !Array.isArray(t.items) || t.items.length === 0)
     throw Object.assign(new Error("La venta debe contener al menos un item"), {
       code: "SALE_EMPTY"
     });
+  for (const e of t.items) {
+    if (!Number.isInteger(e.id) || e.id <= 0)
+      throw Object.assign(new Error(`product_id invalido: ${e.id}`), {
+        code: "SALE_INVALID_ITEM"
+      });
+    if (!Number.isInteger(e.qty) || e.qty <= 0)
+      throw Object.assign(new Error(`qty invalida para producto ${e.id}`), {
+        code: "SALE_INVALID_ITEM"
+      });
+    if (!Number.isFinite(e.price) || e.price < 0)
+      throw Object.assign(new Error(`price invalido para producto ${e.id}`), {
+        code: "SALE_INVALID_ITEM"
+      });
   }
-  for (const item of input.items) {
-    if (!Number.isInteger(item.id) || item.id <= 0) {
-      throw Object.assign(new Error(`product_id invalido: ${item.id}`), {
-        code: "SALE_INVALID_ITEM"
-      });
-    }
-    if (!Number.isInteger(item.qty) || item.qty <= 0) {
-      throw Object.assign(new Error(`qty invalida para producto ${item.id}`), {
-        code: "SALE_INVALID_ITEM"
-      });
-    }
-    if (!Number.isFinite(item.price) || item.price < 0) {
-      throw Object.assign(new Error(`price invalido para producto ${item.id}`), {
-        code: "SALE_INVALID_ITEM"
-      });
-    }
-  }
+  if (t.customerId !== void 0 && (!Number.isInteger(t.customerId) || t.customerId <= 0))
+    throw Object.assign(new Error(`customer_id invalido: ${t.customerId}`), {
+      code: "SALE_INVALID_CUSTOMER"
+    });
 }
-function computeBreakdown(rawSum, rate, included, decimals) {
-  const factor = Math.pow(10, decimals);
-  const round = (n) => Math.round(n * factor) / factor;
-  if (included) {
-    const total2 = round(rawSum);
-    const taxAmount2 = round(total2 - total2 / (1 + rate));
-    const subtotal2 = round(total2 - taxAmount2);
-    return { subtotal: subtotal2, taxAmount: taxAmount2, total: total2 };
+function ue(t, e, n, s) {
+  const o = Math.pow(10, s), r = (l) => Math.round(l * o) / o;
+  if (n) {
+    const l = r(t), E = r(l - l / (1 + e));
+    return { subtotal: r(l - E), taxAmount: E, total: l };
   }
-  const subtotal = round(rawSum);
-  const taxAmount = round(subtotal * rate);
-  const total = round(subtotal + taxAmount);
-  return { subtotal, taxAmount, total };
+  const a = r(t), i = r(a * e), c = r(a + i);
+  return { subtotal: a, taxAmount: i, total: c };
 }
-function createSalesService(repo, settings) {
+function de(t, e, n) {
   return {
     /**
      * @param {SaleInput} input
      * @returns {SaleCreatedResult}
      */
-    create(input) {
-      assertValidInput(input);
-      const taxRate = (
+    create(s) {
+      le(s);
+      const o = (
         /** @type {number} */
-        settings.get("tax_rate")
-      );
-      const taxIncluded = (
+        e.get("tax_rate")
+      ), r = (
         /** @type {boolean} */
-        settings.get("tax_included_in_price")
-      );
-      const currency = (
+        e.get("tax_included_in_price")
+      ), a = (
         /** @type {string} */
-        settings.get("currency_code")
-      );
-      const decimals = (
+        e.get("currency_code")
+      ), i = (
         /** @type {number} */
-        settings.get("decimal_places")
-      );
-      const rawSum = input.items.reduce((acc, i) => acc + i.price * i.qty, 0);
-      const { subtotal, taxAmount, total } = computeBreakdown(
-        rawSum,
-        taxRate,
-        taxIncluded,
-        decimals
-      );
-      const saleId = repo.insertSale({
-        items: input.items,
-        subtotal,
-        taxRate,
-        taxAmount,
-        total,
-        currencyCode: currency
+        e.get("decimal_places")
+      ), c = s.customerId ?? ce, l = n.requireById(c), E = s.items.reduce((B, y) => B + y.price * y.qty, 0), { subtotal: N, taxAmount: A, total: h } = ue(
+        E,
+        o,
+        r,
+        i
+      ), I = t.insertSale({
+        items: s.items,
+        subtotal: N,
+        taxRate: o,
+        taxAmount: A,
+        total: h,
+        currencyCode: a,
+        customerId: c,
+        customerNameSnapshot: l.name,
+        customerNitSnapshot: l.nit
       });
       return {
-        // BigInt no sobrevive structuredClone de Electron en algunas versiones.
-        saleId: typeof saleId === "bigint" ? Number(saleId) : saleId,
-        subtotal,
-        taxRate,
-        taxAmount,
-        total,
-        currencyCode: currency
+        saleId: typeof I == "bigint" ? Number(I) : I,
+        subtotal: N,
+        taxRate: o,
+        taxAmount: A,
+        total: h,
+        currencyCode: a,
+        customerId: c,
+        customerName: l.name,
+        customerNit: l.nit
+      };
+    },
+    /**
+     * @param {number} id
+     * @returns {SaleWithItems | null}
+     */
+    getById(s) {
+      if (!Number.isInteger(s) || s <= 0)
+        throw Object.assign(new Error(`sale id invalido: ${s}`), { code: "SALE_INVALID_ID" });
+      const o = t.findSaleById(s);
+      if (!o) return null;
+      const r = t.findSaleItems(s);
+      return { ...o, items: r };
+    },
+    /**
+     * @param {{ page?: number, pageSize?: number }} [opts]
+     * @returns {SaleListResult}
+     */
+    list(s = {}) {
+      const o = Number.isInteger(s.page) && /** @type {number} */
+      s.page > 0 ? (
+        /** @type {number} */
+        s.page
+      ) : 1, r = Number.isInteger(s.pageSize) && /** @type {number} */
+      s.pageSize > 0 ? (
+        /** @type {number} */
+        s.pageSize
+      ) : 50, a = Math.min(r, ie), i = (o - 1) * a;
+      return {
+        data: t.findPage({ limit: a, offset: i }),
+        total: t.countAll(),
+        page: o,
+        pageSize: a
       };
     }
   };
 }
-function registerSalesIpc(service) {
-  ipcMain.handle("sales:create", wrap((_e, saleData) => service.create(saleData)));
+function me(t) {
+  u.handle("sales:create", d((e, n) => t.create(n))), u.handle("sales:get-by-id", d((e, n) => t.getById(n))), u.handle("sales:list", d((e, n) => t.list(n)));
 }
-const migrationModules = /* @__PURE__ */ Object.assign({
-  "../database/migrations/001_init.sql": __vite_glob_0_0,
-  "../database/migrations/002_settings.sql": __vite_glob_0_1,
-  "../database/migrations/003_sales_tax_snapshot.sql": __vite_glob_0_2
+const Ee = /* @__PURE__ */ Object.assign({
+  "../database/migrations/001_init.sql": X,
+  "../database/migrations/002_settings.sql": P,
+  "../database/migrations/003_sales_tax_snapshot.sql": k,
+  "../database/migrations/004_customers.sql": $
 });
-function loadMigrations() {
-  return Object.entries(migrationModules).map(([path2, sql]) => ({
-    name: path2.split("/").pop(),
-    sql
+function pe() {
+  return Object.entries(Ee).map(([t, e]) => ({
+    name: t.split("/").pop(),
+    sql: e
   }));
 }
-function bootstrap() {
-  const db = getDb();
-  const result = runMigrations(db, loadMigrations());
-  console.log(...oo_oo(`2317347876_49_2_49_80_4`, "[migrator] applied:", result.applied, "skipped:", result.skipped));
-  const settingsRepo = createSettingsRepository(db);
-  const settings = createSettingsService(settingsRepo);
-  settings.init();
-  const productsRepo = createProductsRepository(db);
-  const products = createProductsService(productsRepo);
-  const salesRepo = createSalesRepository(db);
-  const sales = createSalesService(salesRepo, settings);
-  registerSettingsIpc(settings);
-  registerProductsIpc(products);
-  registerSalesIpc(sales);
+function Te() {
+  const t = H(), e = G(t, pe());
+  console.log("[migrator] applied:", e.applied, "skipped:", e.skipped);
+  const n = W(t), s = Z(n);
+  s.init();
+  const o = J(t), r = ee(o), a = ne(t), i = re(a), c = oe(t), l = de(c, s, i);
+  Q(s), te(r), ae(i), me(l);
 }
-function oo_cm() {
-  try {
-    return (0, eval)("globalThis._console_ninja") || (0, eval)(`/* https://github.com/wallabyjs/console-ninja#how-does-it-work */'use strict';function _0x4187(_0x52e140,_0x15844d){var _0x1edd14=_0x1edd();return _0x4187=function(_0x418736,_0x252226){_0x418736=_0x418736-0x1dc;var _0x1c174c=_0x1edd14[_0x418736];return _0x1c174c;},_0x4187(_0x52e140,_0x15844d);}var _0x3890c8=_0x4187;function _0x1edd(){var _0xd02a82=['background:\\x20rgb(30,30,30);\\x20color:\\x20rgb(255,213,92)','_connectToHostNow','NEGATIVE_INFINITY',{"resolveGetters":false,"defaultLimits":{"props":100,"elements":100,"strLength":51200,"totalStrLength":51200,"autoExpandLimit":5000,"autoExpandMaxDepth":10},"reducedLimits":{"props":5,"elements":5,"strLength":256,"totalStrLength":768,"autoExpandLimit":30,"autoExpandMaxDepth":2},"reducePolicy":{"perLogpoint":{"reduceOnCount":50,"reduceOnAccumulatedProcessingTimeMs":100,"resetWhenQuietMs":500,"resetOnProcessingTimeAverageMs":100},"global":{"reduceOnCount":1000,"reduceOnAccumulatedProcessingTimeMs":300,"resetWhenQuietMs":50,"resetOnProcessingTimeAverageMs":100}}},'_getOwnPropertyDescriptor','warn','_p_length','_regExpToString','38gkPcrc',',\\x20see\\x20https://tinyurl.com/2vt8jxzw\\x20for\\x20more\\x20info.','funcName','_isSet','hasOwnProperty','unshift','[object\\x20Array]','_maxConnectAttemptCount','ws://','autoExpandMaxDepth','default','stackTraceLimit','\\x20server','_addProperty','origin','reducedLimits','resolveGetters','disabledLog','cappedElements','indexOf','reload','Set','Symbol','_isArray','stack','port','function','resetOnProcessingTimeAverageMs','slice','onerror','_connectAttemptCount','emulator','reducePolicy','_processTreeNodeResult','count','_setNodeExpressionPath','HTMLAllCollection','String','strLength','_WebSocketClass','_addLoadNode','expo','ninjaSuppressConsole','_isUndefined','_connected','_keyStrRegExp','next.js','Number','9jOUldT','_isNegativeZero','_p_name','_ws','substr','import(\\x27url\\x27)','_consoleNinjaAllowedToStart','date','parse','_treeNodePropertiesBeforeFullValue','_setNodeLabel','_blacklistedProperty','Buffer','33763','20667vPUjDv','time','Promise','set','2035290pGkmlm','','logger\\x20failed\\x20to\\x20connect\\x20to\\x20host,\\x20see\\x20','angular','negativeInfinity','test','resolve','WebSocket','array','parent','bind','host','resetWhenQuietMs','failed\\x20to\\x20connect\\x20to\\x20host:\\x20','process','bigint','136cjwhMD','toString','object','readyState','_inBrowser','send','_attemptToReconnectShortly','_HTMLAllCollection','hostname','_allowedToSend','edge','name','stringify','_setNodeId','elapsed','constructor','182420mjmqKf','_numberRegExp',"/home/henry-tercero/.vscode/extensions/wallabyjs.console-ninja-1.0.525/node_modules",'type','prototype','astro','pop','expressionsToEvaluate','osName','reduceOnAccumulatedProcessingTimeMs','env','Map','_sendErrorMessage','RegExp','node','[object\\x20Date]','_sortProps','_console_ninja','autoExpandLimit','path','8098092eUysyP','_disposeWebsocket','_isPrimitiveWrapperType','autoExpandPropertyCount','return\\x20import(url.pathToFileURL(path.join(nodeModules,\\x20\\x27ws/index.js\\x27)).toString());','perLogpoint','map','_extendedWarning','android','join','rootExpression','_type','_capIfString','nan','_socket','root_exp_id','concat','_console_ninja_session','error','trace','_objectToString','isArray','_ninjaIgnoreNextError','onmessage','fromCharCode','\\x20browser','getWebSocketClass','catch','unknown','versions','_dateToString','_cleanNode','1.0.0','react-native','Console\\x20Ninja\\x20failed\\x20to\\x20send\\x20logs,\\x20refreshing\\x20the\\x20page\\x20may\\x20help;\\x20also\\x20see\\x20','isExpressionToEvaluate','now','then','serialize','toLowerCase','index','hrtime','close','allStrLength','valueOf','ExpoDevice','_p_','_inNextEdge','[object\\x20BigInt]','Console\\x20Ninja\\x20extension\\x20is\\x20connected\\x20to\\x20','timeStamp','autoExpand','1777052887699','_getOwnPropertySymbols','7574025BLeRlk','sortProps','replace','NEXT_RUNTIME','_connecting','_additionalMetadata','forEach','level','symbol','modules','_Symbol','undefined','[object\\x20Set]','eventReceivedCallback','remix','_setNodeQueryPath','[object\\x20Map]','log','depth','Boolean','dockerizedApp','global','null','args','gateway.docker.internal','_addFunctionsNode','perf_hooks','5058944NenKCb','_hasMapOnItsPath','_setNodeExpandableState','push',["localhost","127.0.0.1","example.cypress.io","10.0.2.2","henry-tercero-Victus-by-HP-Gaming-Laptop-15-fa2xxx","192.168.1.11"],'unref','_webSocketErrorDocsLink','','_treeNodePropertiesAfterFullValue','%c\\x20Console\\x20Ninja\\x20extension\\x20is\\x20connected\\x20to\\x20','Error','number','value','_isMap','defaultLimits','_addObjectProperty','totalStrLength','some','boolean','_WebSocket','autoExpandPreviousObjects','sort','_setNodePermissions','_allowedToConnectOnSend','disabledTrace','console','reduceOnCount','location','10.0.2.2','get','call','_propertyName','length','props','_hasSymbolPropertyOnItsPath','_reconnectTimeout','string','getOwnPropertyDescriptor','import(\\x27path\\x27)','noFunctions','nodeModules','elements','endsWith','POSITIVE_INFINITY','21223450LJhzYJ','expId','_isPrimitiveType','onopen','bound\\x20Promise','message','current','reduceLimits','_getOwnPropertyNames','data','url','_quotedRegExp','hits','match','_property','getOwnPropertySymbols','performance','toUpperCase','capped','includes'];_0x1edd=function(){return _0xd02a82;};return _0x1edd();}(function(_0x593217,_0xb66b98){var _0x477746=_0x4187,_0x4015ef=_0x593217();while(!![]){try{var _0x55fb6d=parseInt(_0x477746(0x254))/0x1*(-parseInt(_0x477746(0x216))/0x2)+parseInt(_0x477746(0x258))/0x3+-parseInt(_0x477746(0x2dd))/0x4+parseInt(_0x477746(0x2c2))/0x5+-parseInt(_0x477746(0x28c))/0x6+-parseInt(_0x477746(0x278))/0x7*(parseInt(_0x477746(0x268))/0x8)+parseInt(_0x477746(0x246))/0x9*(parseInt(_0x477746(0x1fa))/0xa);if(_0x55fb6d===_0xb66b98)break;else _0x4015ef['push'](_0x4015ef['shift']());}catch(_0x3d51fa){_0x4015ef['push'](_0x4015ef['shift']());}}}(_0x1edd,0xd34bd));function z(_0x592fc3,_0x315c78,_0x20b8bb,_0x322b6b,_0x3f5c59,_0x2ff362){var _0x1e9d9b=_0x4187,_0x1f3283,_0x1d630f,_0x518481,_0x138db6;this[_0x1e9d9b(0x2d7)]=_0x592fc3,this[_0x1e9d9b(0x263)]=_0x315c78,this[_0x1e9d9b(0x22f)]=_0x20b8bb,this['nodeModules']=_0x322b6b,this['dockerizedApp']=_0x3f5c59,this['eventReceivedCallback']=_0x2ff362,this[_0x1e9d9b(0x271)]=!0x0,this[_0x1e9d9b(0x1e5)]=!0x0,this[_0x1e9d9b(0x242)]=!0x1,this[_0x1e9d9b(0x2c6)]=!0x1,this[_0x1e9d9b(0x2bb)]=((_0x1d630f=(_0x1f3283=_0x592fc3['process'])==null?void 0x0:_0x1f3283[_0x1e9d9b(0x282)])==null?void 0x0:_0x1d630f['NEXT_RUNTIME'])===_0x1e9d9b(0x272),this[_0x1e9d9b(0x26c)]=!((_0x138db6=(_0x518481=this[_0x1e9d9b(0x2d7)][_0x1e9d9b(0x266)])==null?void 0x0:_0x518481[_0x1e9d9b(0x2a9)])!=null&&_0x138db6[_0x1e9d9b(0x286)])&&!this[_0x1e9d9b(0x2bb)],this[_0x1e9d9b(0x23d)]=null,this['_connectAttemptCount']=0x0,this[_0x1e9d9b(0x21d)]=0x14,this[_0x1e9d9b(0x2e3)]='https://tinyurl.com/37x8b79t',this[_0x1e9d9b(0x284)]=(this['_inBrowser']?_0x1e9d9b(0x2ae):'Console\\x20Ninja\\x20failed\\x20to\\x20send\\x20logs,\\x20restarting\\x20the\\x20process\\x20may\\x20help;\\x20also\\x20see\\x20')+this[_0x1e9d9b(0x2e3)];}z[_0x3890c8(0x27c)][_0x3890c8(0x2a6)]=async function(){var _0x47df01=_0x3890c8,_0x4c9b9c,_0x348789;if(this['_WebSocketClass'])return this[_0x47df01(0x23d)];let _0x5b4a33;if(this[_0x47df01(0x26c)]||this[_0x47df01(0x2bb)])_0x5b4a33=this[_0x47df01(0x2d7)][_0x47df01(0x25f)];else{if((_0x4c9b9c=this['global'][_0x47df01(0x266)])!=null&&_0x4c9b9c['_WebSocket'])_0x5b4a33=(_0x348789=this[_0x47df01(0x2d7)]['process'])==null?void 0x0:_0x348789[_0x47df01(0x1e1)];else try{_0x5b4a33=(await new Function('path',_0x47df01(0x204),_0x47df01(0x1f6),_0x47df01(0x290))(await(0x0,eval)(_0x47df01(0x1f4)),await(0x0,eval)(_0x47df01(0x24b)),this[_0x47df01(0x1f6)]))[_0x47df01(0x220)];}catch{try{_0x5b4a33=require(require(_0x47df01(0x28b))[_0x47df01(0x295)](this[_0x47df01(0x1f6)],'ws'));}catch{throw new Error('failed\\x20to\\x20find\\x20and\\x20load\\x20WebSocket');}}}return this[_0x47df01(0x23d)]=_0x5b4a33,_0x5b4a33;},z[_0x3890c8(0x27c)][_0x3890c8(0x20f)]=function(){var _0x1d32f3=_0x3890c8;this[_0x1d32f3(0x2c6)]||this[_0x1d32f3(0x242)]||this[_0x1d32f3(0x234)]>=this[_0x1d32f3(0x21d)]||(this[_0x1d32f3(0x1e5)]=!0x1,this[_0x1d32f3(0x2c6)]=!0x0,this[_0x1d32f3(0x234)]++,this[_0x1d32f3(0x249)]=new Promise((_0x1dfeca,_0x1ed537)=>{var _0x162cdd=_0x1d32f3;this[_0x162cdd(0x2a6)]()[_0x162cdd(0x2b1)](_0x47460b=>{var _0x1fc8dc=_0x162cdd;let _0xe561b2=new _0x47460b(_0x1fc8dc(0x21e)+(!this[_0x1fc8dc(0x26c)]&&this[_0x1fc8dc(0x2d6)]?_0x1fc8dc(0x2da):this[_0x1fc8dc(0x263)])+':'+this['port']);_0xe561b2[_0x1fc8dc(0x233)]=()=>{var _0x53cfe7=_0x1fc8dc;this[_0x53cfe7(0x271)]=!0x1,this[_0x53cfe7(0x28d)](_0xe561b2),this['_attemptToReconnectShortly'](),_0x1ed537(new Error('logger\\x20websocket\\x20error'));},_0xe561b2[_0x1fc8dc(0x1fd)]=()=>{var _0x1456f8=_0x1fc8dc;this[_0x1456f8(0x26c)]||_0xe561b2[_0x1456f8(0x29a)]&&_0xe561b2['_socket']['unref']&&_0xe561b2['_socket'][_0x1456f8(0x2e2)](),_0x1dfeca(_0xe561b2);},_0xe561b2['onclose']=()=>{var _0x1475d1=_0x1fc8dc;this[_0x1475d1(0x1e5)]=!0x0,this[_0x1475d1(0x28d)](_0xe561b2),this['_attemptToReconnectShortly']();},_0xe561b2[_0x1fc8dc(0x2a3)]=_0x175d79=>{var _0x2e3b9f=_0x1fc8dc;try{if(!(_0x175d79!=null&&_0x175d79[_0x2e3b9f(0x203)])||!this[_0x2e3b9f(0x2cf)])return;let _0x44f4d4=JSON[_0x2e3b9f(0x24e)](_0x175d79['data']);this[_0x2e3b9f(0x2cf)](_0x44f4d4['method'],_0x44f4d4[_0x2e3b9f(0x2d9)],this[_0x2e3b9f(0x2d7)],this[_0x2e3b9f(0x26c)]);}catch{}};})[_0x162cdd(0x2b1)](_0x2e6e48=>(this[_0x162cdd(0x242)]=!0x0,this[_0x162cdd(0x2c6)]=!0x1,this['_allowedToConnectOnSend']=!0x1,this[_0x162cdd(0x271)]=!0x0,this[_0x162cdd(0x234)]=0x0,_0x2e6e48))[_0x162cdd(0x2a7)](_0x890b60=>(this['_connected']=!0x1,this['_connecting']=!0x1,console[_0x162cdd(0x213)](_0x162cdd(0x25a)+this[_0x162cdd(0x2e3)]),_0x1ed537(new Error(_0x162cdd(0x265)+(_0x890b60&&_0x890b60[_0x162cdd(0x1ff)])))));}));},z[_0x3890c8(0x27c)]['_disposeWebsocket']=function(_0x1b2f6c){var _0x5b014b=_0x3890c8;this['_connected']=!0x1,this[_0x5b014b(0x2c6)]=!0x1;try{_0x1b2f6c['onclose']=null,_0x1b2f6c[_0x5b014b(0x233)]=null,_0x1b2f6c['onopen']=null;}catch{}try{_0x1b2f6c[_0x5b014b(0x26b)]<0x2&&_0x1b2f6c[_0x5b014b(0x2b6)]();}catch{}},z[_0x3890c8(0x27c)]['_attemptToReconnectShortly']=function(){var _0x124bb9=_0x3890c8;clearTimeout(this[_0x124bb9(0x1f1)]),!(this[_0x124bb9(0x234)]>=this[_0x124bb9(0x21d)])&&(this[_0x124bb9(0x1f1)]=setTimeout(()=>{var _0x4d4e90=_0x124bb9,_0xf6aafa;this[_0x4d4e90(0x242)]||this['_connecting']||(this[_0x4d4e90(0x20f)](),(_0xf6aafa=this[_0x4d4e90(0x249)])==null||_0xf6aafa['catch'](()=>this[_0x4d4e90(0x26e)]()));},0x1f4),this[_0x124bb9(0x1f1)][_0x124bb9(0x2e2)]&&this[_0x124bb9(0x1f1)][_0x124bb9(0x2e2)]());},z[_0x3890c8(0x27c)][_0x3890c8(0x26d)]=async function(_0x1bb714){var _0x9a6194=_0x3890c8;try{if(!this[_0x9a6194(0x271)])return;this[_0x9a6194(0x1e5)]&&this[_0x9a6194(0x20f)](),(await this[_0x9a6194(0x249)])[_0x9a6194(0x26d)](JSON[_0x9a6194(0x274)](_0x1bb714));}catch(_0x1b6312){this[_0x9a6194(0x293)]?console[_0x9a6194(0x213)](this[_0x9a6194(0x284)]+':\\x20'+(_0x1b6312&&_0x1b6312[_0x9a6194(0x1ff)])):(this['_extendedWarning']=!0x0,console[_0x9a6194(0x213)](this[_0x9a6194(0x284)]+':\\x20'+(_0x1b6312&&_0x1b6312[_0x9a6194(0x1ff)]),_0x1bb714)),this[_0x9a6194(0x271)]=!0x1,this[_0x9a6194(0x26e)]();}};function H(_0x20ad1f,_0x2292c5,_0x44fc0e,_0x23d982,_0x5cf68c,_0x2bf037,_0x2ca164,_0x17c366=ne){var _0x1889e1=_0x3890c8;let _0x540a51=_0x44fc0e['split'](',')[_0x1889e1(0x292)](_0x2d32cd=>{var _0xd94d2e=_0x1889e1,_0x5aa30d,_0x16905d,_0x42434e,_0x1ab968,_0x405adf,_0x2a8f7e,_0x117873,_0x5423c9;try{if(!_0x20ad1f[_0xd94d2e(0x29d)]){let _0x41ebfe=((_0x16905d=(_0x5aa30d=_0x20ad1f['process'])==null?void 0x0:_0x5aa30d[_0xd94d2e(0x2a9)])==null?void 0x0:_0x16905d[_0xd94d2e(0x286)])||((_0x1ab968=(_0x42434e=_0x20ad1f['process'])==null?void 0x0:_0x42434e[_0xd94d2e(0x282)])==null?void 0x0:_0x1ab968[_0xd94d2e(0x2c5)])==='edge';(_0x5cf68c===_0xd94d2e(0x244)||_0x5cf68c===_0xd94d2e(0x2d0)||_0x5cf68c===_0xd94d2e(0x27d)||_0x5cf68c===_0xd94d2e(0x25b))&&(_0x5cf68c+=_0x41ebfe?_0xd94d2e(0x222):_0xd94d2e(0x2a5));let _0x3b5c0e='';_0x5cf68c==='react-native'&&(_0x3b5c0e=(((_0x117873=(_0x2a8f7e=(_0x405adf=_0x20ad1f[_0xd94d2e(0x23f)])==null?void 0x0:_0x405adf['modules'])==null?void 0x0:_0x2a8f7e[_0xd94d2e(0x2b9)])==null?void 0x0:_0x117873[_0xd94d2e(0x280)])||_0xd94d2e(0x235))[_0xd94d2e(0x2b3)](),_0x3b5c0e&&(_0x5cf68c+='\\x20'+_0x3b5c0e,(_0x3b5c0e===_0xd94d2e(0x294)||_0x3b5c0e===_0xd94d2e(0x235)&&((_0x5423c9=_0x20ad1f[_0xd94d2e(0x1e9)])==null?void 0x0:_0x5423c9['hostname'])===_0xd94d2e(0x1ea))&&(_0x2292c5=_0xd94d2e(0x1ea)))),_0x20ad1f[_0xd94d2e(0x29d)]={'id':+new Date(),'tool':_0x5cf68c},_0x2ca164&&_0x5cf68c&&!_0x41ebfe&&(_0x3b5c0e?console['log'](_0xd94d2e(0x2bd)+_0x3b5c0e+_0xd94d2e(0x217)):console[_0xd94d2e(0x2d3)](_0xd94d2e(0x2e6)+(_0x5cf68c['charAt'](0x0)[_0xd94d2e(0x20b)]()+_0x5cf68c[_0xd94d2e(0x24a)](0x1))+',',_0xd94d2e(0x20e),'see\\x20https://tinyurl.com/2vt8jxzw\\x20for\\x20more\\x20info.'));}let _0x326972=new z(_0x20ad1f,_0x2292c5,_0x2d32cd,_0x23d982,_0x2bf037,_0x17c366);return _0x326972[_0xd94d2e(0x26d)]['bind'](_0x326972);}catch(_0x266308){return console[_0xd94d2e(0x213)]('logger\\x20failed\\x20to\\x20connect\\x20to\\x20host',_0x266308&&_0x266308[_0xd94d2e(0x1ff)]),()=>{};}});return _0x3b9c7f=>_0x540a51['forEach'](_0x742346=>_0x742346(_0x3b9c7f));}function ne(_0x31e108,_0x3ec168,_0x417cab,_0xfd62c4){var _0x4be061=_0x3890c8;_0xfd62c4&&_0x31e108===_0x4be061(0x22a)&&_0x417cab[_0x4be061(0x1e9)][_0x4be061(0x22a)]();}function b(_0x30160c){var _0x151986=_0x3890c8,_0x2c787f,_0x2a95b9;let _0x2b4527=function(_0x1f6955,_0x424bf1){return _0x424bf1-_0x1f6955;},_0x19085c;if(_0x30160c[_0x151986(0x20a)])_0x19085c=function(){var _0x56aa7e=_0x151986;return _0x30160c[_0x56aa7e(0x20a)][_0x56aa7e(0x2b0)]();};else{if(_0x30160c[_0x151986(0x266)]&&_0x30160c[_0x151986(0x266)][_0x151986(0x2b5)]&&((_0x2a95b9=(_0x2c787f=_0x30160c[_0x151986(0x266)])==null?void 0x0:_0x2c787f[_0x151986(0x282)])==null?void 0x0:_0x2a95b9['NEXT_RUNTIME'])!==_0x151986(0x272))_0x19085c=function(){var _0x2687a2=_0x151986;return _0x30160c[_0x2687a2(0x266)][_0x2687a2(0x2b5)]();},_0x2b4527=function(_0x841d75,_0x2991da){return 0x3e8*(_0x2991da[0x0]-_0x841d75[0x0])+(_0x2991da[0x1]-_0x841d75[0x1])/0xf4240;};else try{let {performance:_0xd3a2df}=require(_0x151986(0x2dc));_0x19085c=function(){var _0x52330d=_0x151986;return _0xd3a2df[_0x52330d(0x2b0)]();};}catch{_0x19085c=function(){return+new Date();};}}return{'elapsed':_0x2b4527,'timeStamp':_0x19085c,'now':()=>Date[_0x151986(0x2b0)]()};}function X(_0x31ddec,_0x301594,_0x57b351){var _0xd50045=_0x3890c8,_0x21878c,_0x18f50c,_0x1295d0,_0x2b81d1,_0x429f3b,_0x1a0b9b,_0x4dbdad;if(_0x31ddec[_0xd50045(0x24c)]!==void 0x0)return _0x31ddec[_0xd50045(0x24c)];let _0x36bf8=((_0x18f50c=(_0x21878c=_0x31ddec['process'])==null?void 0x0:_0x21878c[_0xd50045(0x2a9)])==null?void 0x0:_0x18f50c[_0xd50045(0x286)])||((_0x2b81d1=(_0x1295d0=_0x31ddec[_0xd50045(0x266)])==null?void 0x0:_0x1295d0[_0xd50045(0x282)])==null?void 0x0:_0x2b81d1['NEXT_RUNTIME'])===_0xd50045(0x272),_0xd67b84=!!(_0x57b351===_0xd50045(0x2ad)&&((_0x429f3b=_0x31ddec[_0xd50045(0x23f)])==null?void 0x0:_0x429f3b[_0xd50045(0x2cb)]));function _0x224a39(_0x3f855b){var _0x554bf3=_0xd50045;if(_0x3f855b['startsWith']('/')&&_0x3f855b[_0x554bf3(0x1f8)]('/')){let _0x1a86b1=new RegExp(_0x3f855b['slice'](0x1,-0x1));return _0xda75d7=>_0x1a86b1[_0x554bf3(0x25d)](_0xda75d7);}else{if(_0x3f855b[_0x554bf3(0x20d)]('*')||_0x3f855b[_0x554bf3(0x20d)]('?')){let _0x1cb7b0=new RegExp('^'+_0x3f855b['replace'](/\\./g,String[_0x554bf3(0x2a4)](0x5c)+'.')['replace'](/\\*/g,'.*')['replace'](/\\?/g,'.')+String[_0x554bf3(0x2a4)](0x24));return _0x3d762c=>_0x1cb7b0['test'](_0x3d762c);}else return _0x362679=>_0x362679===_0x3f855b;}}let _0x8cb568=_0x301594[_0xd50045(0x292)](_0x224a39);return _0x31ddec[_0xd50045(0x24c)]=_0x36bf8||!_0x301594,!_0x31ddec[_0xd50045(0x24c)]&&((_0x1a0b9b=_0x31ddec[_0xd50045(0x1e9)])==null?void 0x0:_0x1a0b9b[_0xd50045(0x270)])&&(_0x31ddec[_0xd50045(0x24c)]=_0x8cb568[_0xd50045(0x1df)](_0x16149e=>_0x16149e(_0x31ddec[_0xd50045(0x1e9)][_0xd50045(0x270)]))),_0xd67b84&&!_0x31ddec[_0xd50045(0x24c)]&&!((_0x4dbdad=_0x31ddec[_0xd50045(0x1e9)])!=null&&_0x4dbdad[_0xd50045(0x270)])&&(_0x31ddec[_0xd50045(0x24c)]=!0x0),_0x31ddec[_0xd50045(0x24c)];}function J(_0x1b046d,_0x3af781,_0x5b51f5,_0x4cee6a,_0x39e136,_0x5d8b23){var _0x1f5d44=_0x3890c8;_0x1b046d=_0x1b046d,_0x3af781=_0x3af781,_0x5b51f5=_0x5b51f5,_0x4cee6a=_0x4cee6a,_0x39e136=_0x39e136,_0x39e136=_0x39e136||{},_0x39e136['defaultLimits']=_0x39e136['defaultLimits']||{},_0x39e136[_0x1f5d44(0x225)]=_0x39e136[_0x1f5d44(0x225)]||{},_0x39e136[_0x1f5d44(0x236)]=_0x39e136[_0x1f5d44(0x236)]||{},_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x291)]=_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x291)]||{},_0x39e136[_0x1f5d44(0x236)]['global']=_0x39e136[_0x1f5d44(0x236)]['global']||{};let _0x4756a1={'perLogpoint':{'reduceOnCount':_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x291)][_0x1f5d44(0x1e8)]||0x32,'reduceOnAccumulatedProcessingTimeMs':_0x39e136['reducePolicy'][_0x1f5d44(0x291)][_0x1f5d44(0x281)]||0x64,'resetWhenQuietMs':_0x39e136[_0x1f5d44(0x236)]['perLogpoint']['resetWhenQuietMs']||0x1f4,'resetOnProcessingTimeAverageMs':_0x39e136[_0x1f5d44(0x236)]['perLogpoint']['resetOnProcessingTimeAverageMs']||0x64},'global':{'reduceOnCount':_0x39e136['reducePolicy'][_0x1f5d44(0x2d7)][_0x1f5d44(0x1e8)]||0x3e8,'reduceOnAccumulatedProcessingTimeMs':_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x2d7)]['reduceOnAccumulatedProcessingTimeMs']||0x12c,'resetWhenQuietMs':_0x39e136[_0x1f5d44(0x236)]['global'][_0x1f5d44(0x264)]||0x32,'resetOnProcessingTimeAverageMs':_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x2d7)][_0x1f5d44(0x231)]||0x64}},_0x41af91=b(_0x1b046d),_0x13f85b=_0x41af91[_0x1f5d44(0x276)],_0x5553e9=_0x41af91[_0x1f5d44(0x2be)];function _0x39602c(){var _0x293841=_0x1f5d44;this[_0x293841(0x243)]=/^(?!(?:do|if|in|for|let|new|try|var|case|else|enum|eval|false|null|this|true|void|with|break|catch|class|const|super|throw|while|yield|delete|export|import|public|return|static|switch|typeof|default|extends|finally|package|private|continue|debugger|function|arguments|interface|protected|implements|instanceof)$)[_$a-zA-Z\\xA0-\\uFFFF][_$a-zA-Z0-9\\xA0-\\uFFFF]*$/,this[_0x293841(0x279)]=/^(0|[1-9][0-9]*)$/,this[_0x293841(0x205)]=/'([^\\\\']|\\\\')*'/,this['_undefined']=_0x1b046d[_0x293841(0x2cd)],this[_0x293841(0x26f)]=_0x1b046d[_0x293841(0x23a)],this['_getOwnPropertyDescriptor']=Object[_0x293841(0x1f3)],this[_0x293841(0x202)]=Object['getOwnPropertyNames'],this['_Symbol']=_0x1b046d[_0x293841(0x22c)],this[_0x293841(0x215)]=RegExp[_0x293841(0x27c)][_0x293841(0x269)],this['_dateToString']=Date[_0x293841(0x27c)][_0x293841(0x269)];}_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2b2)]=function(_0x254f7f,_0x1babfb,_0x2e90c6,_0xdb54a9){var _0x33bfa3=_0x1f5d44,_0x168568=this,_0x471824=_0x2e90c6[_0x33bfa3(0x2bf)];function _0x3a3c67(_0x142852,_0x2cc0b4,_0x381677){var _0x16d30c=_0x33bfa3;_0x2cc0b4[_0x16d30c(0x27b)]=_0x16d30c(0x2a8),_0x2cc0b4[_0x16d30c(0x29e)]=_0x142852[_0x16d30c(0x1ff)],_0x3b2ef2=_0x381677[_0x16d30c(0x286)]['current'],_0x381677[_0x16d30c(0x286)][_0x16d30c(0x200)]=_0x2cc0b4,_0x168568[_0x16d30c(0x24f)](_0x2cc0b4,_0x381677);}let _0x361300,_0x7450c3,_0x1f473b=_0x1b046d[_0x33bfa3(0x240)];_0x1b046d[_0x33bfa3(0x240)]=!0x0,_0x1b046d[_0x33bfa3(0x1e7)]&&(_0x361300=_0x1b046d[_0x33bfa3(0x1e7)][_0x33bfa3(0x29e)],_0x7450c3=_0x1b046d['console'][_0x33bfa3(0x213)],_0x361300&&(_0x1b046d[_0x33bfa3(0x1e7)][_0x33bfa3(0x29e)]=function(){}),_0x7450c3&&(_0x1b046d[_0x33bfa3(0x1e7)][_0x33bfa3(0x213)]=function(){}));try{try{_0x2e90c6[_0x33bfa3(0x2c9)]++,_0x2e90c6[_0x33bfa3(0x2bf)]&&_0x2e90c6[_0x33bfa3(0x1e2)]['push'](_0x1babfb);var _0x2e727d,_0x4ce0a7,_0x5c981d,_0x3de9f4,_0x2ee350=[],_0x1fd1ab=[],_0x5481d5,_0x4e2612=this[_0x33bfa3(0x297)](_0x1babfb),_0x443a68=_0x4e2612==='array',_0xf19808=!0x1,_0x10ecde=_0x4e2612===_0x33bfa3(0x230),_0x4ec234=this[_0x33bfa3(0x1fc)](_0x4e2612),_0x13a3ac=this[_0x33bfa3(0x28e)](_0x4e2612),_0x21daba=_0x4ec234||_0x13a3ac,_0x5d7eb8={},_0x4a200a=0x0,_0x2e69b1=!0x1,_0x3b2ef2,_0x1ec59c=/^(([1-9]{1}[0-9]*)|0)$/;if(_0x2e90c6['depth']){if(_0x443a68){if(_0x4ce0a7=_0x1babfb[_0x33bfa3(0x1ee)],_0x4ce0a7>_0x2e90c6['elements']){for(_0x5c981d=0x0,_0x3de9f4=_0x2e90c6[_0x33bfa3(0x1f7)],_0x2e727d=_0x5c981d;_0x2e727d<_0x3de9f4;_0x2e727d++)_0x1fd1ab['push'](_0x168568[_0x33bfa3(0x223)](_0x2ee350,_0x1babfb,_0x4e2612,_0x2e727d,_0x2e90c6));_0x254f7f[_0x33bfa3(0x228)]=!0x0;}else{for(_0x5c981d=0x0,_0x3de9f4=_0x4ce0a7,_0x2e727d=_0x5c981d;_0x2e727d<_0x3de9f4;_0x2e727d++)_0x1fd1ab['push'](_0x168568[_0x33bfa3(0x223)](_0x2ee350,_0x1babfb,_0x4e2612,_0x2e727d,_0x2e90c6));}_0x2e90c6['autoExpandPropertyCount']+=_0x1fd1ab[_0x33bfa3(0x1ee)];}if(!(_0x4e2612===_0x33bfa3(0x2d8)||_0x4e2612===_0x33bfa3(0x2cd))&&!_0x4ec234&&_0x4e2612!=='String'&&_0x4e2612!==_0x33bfa3(0x252)&&_0x4e2612!==_0x33bfa3(0x267)){var _0x2d45fa=_0xdb54a9[_0x33bfa3(0x1ef)]||_0x2e90c6[_0x33bfa3(0x1ef)];if(this['_isSet'](_0x1babfb)?(_0x2e727d=0x0,_0x1babfb[_0x33bfa3(0x2c8)](function(_0x3b3e4c){var _0x118b02=_0x33bfa3;if(_0x4a200a++,_0x2e90c6['autoExpandPropertyCount']++,_0x4a200a>_0x2d45fa){_0x2e69b1=!0x0;return;}if(!_0x2e90c6[_0x118b02(0x2af)]&&_0x2e90c6['autoExpand']&&_0x2e90c6[_0x118b02(0x28f)]>_0x2e90c6[_0x118b02(0x28a)]){_0x2e69b1=!0x0;return;}_0x1fd1ab[_0x118b02(0x2e0)](_0x168568[_0x118b02(0x223)](_0x2ee350,_0x1babfb,'Set',_0x2e727d++,_0x2e90c6,function(_0xba6f7b){return function(){return _0xba6f7b;};}(_0x3b3e4c)));})):this[_0x33bfa3(0x2ea)](_0x1babfb)&&_0x1babfb[_0x33bfa3(0x2c8)](function(_0x26b876,_0x1cd31e){var _0x13d9e6=_0x33bfa3;if(_0x4a200a++,_0x2e90c6[_0x13d9e6(0x28f)]++,_0x4a200a>_0x2d45fa){_0x2e69b1=!0x0;return;}if(!_0x2e90c6[_0x13d9e6(0x2af)]&&_0x2e90c6[_0x13d9e6(0x2bf)]&&_0x2e90c6[_0x13d9e6(0x28f)]>_0x2e90c6[_0x13d9e6(0x28a)]){_0x2e69b1=!0x0;return;}var _0x5245d5=_0x1cd31e[_0x13d9e6(0x269)]();_0x5245d5['length']>0x64&&(_0x5245d5=_0x5245d5[_0x13d9e6(0x232)](0x0,0x64)+'...'),_0x1fd1ab[_0x13d9e6(0x2e0)](_0x168568['_addProperty'](_0x2ee350,_0x1babfb,_0x13d9e6(0x283),_0x5245d5,_0x2e90c6,function(_0x437b32){return function(){return _0x437b32;};}(_0x26b876)));}),!_0xf19808){try{for(_0x5481d5 in _0x1babfb)if(!(_0x443a68&&_0x1ec59c[_0x33bfa3(0x25d)](_0x5481d5))&&!this[_0x33bfa3(0x251)](_0x1babfb,_0x5481d5,_0x2e90c6)){if(_0x4a200a++,_0x2e90c6['autoExpandPropertyCount']++,_0x4a200a>_0x2d45fa){_0x2e69b1=!0x0;break;}if(!_0x2e90c6['isExpressionToEvaluate']&&_0x2e90c6[_0x33bfa3(0x2bf)]&&_0x2e90c6[_0x33bfa3(0x28f)]>_0x2e90c6[_0x33bfa3(0x28a)]){_0x2e69b1=!0x0;break;}_0x1fd1ab[_0x33bfa3(0x2e0)](_0x168568[_0x33bfa3(0x1dd)](_0x2ee350,_0x5d7eb8,_0x1babfb,_0x4e2612,_0x5481d5,_0x2e90c6));}}catch{}if(_0x5d7eb8[_0x33bfa3(0x214)]=!0x0,_0x10ecde&&(_0x5d7eb8[_0x33bfa3(0x248)]=!0x0),!_0x2e69b1){var _0x4a9287=[][_0x33bfa3(0x29c)](this[_0x33bfa3(0x202)](_0x1babfb))['concat'](this[_0x33bfa3(0x2c1)](_0x1babfb));for(_0x2e727d=0x0,_0x4ce0a7=_0x4a9287[_0x33bfa3(0x1ee)];_0x2e727d<_0x4ce0a7;_0x2e727d++)if(_0x5481d5=_0x4a9287[_0x2e727d],!(_0x443a68&&_0x1ec59c[_0x33bfa3(0x25d)](_0x5481d5['toString']()))&&!this[_0x33bfa3(0x251)](_0x1babfb,_0x5481d5,_0x2e90c6)&&!_0x5d7eb8[typeof _0x5481d5!=_0x33bfa3(0x2ca)?_0x33bfa3(0x2ba)+_0x5481d5['toString']():_0x5481d5]){if(_0x4a200a++,_0x2e90c6[_0x33bfa3(0x28f)]++,_0x4a200a>_0x2d45fa){_0x2e69b1=!0x0;break;}if(!_0x2e90c6[_0x33bfa3(0x2af)]&&_0x2e90c6[_0x33bfa3(0x2bf)]&&_0x2e90c6[_0x33bfa3(0x28f)]>_0x2e90c6[_0x33bfa3(0x28a)]){_0x2e69b1=!0x0;break;}_0x1fd1ab['push'](_0x168568[_0x33bfa3(0x1dd)](_0x2ee350,_0x5d7eb8,_0x1babfb,_0x4e2612,_0x5481d5,_0x2e90c6));}}}}}if(_0x254f7f['type']=_0x4e2612,_0x21daba?(_0x254f7f[_0x33bfa3(0x2e9)]=_0x1babfb[_0x33bfa3(0x2b8)](),this[_0x33bfa3(0x298)](_0x4e2612,_0x254f7f,_0x2e90c6,_0xdb54a9)):_0x4e2612===_0x33bfa3(0x24d)?_0x254f7f[_0x33bfa3(0x2e9)]=this[_0x33bfa3(0x2aa)]['call'](_0x1babfb):_0x4e2612===_0x33bfa3(0x267)?_0x254f7f[_0x33bfa3(0x2e9)]=_0x1babfb['toString']():_0x4e2612===_0x33bfa3(0x285)?_0x254f7f['value']=this[_0x33bfa3(0x215)][_0x33bfa3(0x1ec)](_0x1babfb):_0x4e2612===_0x33bfa3(0x2ca)&&this[_0x33bfa3(0x2cc)]?_0x254f7f[_0x33bfa3(0x2e9)]=this[_0x33bfa3(0x2cc)]['prototype'][_0x33bfa3(0x269)]['call'](_0x1babfb):!_0x2e90c6[_0x33bfa3(0x2d4)]&&!(_0x4e2612===_0x33bfa3(0x2d8)||_0x4e2612===_0x33bfa3(0x2cd))&&(delete _0x254f7f[_0x33bfa3(0x2e9)],_0x254f7f[_0x33bfa3(0x20c)]=!0x0),_0x2e69b1&&(_0x254f7f['cappedProps']=!0x0),_0x3b2ef2=_0x2e90c6[_0x33bfa3(0x286)][_0x33bfa3(0x200)],_0x2e90c6['node'][_0x33bfa3(0x200)]=_0x254f7f,this['_treeNodePropertiesBeforeFullValue'](_0x254f7f,_0x2e90c6),_0x1fd1ab['length']){for(_0x2e727d=0x0,_0x4ce0a7=_0x1fd1ab['length'];_0x2e727d<_0x4ce0a7;_0x2e727d++)_0x1fd1ab[_0x2e727d](_0x2e727d);}_0x2ee350[_0x33bfa3(0x1ee)]&&(_0x254f7f[_0x33bfa3(0x1ef)]=_0x2ee350);}catch(_0x36e778){_0x3a3c67(_0x36e778,_0x254f7f,_0x2e90c6);}this[_0x33bfa3(0x2c7)](_0x1babfb,_0x254f7f),this[_0x33bfa3(0x2e5)](_0x254f7f,_0x2e90c6),_0x2e90c6[_0x33bfa3(0x286)][_0x33bfa3(0x200)]=_0x3b2ef2,_0x2e90c6[_0x33bfa3(0x2c9)]--,_0x2e90c6[_0x33bfa3(0x2bf)]=_0x471824,_0x2e90c6['autoExpand']&&_0x2e90c6[_0x33bfa3(0x1e2)][_0x33bfa3(0x27e)]();}finally{_0x361300&&(_0x1b046d['console'][_0x33bfa3(0x29e)]=_0x361300),_0x7450c3&&(_0x1b046d[_0x33bfa3(0x1e7)][_0x33bfa3(0x213)]=_0x7450c3),_0x1b046d[_0x33bfa3(0x240)]=_0x1f473b;}return _0x254f7f;},_0x39602c[_0x1f5d44(0x27c)]['_getOwnPropertySymbols']=function(_0xd19fef){var _0x1f8178=_0x1f5d44;return Object['getOwnPropertySymbols']?Object[_0x1f8178(0x209)](_0xd19fef):[];},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x219)]=function(_0x5ece89){var _0x396459=_0x1f5d44;return!!(_0x5ece89&&_0x1b046d['Set']&&this[_0x396459(0x2a0)](_0x5ece89)===_0x396459(0x2ce)&&_0x5ece89[_0x396459(0x2c8)]);},_0x39602c['prototype'][_0x1f5d44(0x251)]=function(_0x5e3ecf,_0x457efe,_0x503699){var _0x58ab93=_0x1f5d44;if(!_0x503699[_0x58ab93(0x226)]){let _0x40a764=this['_getOwnPropertyDescriptor'](_0x5e3ecf,_0x457efe);if(_0x40a764&&_0x40a764[_0x58ab93(0x1eb)])return!0x0;}return _0x503699[_0x58ab93(0x1f5)]?typeof _0x5e3ecf[_0x457efe]==_0x58ab93(0x230):!0x1;},_0x39602c['prototype'][_0x1f5d44(0x297)]=function(_0x55aea2){var _0x3223a6=_0x1f5d44,_0x435cfc='';return _0x435cfc=typeof _0x55aea2,_0x435cfc===_0x3223a6(0x26a)?this[_0x3223a6(0x2a0)](_0x55aea2)==='[object\\x20Array]'?_0x435cfc=_0x3223a6(0x260):this['_objectToString'](_0x55aea2)===_0x3223a6(0x287)?_0x435cfc=_0x3223a6(0x24d):this['_objectToString'](_0x55aea2)===_0x3223a6(0x2bc)?_0x435cfc=_0x3223a6(0x267):_0x55aea2===null?_0x435cfc='null':_0x55aea2[_0x3223a6(0x277)]&&(_0x435cfc=_0x55aea2[_0x3223a6(0x277)][_0x3223a6(0x273)]||_0x435cfc):_0x435cfc===_0x3223a6(0x2cd)&&this[_0x3223a6(0x26f)]&&_0x55aea2 instanceof this[_0x3223a6(0x26f)]&&(_0x435cfc=_0x3223a6(0x23a)),_0x435cfc;},_0x39602c['prototype'][_0x1f5d44(0x2a0)]=function(_0x2bac5a){var _0x4622cb=_0x1f5d44;return Object['prototype'][_0x4622cb(0x269)][_0x4622cb(0x1ec)](_0x2bac5a);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x1fc)]=function(_0x2ccf2c){var _0x674b58=_0x1f5d44;return _0x2ccf2c===_0x674b58(0x1e0)||_0x2ccf2c===_0x674b58(0x1f2)||_0x2ccf2c===_0x674b58(0x2e8);},_0x39602c[_0x1f5d44(0x27c)]['_isPrimitiveWrapperType']=function(_0x5299e2){var _0x55fd87=_0x1f5d44;return _0x5299e2===_0x55fd87(0x2d5)||_0x5299e2==='String'||_0x5299e2===_0x55fd87(0x245);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x223)]=function(_0x157555,_0x1174b0,_0x2697a9,_0x20ea02,_0x1e29d4,_0x5f3380){var _0x174700=this;return function(_0x3816dd){var _0x4b6516=_0x4187,_0x57f376=_0x1e29d4[_0x4b6516(0x286)][_0x4b6516(0x200)],_0xed0e7b=_0x1e29d4[_0x4b6516(0x286)]['index'],_0x57849c=_0x1e29d4['node'][_0x4b6516(0x261)];_0x1e29d4['node']['parent']=_0x57f376,_0x1e29d4[_0x4b6516(0x286)]['index']=typeof _0x20ea02==_0x4b6516(0x2e8)?_0x20ea02:_0x3816dd,_0x157555[_0x4b6516(0x2e0)](_0x174700[_0x4b6516(0x208)](_0x1174b0,_0x2697a9,_0x20ea02,_0x1e29d4,_0x5f3380)),_0x1e29d4[_0x4b6516(0x286)]['parent']=_0x57849c,_0x1e29d4['node'][_0x4b6516(0x2b4)]=_0xed0e7b;};},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x1dd)]=function(_0x16666b,_0x37b24a,_0xca6b76,_0x5eaca8,_0x47f24d,_0x518bd1,_0x3aad4c){var _0x5a59c9=_0x1f5d44,_0x5d7f32=this;return _0x37b24a[typeof _0x47f24d!=_0x5a59c9(0x2ca)?_0x5a59c9(0x2ba)+_0x47f24d['toString']():_0x47f24d]=!0x0,function(_0x186abb){var _0x227537=_0x5a59c9,_0x93753=_0x518bd1[_0x227537(0x286)]['current'],_0x3a8b46=_0x518bd1[_0x227537(0x286)][_0x227537(0x2b4)],_0x5cf7ec=_0x518bd1[_0x227537(0x286)]['parent'];_0x518bd1[_0x227537(0x286)]['parent']=_0x93753,_0x518bd1['node'][_0x227537(0x2b4)]=_0x186abb,_0x16666b[_0x227537(0x2e0)](_0x5d7f32[_0x227537(0x208)](_0xca6b76,_0x5eaca8,_0x47f24d,_0x518bd1,_0x3aad4c)),_0x518bd1[_0x227537(0x286)][_0x227537(0x261)]=_0x5cf7ec,_0x518bd1[_0x227537(0x286)]['index']=_0x3a8b46;};},_0x39602c[_0x1f5d44(0x27c)]['_property']=function(_0x1e9096,_0x2437b1,_0x5a258e,_0x306875,_0xeb1ab2){var _0x2e8b77=_0x1f5d44,_0x1ab203=this;_0xeb1ab2||(_0xeb1ab2=function(_0x2125a7,_0x5a8e51){return _0x2125a7[_0x5a8e51];});var _0x1a70b4=_0x5a258e[_0x2e8b77(0x269)](),_0x4a3b80=_0x306875[_0x2e8b77(0x27f)]||{},_0x4ec463=_0x306875[_0x2e8b77(0x2d4)],_0x436a10=_0x306875['isExpressionToEvaluate'];try{var _0x4a65f6=this[_0x2e8b77(0x2ea)](_0x1e9096),_0x14070f=_0x1a70b4;_0x4a65f6&&_0x14070f[0x0]==='\\x27'&&(_0x14070f=_0x14070f[_0x2e8b77(0x24a)](0x1,_0x14070f['length']-0x2));var _0x33f2fd=_0x306875[_0x2e8b77(0x27f)]=_0x4a3b80[_0x2e8b77(0x2ba)+_0x14070f];_0x33f2fd&&(_0x306875['depth']=_0x306875[_0x2e8b77(0x2d4)]+0x1),_0x306875['isExpressionToEvaluate']=!!_0x33f2fd;var _0x761c47=typeof _0x5a258e==_0x2e8b77(0x2ca),_0x2a07c1={'name':_0x761c47||_0x4a65f6?_0x1a70b4:this['_propertyName'](_0x1a70b4)};if(_0x761c47&&(_0x2a07c1[_0x2e8b77(0x2ca)]=!0x0),!(_0x2437b1===_0x2e8b77(0x260)||_0x2437b1===_0x2e8b77(0x2e7))){var _0x336b0f=this[_0x2e8b77(0x212)](_0x1e9096,_0x5a258e);if(_0x336b0f&&(_0x336b0f[_0x2e8b77(0x257)]&&(_0x2a07c1['setter']=!0x0),_0x336b0f[_0x2e8b77(0x1eb)]&&!_0x33f2fd&&!_0x306875[_0x2e8b77(0x226)]))return _0x2a07c1['getter']=!0x0,this[_0x2e8b77(0x237)](_0x2a07c1,_0x306875),_0x2a07c1;}var _0x42b0f3;try{_0x42b0f3=_0xeb1ab2(_0x1e9096,_0x5a258e);}catch(_0x470aa0){return _0x2a07c1={'name':_0x1a70b4,'type':_0x2e8b77(0x2a8),'error':_0x470aa0[_0x2e8b77(0x1ff)]},this[_0x2e8b77(0x237)](_0x2a07c1,_0x306875),_0x2a07c1;}var _0x3f69d6=this[_0x2e8b77(0x297)](_0x42b0f3),_0x26ec12=this[_0x2e8b77(0x1fc)](_0x3f69d6);if(_0x2a07c1['type']=_0x3f69d6,_0x26ec12)this['_processTreeNodeResult'](_0x2a07c1,_0x306875,_0x42b0f3,function(){var _0x27d61e=_0x2e8b77;_0x2a07c1[_0x27d61e(0x2e9)]=_0x42b0f3[_0x27d61e(0x2b8)](),!_0x33f2fd&&_0x1ab203[_0x27d61e(0x298)](_0x3f69d6,_0x2a07c1,_0x306875,{});});else{var _0x353800=_0x306875[_0x2e8b77(0x2bf)]&&_0x306875[_0x2e8b77(0x2c9)]<_0x306875[_0x2e8b77(0x21f)]&&_0x306875[_0x2e8b77(0x1e2)][_0x2e8b77(0x229)](_0x42b0f3)<0x0&&_0x3f69d6!==_0x2e8b77(0x230)&&_0x306875['autoExpandPropertyCount']<_0x306875[_0x2e8b77(0x28a)];_0x353800||_0x306875[_0x2e8b77(0x2c9)]<_0x4ec463||_0x33f2fd?this['serialize'](_0x2a07c1,_0x42b0f3,_0x306875,_0x33f2fd||{}):this[_0x2e8b77(0x237)](_0x2a07c1,_0x306875,_0x42b0f3,function(){var _0x26b4af=_0x2e8b77;_0x3f69d6==='null'||_0x3f69d6===_0x26b4af(0x2cd)||(delete _0x2a07c1[_0x26b4af(0x2e9)],_0x2a07c1[_0x26b4af(0x20c)]=!0x0);});}return _0x2a07c1;}finally{_0x306875[_0x2e8b77(0x27f)]=_0x4a3b80,_0x306875[_0x2e8b77(0x2d4)]=_0x4ec463,_0x306875[_0x2e8b77(0x2af)]=_0x436a10;}},_0x39602c[_0x1f5d44(0x27c)]['_capIfString']=function(_0x400724,_0x56f824,_0x52035a,_0x2a5d1b){var _0x1c76fb=_0x1f5d44,_0x5d1231=_0x2a5d1b[_0x1c76fb(0x23c)]||_0x52035a[_0x1c76fb(0x23c)];if((_0x400724===_0x1c76fb(0x1f2)||_0x400724===_0x1c76fb(0x23b))&&_0x56f824[_0x1c76fb(0x2e9)]){let _0x1dff43=_0x56f824[_0x1c76fb(0x2e9)][_0x1c76fb(0x1ee)];_0x52035a[_0x1c76fb(0x2b7)]+=_0x1dff43,_0x52035a[_0x1c76fb(0x2b7)]>_0x52035a[_0x1c76fb(0x1de)]?(_0x56f824[_0x1c76fb(0x20c)]='',delete _0x56f824[_0x1c76fb(0x2e9)]):_0x1dff43>_0x5d1231&&(_0x56f824[_0x1c76fb(0x20c)]=_0x56f824['value'][_0x1c76fb(0x24a)](0x0,_0x5d1231),delete _0x56f824[_0x1c76fb(0x2e9)]);}},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2ea)]=function(_0x2b582){var _0x4f59b4=_0x1f5d44;return!!(_0x2b582&&_0x1b046d[_0x4f59b4(0x283)]&&this[_0x4f59b4(0x2a0)](_0x2b582)===_0x4f59b4(0x2d2)&&_0x2b582[_0x4f59b4(0x2c8)]);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x1ed)]=function(_0xd0769c){var _0x56daad=_0x1f5d44;if(_0xd0769c[_0x56daad(0x207)](/^\\d+$/))return _0xd0769c;var _0x44321c;try{_0x44321c=JSON[_0x56daad(0x274)](''+_0xd0769c);}catch{_0x44321c='\\x22'+this[_0x56daad(0x2a0)](_0xd0769c)+'\\x22';}return _0x44321c[_0x56daad(0x207)](/^"([a-zA-Z_][a-zA-Z_0-9]*)"$/)?_0x44321c=_0x44321c[_0x56daad(0x24a)](0x1,_0x44321c[_0x56daad(0x1ee)]-0x2):_0x44321c=_0x44321c[_0x56daad(0x2c4)](/'/g,'\\x5c\\x27')[_0x56daad(0x2c4)](/\\\\"/g,'\\x22')[_0x56daad(0x2c4)](/(^"|"$)/g,'\\x27'),_0x44321c;},_0x39602c[_0x1f5d44(0x27c)]['_processTreeNodeResult']=function(_0x35d4de,_0x18bf2b,_0x4b4ba8,_0x5e4ad4){var _0x3ae3b4=_0x1f5d44;this[_0x3ae3b4(0x24f)](_0x35d4de,_0x18bf2b),_0x5e4ad4&&_0x5e4ad4(),this[_0x3ae3b4(0x2c7)](_0x4b4ba8,_0x35d4de),this['_treeNodePropertiesAfterFullValue'](_0x35d4de,_0x18bf2b);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x24f)]=function(_0x3fef10,_0x16c344){var _0x25886e=_0x1f5d44;this[_0x25886e(0x275)](_0x3fef10,_0x16c344),this[_0x25886e(0x2d1)](_0x3fef10,_0x16c344),this[_0x25886e(0x239)](_0x3fef10,_0x16c344),this['_setNodePermissions'](_0x3fef10,_0x16c344);},_0x39602c['prototype'][_0x1f5d44(0x275)]=function(_0x4a95cf,_0x5175f9){},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2d1)]=function(_0x4dd70e,_0x1d0a77){},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x250)]=function(_0x2add9b,_0x21294a){},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x241)]=function(_0x57f907){return _0x57f907===this['_undefined'];},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2e5)]=function(_0x47895e,_0x5ee6d0){var _0x3bb2e6=_0x1f5d44;this[_0x3bb2e6(0x250)](_0x47895e,_0x5ee6d0),this['_setNodeExpandableState'](_0x47895e),_0x5ee6d0[_0x3bb2e6(0x2c3)]&&this[_0x3bb2e6(0x288)](_0x47895e),this[_0x3bb2e6(0x2db)](_0x47895e,_0x5ee6d0),this[_0x3bb2e6(0x23e)](_0x47895e,_0x5ee6d0),this[_0x3bb2e6(0x2ab)](_0x47895e);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2c7)]=function(_0x406f89,_0x5dc600){var _0x3d052f=_0x1f5d44;try{_0x406f89&&typeof _0x406f89[_0x3d052f(0x1ee)]==_0x3d052f(0x2e8)&&(_0x5dc600[_0x3d052f(0x1ee)]=_0x406f89['length']);}catch{}if(_0x5dc600[_0x3d052f(0x27b)]===_0x3d052f(0x2e8)||_0x5dc600[_0x3d052f(0x27b)]===_0x3d052f(0x245)){if(isNaN(_0x5dc600['value']))_0x5dc600[_0x3d052f(0x299)]=!0x0,delete _0x5dc600[_0x3d052f(0x2e9)];else switch(_0x5dc600['value']){case Number[_0x3d052f(0x1f9)]:_0x5dc600['positiveInfinity']=!0x0,delete _0x5dc600['value'];break;case Number['NEGATIVE_INFINITY']:_0x5dc600[_0x3d052f(0x25c)]=!0x0,delete _0x5dc600[_0x3d052f(0x2e9)];break;case 0x0:this[_0x3d052f(0x247)](_0x5dc600['value'])&&(_0x5dc600['negativeZero']=!0x0);break;}}else _0x5dc600[_0x3d052f(0x27b)]===_0x3d052f(0x230)&&typeof _0x406f89[_0x3d052f(0x273)]=='string'&&_0x406f89[_0x3d052f(0x273)]&&_0x5dc600[_0x3d052f(0x273)]&&_0x406f89[_0x3d052f(0x273)]!==_0x5dc600['name']&&(_0x5dc600[_0x3d052f(0x218)]=_0x406f89[_0x3d052f(0x273)]);},_0x39602c['prototype'][_0x1f5d44(0x247)]=function(_0x58bf0d){var _0x1eeae2=_0x1f5d44;return 0x1/_0x58bf0d===Number[_0x1eeae2(0x210)];},_0x39602c[_0x1f5d44(0x27c)]['_sortProps']=function(_0x4d7dd2){var _0x5c6f19=_0x1f5d44;!_0x4d7dd2['props']||!_0x4d7dd2[_0x5c6f19(0x1ef)]['length']||_0x4d7dd2['type']===_0x5c6f19(0x260)||_0x4d7dd2[_0x5c6f19(0x27b)]===_0x5c6f19(0x283)||_0x4d7dd2[_0x5c6f19(0x27b)]===_0x5c6f19(0x22b)||_0x4d7dd2[_0x5c6f19(0x1ef)][_0x5c6f19(0x1e3)](function(_0xb25f8,_0x3feabb){var _0x34181c=_0x5c6f19,_0x30ed1b=_0xb25f8[_0x34181c(0x273)][_0x34181c(0x2b3)](),_0x28978d=_0x3feabb['name'][_0x34181c(0x2b3)]();return _0x30ed1b<_0x28978d?-0x1:_0x30ed1b>_0x28978d?0x1:0x0;});},_0x39602c[_0x1f5d44(0x27c)]['_addFunctionsNode']=function(_0x5294e5,_0x377958){var _0x476737=_0x1f5d44;if(!(_0x377958[_0x476737(0x1f5)]||!_0x5294e5[_0x476737(0x1ef)]||!_0x5294e5['props'][_0x476737(0x1ee)])){for(var _0x23c633=[],_0x1cff31=[],_0x44160d=0x0,_0x4684cd=_0x5294e5['props'][_0x476737(0x1ee)];_0x44160d<_0x4684cd;_0x44160d++){var _0x36796e=_0x5294e5['props'][_0x44160d];_0x36796e[_0x476737(0x27b)]===_0x476737(0x230)?_0x23c633[_0x476737(0x2e0)](_0x36796e):_0x1cff31[_0x476737(0x2e0)](_0x36796e);}if(!(!_0x1cff31[_0x476737(0x1ee)]||_0x23c633[_0x476737(0x1ee)]<=0x1)){_0x5294e5[_0x476737(0x1ef)]=_0x1cff31;var _0x1e6ca0={'functionsNode':!0x0,'props':_0x23c633};this[_0x476737(0x275)](_0x1e6ca0,_0x377958),this[_0x476737(0x250)](_0x1e6ca0,_0x377958),this[_0x476737(0x2df)](_0x1e6ca0),this[_0x476737(0x1e4)](_0x1e6ca0,_0x377958),_0x1e6ca0['id']+='\\x20f',_0x5294e5[_0x476737(0x1ef)][_0x476737(0x21b)](_0x1e6ca0);}}},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x23e)]=function(_0xc708e1,_0x1404ba){},_0x39602c['prototype']['_setNodeExpandableState']=function(_0x44d604){},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x22d)]=function(_0x3c17fb){var _0x14eb98=_0x1f5d44;return Array[_0x14eb98(0x2a1)](_0x3c17fb)||typeof _0x3c17fb==_0x14eb98(0x26a)&&this['_objectToString'](_0x3c17fb)===_0x14eb98(0x21c);},_0x39602c[_0x1f5d44(0x27c)]['_setNodePermissions']=function(_0x1360b0,_0x443f96){},_0x39602c[_0x1f5d44(0x27c)]['_cleanNode']=function(_0x26f307){var _0x360d43=_0x1f5d44;delete _0x26f307[_0x360d43(0x1f0)],delete _0x26f307['_hasSetOnItsPath'],delete _0x26f307[_0x360d43(0x2de)];},_0x39602c['prototype'][_0x1f5d44(0x239)]=function(_0x21594a,_0x1ea38a){};let _0x4fccde=new _0x39602c(),_0x5aef3e={'props':_0x39e136['defaultLimits'][_0x1f5d44(0x1ef)]||0x64,'elements':_0x39e136['defaultLimits']['elements']||0x64,'strLength':_0x39e136[_0x1f5d44(0x1dc)][_0x1f5d44(0x23c)]||0x400*0x32,'totalStrLength':_0x39e136['defaultLimits'][_0x1f5d44(0x1de)]||0x400*0x32,'autoExpandLimit':_0x39e136['defaultLimits'][_0x1f5d44(0x28a)]||0x1388,'autoExpandMaxDepth':_0x39e136['defaultLimits'][_0x1f5d44(0x21f)]||0xa},_0x374151={'props':_0x39e136[_0x1f5d44(0x225)][_0x1f5d44(0x1ef)]||0x5,'elements':_0x39e136[_0x1f5d44(0x225)][_0x1f5d44(0x1f7)]||0x5,'strLength':_0x39e136[_0x1f5d44(0x225)]['strLength']||0x100,'totalStrLength':_0x39e136[_0x1f5d44(0x225)][_0x1f5d44(0x1de)]||0x100*0x3,'autoExpandLimit':_0x39e136['reducedLimits'][_0x1f5d44(0x28a)]||0x1e,'autoExpandMaxDepth':_0x39e136['reducedLimits']['autoExpandMaxDepth']||0x2};if(_0x5d8b23){let _0x275f95=_0x4fccde['serialize'][_0x1f5d44(0x262)](_0x4fccde);_0x4fccde[_0x1f5d44(0x2b2)]=function(_0x1c90b2,_0x4276f3,_0x30aacd,_0x55932d){return _0x275f95(_0x1c90b2,_0x5d8b23(_0x4276f3),_0x30aacd,_0x55932d);};}function _0x1a7762(_0x577f01,_0x418059,_0x269690,_0x32321b,_0x4cd5b2,_0x52912d){var _0x4ce86f=_0x1f5d44;let _0x3eb726,_0xb700fa;try{_0xb700fa=_0x5553e9(),_0x3eb726=_0x5b51f5[_0x418059],!_0x3eb726||_0xb700fa-_0x3eb726['ts']>_0x4756a1[_0x4ce86f(0x291)][_0x4ce86f(0x264)]&&_0x3eb726['count']&&_0x3eb726[_0x4ce86f(0x255)]/_0x3eb726[_0x4ce86f(0x238)]<_0x4756a1['perLogpoint']['resetOnProcessingTimeAverageMs']?(_0x5b51f5[_0x418059]=_0x3eb726={'count':0x0,'time':0x0,'ts':_0xb700fa},_0x5b51f5[_0x4ce86f(0x206)]={}):_0xb700fa-_0x5b51f5['hits']['ts']>_0x4756a1['global']['resetWhenQuietMs']&&_0x5b51f5['hits']['count']&&_0x5b51f5[_0x4ce86f(0x206)]['time']/_0x5b51f5['hits'][_0x4ce86f(0x238)]<_0x4756a1['global'][_0x4ce86f(0x231)]&&(_0x5b51f5[_0x4ce86f(0x206)]={});let _0x41ced7=[],_0x1fbc3d=_0x3eb726['reduceLimits']||_0x5b51f5['hits']['reduceLimits']?_0x374151:_0x5aef3e,_0x2da3f7=_0x3d6b99=>{var _0x44db24=_0x4ce86f;let _0x4c46fe={};return _0x4c46fe[_0x44db24(0x1ef)]=_0x3d6b99[_0x44db24(0x1ef)],_0x4c46fe['elements']=_0x3d6b99[_0x44db24(0x1f7)],_0x4c46fe[_0x44db24(0x23c)]=_0x3d6b99[_0x44db24(0x23c)],_0x4c46fe['totalStrLength']=_0x3d6b99[_0x44db24(0x1de)],_0x4c46fe[_0x44db24(0x28a)]=_0x3d6b99[_0x44db24(0x28a)],_0x4c46fe[_0x44db24(0x21f)]=_0x3d6b99[_0x44db24(0x21f)],_0x4c46fe[_0x44db24(0x2c3)]=!0x1,_0x4c46fe[_0x44db24(0x1f5)]=!_0x3af781,_0x4c46fe[_0x44db24(0x2d4)]=0x1,_0x4c46fe['level']=0x0,_0x4c46fe[_0x44db24(0x1fb)]=_0x44db24(0x29b),_0x4c46fe[_0x44db24(0x296)]='root_exp',_0x4c46fe[_0x44db24(0x2bf)]=!0x0,_0x4c46fe[_0x44db24(0x1e2)]=[],_0x4c46fe[_0x44db24(0x28f)]=0x0,_0x4c46fe[_0x44db24(0x226)]=_0x39e136[_0x44db24(0x226)],_0x4c46fe[_0x44db24(0x2b7)]=0x0,_0x4c46fe[_0x44db24(0x286)]={'current':void 0x0,'parent':void 0x0,'index':0x0},_0x4c46fe;};for(var _0x42e392=0x0;_0x42e392<_0x4cd5b2[_0x4ce86f(0x1ee)];_0x42e392++)_0x41ced7[_0x4ce86f(0x2e0)](_0x4fccde[_0x4ce86f(0x2b2)]({'timeNode':_0x577f01==='time'||void 0x0},_0x4cd5b2[_0x42e392],_0x2da3f7(_0x1fbc3d),{}));if(_0x577f01===_0x4ce86f(0x29f)||_0x577f01===_0x4ce86f(0x29e)){let _0x4f7582=Error['stackTraceLimit'];try{Error[_0x4ce86f(0x221)]=0x1/0x0,_0x41ced7['push'](_0x4fccde[_0x4ce86f(0x2b2)]({'stackNode':!0x0},new Error()[_0x4ce86f(0x22e)],_0x2da3f7(_0x1fbc3d),{'strLength':0x1/0x0}));}finally{Error[_0x4ce86f(0x221)]=_0x4f7582;}}return{'method':_0x4ce86f(0x2d3),'version':_0x4cee6a,'args':[{'ts':_0x269690,'session':_0x32321b,'args':_0x41ced7,'id':_0x418059,'context':_0x52912d}]};}catch(_0x2a8c31){return{'method':_0x4ce86f(0x2d3),'version':_0x4cee6a,'args':[{'ts':_0x269690,'session':_0x32321b,'args':[{'type':_0x4ce86f(0x2a8),'error':_0x2a8c31&&_0x2a8c31['message']}],'id':_0x418059,'context':_0x52912d}]};}finally{try{if(_0x3eb726&&_0xb700fa){let _0x28b06b=_0x5553e9();_0x3eb726[_0x4ce86f(0x238)]++,_0x3eb726['time']+=_0x13f85b(_0xb700fa,_0x28b06b),_0x3eb726['ts']=_0x28b06b,_0x5b51f5[_0x4ce86f(0x206)]['count']++,_0x5b51f5[_0x4ce86f(0x206)][_0x4ce86f(0x255)]+=_0x13f85b(_0xb700fa,_0x28b06b),_0x5b51f5[_0x4ce86f(0x206)]['ts']=_0x28b06b,(_0x3eb726['count']>_0x4756a1['perLogpoint'][_0x4ce86f(0x1e8)]||_0x3eb726[_0x4ce86f(0x255)]>_0x4756a1[_0x4ce86f(0x291)][_0x4ce86f(0x281)])&&(_0x3eb726[_0x4ce86f(0x201)]=!0x0),(_0x5b51f5[_0x4ce86f(0x206)][_0x4ce86f(0x238)]>_0x4756a1[_0x4ce86f(0x2d7)][_0x4ce86f(0x1e8)]||_0x5b51f5[_0x4ce86f(0x206)][_0x4ce86f(0x255)]>_0x4756a1[_0x4ce86f(0x2d7)]['reduceOnAccumulatedProcessingTimeMs'])&&(_0x5b51f5[_0x4ce86f(0x206)]['reduceLimits']=!0x0);}}catch{}}}return _0x1a7762;}function G(_0x372717){var _0x766cc9=_0x3890c8;if(_0x372717&&typeof _0x372717=='object'&&_0x372717[_0x766cc9(0x277)])switch(_0x372717[_0x766cc9(0x277)]['name']){case _0x766cc9(0x256):return _0x372717[_0x766cc9(0x21a)](Symbol['iterator'])?Promise['resolve']():_0x372717;case _0x766cc9(0x1fe):return Promise[_0x766cc9(0x25e)]();}return _0x372717;}((_0xc5752,_0xa30047,_0x3f3995,_0x363a2d,_0x27a42d,_0x5b6f79,_0x45d099,_0x2bc6fb,_0x126cff,_0x1d3c75,_0x2e3f19,_0x464da7)=>{var _0xd5f224=_0x3890c8;if(_0xc5752[_0xd5f224(0x289)])return _0xc5752[_0xd5f224(0x289)];let _0x41b2d1={'consoleLog':()=>{},'consoleTrace':()=>{},'consoleTime':()=>{},'consoleTimeEnd':()=>{},'autoLog':()=>{},'autoLogMany':()=>{},'autoTraceMany':()=>{},'coverage':()=>{},'autoTrace':()=>{},'autoTime':()=>{},'autoTimeEnd':()=>{}};if(!X(_0xc5752,_0x2bc6fb,_0x27a42d))return _0xc5752[_0xd5f224(0x289)]=_0x41b2d1,_0xc5752['_console_ninja'];let _0x3886d2=b(_0xc5752),_0x2794c3=_0x3886d2[_0xd5f224(0x276)],_0x44129f=_0x3886d2[_0xd5f224(0x2be)],_0x277b60=_0x3886d2[_0xd5f224(0x2b0)],_0x5b8e52={'hits':{},'ts':{}},_0x1f8b30=J(_0xc5752,_0x126cff,_0x5b8e52,_0x5b6f79,_0x464da7,_0x27a42d===_0xd5f224(0x244)?G:void 0x0),_0x46c143=(_0x82e8dd,_0x59b610,_0x51fdcc,_0x5c78c9,_0x42589f,_0x28db7b)=>{var _0xf273d1=_0xd5f224;let _0x39c71d=_0xc5752[_0xf273d1(0x289)];try{return _0xc5752['_console_ninja']=_0x41b2d1,_0x1f8b30(_0x82e8dd,_0x59b610,_0x51fdcc,_0x5c78c9,_0x42589f,_0x28db7b);}finally{_0xc5752[_0xf273d1(0x289)]=_0x39c71d;}},_0x186fbf=_0x4900f9=>{_0x5b8e52['ts'][_0x4900f9]=_0x44129f();},_0x21fa3c=(_0x242207,_0x1074db)=>{var _0x67dc13=_0xd5f224;let _0x44431a=_0x5b8e52['ts'][_0x1074db];if(delete _0x5b8e52['ts'][_0x1074db],_0x44431a){let _0x41f6fe=_0x2794c3(_0x44431a,_0x44129f());_0x13354f(_0x46c143(_0x67dc13(0x255),_0x242207,_0x277b60(),_0x728f74,[_0x41f6fe],_0x1074db));}},_0x341135=_0x55d522=>{var _0x594af4=_0xd5f224,_0x22d04b;return _0x27a42d==='next.js'&&_0xc5752[_0x594af4(0x224)]&&((_0x22d04b=_0x55d522==null?void 0x0:_0x55d522[_0x594af4(0x2d9)])==null?void 0x0:_0x22d04b[_0x594af4(0x1ee)])&&(_0x55d522[_0x594af4(0x2d9)][0x0][_0x594af4(0x224)]=_0xc5752['origin']),_0x55d522;};_0xc5752['_console_ninja']={'consoleLog':(_0x18a087,_0x257091)=>{var _0x240148=_0xd5f224;_0xc5752[_0x240148(0x1e7)]['log'][_0x240148(0x273)]!==_0x240148(0x227)&&_0x13354f(_0x46c143(_0x240148(0x2d3),_0x18a087,_0x277b60(),_0x728f74,_0x257091));},'consoleTrace':(_0x16338a,_0x54e3f4)=>{var _0x1399d8=_0xd5f224,_0x26a166,_0x49fc60;_0xc5752[_0x1399d8(0x1e7)]['log'][_0x1399d8(0x273)]!==_0x1399d8(0x1e6)&&((_0x49fc60=(_0x26a166=_0xc5752[_0x1399d8(0x266)])==null?void 0x0:_0x26a166[_0x1399d8(0x2a9)])!=null&&_0x49fc60[_0x1399d8(0x286)]&&(_0xc5752[_0x1399d8(0x2a2)]=!0x0),_0x13354f(_0x341135(_0x46c143(_0x1399d8(0x29f),_0x16338a,_0x277b60(),_0x728f74,_0x54e3f4))));},'consoleError':(_0x19664d,_0x4a89b4)=>{var _0x53d07d=_0xd5f224;_0xc5752[_0x53d07d(0x2a2)]=!0x0,_0x13354f(_0x341135(_0x46c143(_0x53d07d(0x29e),_0x19664d,_0x277b60(),_0x728f74,_0x4a89b4)));},'consoleTime':_0x4b8fda=>{_0x186fbf(_0x4b8fda);},'consoleTimeEnd':(_0x53faf9,_0x3ec558)=>{_0x21fa3c(_0x3ec558,_0x53faf9);},'autoLog':(_0x5aeaac,_0x2074bc)=>{_0x13354f(_0x46c143('log',_0x2074bc,_0x277b60(),_0x728f74,[_0x5aeaac]));},'autoLogMany':(_0x3634a2,_0x3fd372)=>{var _0x24da29=_0xd5f224;_0x13354f(_0x46c143(_0x24da29(0x2d3),_0x3634a2,_0x277b60(),_0x728f74,_0x3fd372));},'autoTrace':(_0x5bfb94,_0xee276a)=>{var _0xc67014=_0xd5f224;_0x13354f(_0x341135(_0x46c143(_0xc67014(0x29f),_0xee276a,_0x277b60(),_0x728f74,[_0x5bfb94])));},'autoTraceMany':(_0x29b396,_0x5dc6f1)=>{var _0x6097b4=_0xd5f224;_0x13354f(_0x341135(_0x46c143(_0x6097b4(0x29f),_0x29b396,_0x277b60(),_0x728f74,_0x5dc6f1)));},'autoTime':(_0x1ec463,_0x159318,_0xf6b2dc)=>{_0x186fbf(_0xf6b2dc);},'autoTimeEnd':(_0x3f6263,_0x4ce919,_0x1e750a)=>{_0x21fa3c(_0x4ce919,_0x1e750a);},'coverage':_0x25e683=>{_0x13354f({'method':'coverage','version':_0x5b6f79,'args':[{'id':_0x25e683}]});}};let _0x13354f=H(_0xc5752,_0xa30047,_0x3f3995,_0x363a2d,_0x27a42d,_0x1d3c75,_0x2e3f19),_0x728f74=_0xc5752[_0xd5f224(0x29d)];return _0xc5752[_0xd5f224(0x289)];})(globalThis,'127.0.0.1',_0x3890c8(0x253),_0x3890c8(0x27a),'vite',_0x3890c8(0x2ac),_0x3890c8(0x2c0),_0x3890c8(0x2e1),_0x3890c8(0x259),_0x3890c8(0x2e4),'1',_0x3890c8(0x211));`);
-  } catch (e) {
-    console.error(e);
-  }
-}
-function oo_oo(i, ...v) {
-  try {
-    oo_cm().consoleLog(i, v);
-  } catch (e) {
-  }
-  return v;
-}
-let win = null;
-function createWindow() {
-  win = new BrowserWindow({
+let R = null;
+function v() {
+  R = new F({
     width: 1200,
     height: 800,
     webPreferences: {
-      preload: join(app.getAppPath(), "dist-electron", "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false
+      preload: S(T.getAppPath(), "dist-electron", "preload.js"),
+      contextIsolation: !0,
+      nodeIntegration: !1
     }
-  });
-  if (process.env.VITE_DEV_SERVER_URL) {
-    win.loadURL(process.env.VITE_DEV_SERVER_URL);
-  } else {
-    win.loadFile(join(app.getAppPath(), "dist", "index.html"));
-  }
+  }), process.env.VITE_DEV_SERVER_URL ? R.loadURL(process.env.VITE_DEV_SERVER_URL) : R.loadFile(S(T.getAppPath(), "dist", "index.html"));
 }
-app.whenReady().then(() => {
-  bootstrap();
-  createWindow();
+T.whenReady().then(() => {
+  Te(), v();
 });
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+T.on("window-all-closed", () => {
+  process.platform !== "darwin" && T.quit();
 });
-app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+T.on("activate", () => {
+  F.getAllWindows().length === 0 && v();
 });

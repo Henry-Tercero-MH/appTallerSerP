@@ -75,8 +75,8 @@ export function useCreateSale() {
         style: 'currency',
         currency: result.currencyCode,
       }).format(result.total)
-      toast.success('Venta registrada', {
-        description: `Folio interno #${result.saleId} — Total ${formatted}`,
+      toast.success(`Venta #${result.saleId} — ${formatted}`, {
+        description: `Cliente: ${result.customerName} (${result.customerNit})`,
       })
     },
     onError: (err) => {

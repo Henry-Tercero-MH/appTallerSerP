@@ -3,11 +3,9 @@
  * con checkJs: true en jsconfig, estos .d.ts dan autocompletado e
  * inferencia en .js/.jsx sin tocar el runtime.
  *
- * Formato de respuesta unificado acordado con el main (Prompt 1):
+ * Formato de respuesta unificado acordado con el main:
  *   exito:  { ok: true, data }
  *   error:  { ok: false, error: { code, message } }
- *
- * Los services del renderer unwrappean esto antes de exponer datos.
  */
 
 export {}
@@ -24,14 +22,48 @@ export interface ProductRow {
   stock: number
 }
 
+export interface CustomerRow {
+  id: number
+  nit: string
+  name: string
+  email: string | null
+  phone: string | null
+  address: string | null
+  active: number
+  created_at: string
+  updated_at: string
+}
+
+export interface CustomerCreateInput {
+  nit?: string
+  name: string
+  email?: string | null
+  phone?: string | null
+  address?: string | null
+}
+
+export interface CustomerListOptions {
+  includeInactive?: boolean
+}
+
+export interface CustomerUpdateInput {
+  nit?: string
+  name?: string
+  email?: string | null
+  phone?: string | null
+  address?: string | null
+  active?: boolean
+}
+
 export interface SaleItemInput {
-  id: number    // product_id (rename pendiente cuando createSale se rediseñe)
+  id: number
   qty: number
   price: number
 }
 
 export interface SaleInput {
   items: SaleItemInput[]
+  customerId?: number
 }
 
 export interface SaleCreatedResult {
@@ -41,6 +73,46 @@ export interface SaleCreatedResult {
   taxAmount: number
   total: number
   currencyCode: string
+  customerId: number
+  customerName: string
+  customerNit: string
+}
+
+export interface SaleRow {
+  id: number
+  subtotal: number
+  tax_rate_applied: number
+  tax_amount: number
+  total: number
+  currency_code: string
+  date: string
+  customer_id: number | null
+  customer_name_snapshot: string | null
+  customer_nit_snapshot: string | null
+}
+
+export interface SaleItemRow {
+  id: number
+  sale_id: number
+  product_id: number
+  qty: number
+  price: number
+  product_code: string | null
+  product_name: string | null
+}
+
+export type SaleWithItems = SaleRow & { items: SaleItemRow[] }
+
+export interface SaleListOptions {
+  page?: number
+  pageSize?: number
+}
+
+export interface SaleListResult {
+  data: SaleRow[]
+  total: number
+  page: number
+  pageSize: number
 }
 
 export type SettingValue = string | number | boolean | object | null
@@ -56,9 +128,20 @@ export interface RendererApi {
   products: {
     list():                                     Promise<IpcResponse<ProductRow[]>>
     search(query: string):                      Promise<IpcResponse<ProductRow[]>>
+    getById(id: number):                        Promise<IpcResponse<ProductRow | null>>
+  }
+  customers: {
+    list(opts?: CustomerListOptions):           Promise<IpcResponse<CustomerRow[]>>
+    search(query: string, opts?: CustomerListOptions): Promise<IpcResponse<CustomerRow[]>>
+    getById(id: number):                        Promise<IpcResponse<CustomerRow | null>>
+    create(input: CustomerCreateInput):         Promise<IpcResponse<CustomerRow>>
+    update(id: number, patch: CustomerUpdateInput): Promise<IpcResponse<CustomerRow>>
+    setActive(id: number, active: boolean):     Promise<IpcResponse<true>>
   }
   sales: {
     create(saleData: SaleInput):                Promise<IpcResponse<SaleCreatedResult>>
+    getById(id: number):                        Promise<IpcResponse<SaleWithItems | null>>
+    list(opts?: SaleListOptions):               Promise<IpcResponse<SaleListResult>>
   }
 }
 

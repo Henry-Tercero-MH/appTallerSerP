@@ -17,12 +17,24 @@ const api = {
   },
 
   products: {
-    list:   ()      => ipcRenderer.invoke('products:list'),
-    search: (query) => ipcRenderer.invoke('products:search', query),
+    list:    ()      => ipcRenderer.invoke('products:list'),
+    search:  (query) => ipcRenderer.invoke('products:search', query),
+    getById: (id)    => ipcRenderer.invoke('products:get-by-id', id),
+  },
+
+  customers: {
+    list:       (opts)           => ipcRenderer.invoke('customers:list', opts),
+    search:     (query, opts)    => ipcRenderer.invoke('customers:search', query, opts),
+    getById:    (id)             => ipcRenderer.invoke('customers:get-by-id', id),
+    create:     (input)          => ipcRenderer.invoke('customers:create', input),
+    update:     (id, patch)      => ipcRenderer.invoke('customers:update', id, patch),
+    setActive:  (id, active)     => ipcRenderer.invoke('customers:set-active', id, active),
   },
 
   sales: {
-    create: (saleData) => ipcRenderer.invoke('sales:create', saleData),
+    create:  (saleData) => ipcRenderer.invoke('sales:create', saleData),
+    getById: (id)       => ipcRenderer.invoke('sales:get-by-id', id),
+    list:    (opts)     => ipcRenderer.invoke('sales:list', opts),
   },
 }
 

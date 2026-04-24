@@ -1,4 +1,9 @@
-import { saleCreatedSchema, saleInputSchema } from '@/schemas/sale.schema.js'
+import {
+  saleCreatedSchema,
+  saleInputSchema,
+  saleListSchema,
+  saleWithItemsSchema,
+} from '@/schemas/sale.schema.js'
 import { unwrap } from './ipc.js'
 
 /**
@@ -6,19 +11,25 @@ import { unwrap } from './ipc.js'
  * @returns {Promise<import('@/schemas/sale.schema.js').SaleCreated>}
  */
 export async function create(saleInput) {
-  // Validacion de salida: que el main no reciba payloads mal formados.
   const safe = saleInputSchema.parse(saleInput)
   const res = await window.api.sales.create(safe)
   return unwrap('sales:create', res, saleCreatedSchema)
 }
 
 /**
- * Placeholder hasta que el main exponga sales:get-by-id. Lanzar explicito
- * evita que el llamador crea que el feature existe.
- *
- * @param {number} _id
- * @returns {Promise<never>}
+ * @param {number} id
+ * @returns {Promise<import('@/schemas/sale.schema.js').SaleWithItems | null>}
  */
-export async function getById(_id) {
-  throw new Error('sales.getById no implementado: falta handler IPC en el main (Prompt 1 pendiente)')
+export async function getById(id) {
+  const res = await window.api.sales.getById(id)
+  return unwrap('sales:get-by-id', res, saleWithItemsSchema.nullable())
+}
+
+/**
+ * @param {{ page?: number, pageSize?: number }} [opts]
+ * @returns {Promise<import('@/schemas/sale.schema.js').SaleList>}
+ */
+export async function list(opts = {}) {
+  const res = await window.api.sales.list(opts)
+  return unwrap('sales:list', res, saleListSchema)
 }

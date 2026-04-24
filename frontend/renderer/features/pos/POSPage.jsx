@@ -1,6 +1,4 @@
 import { useState } from 'react'
-import { useForm } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
 import { Minus, Plus, Search, ShoppingCart, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -23,6 +21,7 @@ import { PageHeader } from '@/components/shared/PageHeader'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { MoneyDisplay } from '@/components/shared/MoneyDisplay'
+import { CustomerCombobox } from '@/components/shared/CustomerCombobox'
 
 import { useSearchProducts, useCreateSale } from '@/hooks/useProducts'
 import { useTaxSettings, useCurrencySettings } from '@/hooks/useSettings'
@@ -32,19 +31,13 @@ import {
   selectItemCount,
 } from '@/stores/cartStore'
 import { computeBreakdown } from '@/lib/pricing'
-import { checkoutSchema } from './checkout.schema'
+
+const DEFAULT_CUSTOMER_ID = 1 // Consumidor Final
 
 /**
- * Vista POS migrada a:
- *   - useSearchProducts (TanStack Query + debounce) en lugar de mocks
- *   - cartStore (Zustand + sessionStorage) para el ticket
- *   - useCreateSale para el checkout, con toasts e invalidacion de cache
- *   - primitivos shadcn + tokens semanticos
- *   - React Hook Form + Zod para el formulario del dialog de checkout
- *   - Breakdown de IVA calculado como preview con tax_rate de settings.
- *     El total AUTORITATIVO lo devuelve el main tras recalcular (P1 fix).
- *     Si el preview del cliente difiere del total del main por redondeo o
- *     por cambio de tax_rate en vivo, el toast mostrara el valor del main.
+ * Vista POS. Conecta products/sales/customers via hooks; estado de carrito
+ * en Zustand; combobox de cliente con quick-create. Total autoritativo
+ * calculado por el main (el cliente no lo envia).
  */
 export default function POSPage() {
   const [query, setQuery] = useState('')
@@ -74,7 +67,6 @@ export default function POSPage() {
       />
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[2fr_1fr]">
-        {/* Panel izquierdo: busqueda + catalogo */}
         <Card>
           <CardHeader>
             <div className="relative">
@@ -100,7 +92,6 @@ export default function POSPage() {
           </CardContent>
         </Card>
 
-        {/* Panel derecho: ticket */}
         <Card className="flex flex-col lg:sticky lg:top-6 lg:max-h-[calc(100vh-8rem)]">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -222,19 +213,17 @@ export default function POSPage() {
         onOpenChange={setCheckoutOpen}
         previewTotal={breakdown.total}
         isSubmitting={createSale.isPending}
-        onConfirm={() => {
+        onConfirm={(customerId) => {
           createSale.mutate(
             {
-              // El main recalcula total/iva autoritativamente y los snapshotea.
-              // No enviamos `total`: ver sales.service.js y prompt P1.
               items: items.map((i) => ({ id: i.productId, qty: i.qty, price: i.price })),
+              customerId,
             },
             {
               onSuccess: () => {
                 clearCart()
                 setCheckoutOpen(false)
               },
-              // El error ya dispara toast desde useCreateSale.onError.
             }
           )
         }}
@@ -326,25 +315,29 @@ function ProductList({ products, isLoading, isError, error, onRetry, onAdd }) {
 }
 
 /**
- * Dialog de confirmacion de pago. RHF + Zod para el formulario; validacion
- * puramente de cliente (nombre/NIT opcionales, metodo obligatorio).
+ * Dialog de confirmacion de pago con combobox de cliente.
  *
  * @param {{
  *   open: boolean,
  *   onOpenChange: (v: boolean) => void,
  *   previewTotal: number,
  *   isSubmitting: boolean,
- *   onConfirm: () => void,
+ *   onConfirm: (customerId: number) => void,
  * }} props
  */
 function CheckoutDialog({ open, onOpenChange, previewTotal, isSubmitting, onConfirm }) {
-  const form = useForm({
-    resolver: zodResolver(checkoutSchema),
-    defaultValues: { customerName: '', customerNit: '', paymentMethod: 'cash' },
-  })
+  const [customerId, setCustomerId] = useState(/** @type {number | null} */ (DEFAULT_CUSTOMER_ID))
+  const [paymentMethod, setPaymentMethod] = useState('cash')
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        onOpenChange(v)
+        // Al cerrar el dialog, no reseteamos customer/payment; el operador
+        // suele cobrar varias ventas al mismo cliente seguido.
+      }}
+    >
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Confirmar venta</DialogTitle>
@@ -355,49 +348,40 @@ function CheckoutDialog({ open, onOpenChange, previewTotal, isSubmitting, onConf
           </DialogDescription>
         </DialogHeader>
 
-        <form
-          className="space-y-4"
-          onSubmit={form.handleSubmit(() => onConfirm())}
-          noValidate
-        >
+        <div className="space-y-4">
           <div className="grid gap-2">
-            <Label htmlFor="customerName">Cliente (opcional)</Label>
-            <Input id="customerName" {...form.register('customerName')} placeholder="Consumidor final" />
-            {form.formState.errors.customerName && (
-              <p className="text-xs text-destructive">{form.formState.errors.customerName.message}</p>
-            )}
-          </div>
-
-          <div className="grid gap-2">
-            <Label htmlFor="customerNit">NIT (opcional)</Label>
-            <Input id="customerNit" {...form.register('customerNit')} placeholder="C/F" />
-            {form.formState.errors.customerNit && (
-              <p className="text-xs text-destructive">{form.formState.errors.customerNit.message}</p>
-            )}
+            <Label>Cliente</Label>
+            <CustomerCombobox value={customerId} onChange={setCustomerId} />
           </div>
 
           <div className="grid gap-2">
             <Label htmlFor="paymentMethod">Metodo de pago</Label>
             <select
               id="paymentMethod"
+              value={paymentMethod}
+              onChange={(e) => setPaymentMethod(e.target.value)}
               className="h-9 rounded-md border border-input bg-background px-3 text-sm"
-              {...form.register('paymentMethod')}
             >
               <option value="cash">Efectivo</option>
               <option value="card">Tarjeta</option>
               <option value="transfer">Transferencia</option>
             </select>
           </div>
+        </div>
 
-          <DialogFooter className="gap-2">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
-              Cancelar
-            </Button>
-            <Button type="submit" variant="destructive" disabled={isSubmitting}>
-              {isSubmitting ? 'Procesando...' : 'Confirmar pago'}
-            </Button>
-          </DialogFooter>
-        </form>
+        <DialogFooter className="gap-2">
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
+            Cancelar
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={isSubmitting || customerId == null}
+            onClick={() => onConfirm(customerId ?? DEFAULT_CUSTOMER_ID)}
+          >
+            {isSubmitting ? 'Procesando...' : 'Confirmar pago'}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

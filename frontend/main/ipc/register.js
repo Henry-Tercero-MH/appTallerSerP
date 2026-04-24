@@ -9,15 +9,14 @@ import { createProductsRepository } from '../modules/products/products.repositor
 import { createProductsService }    from '../modules/products/products.service.js'
 import { registerProductsIpc }      from '../modules/products/products.ipc.js'
 
+import { createCustomersRepository } from '../modules/customers/customers.repository.js'
+import { createCustomersService }    from '../modules/customers/customers.service.js'
+import { registerCustomersIpc }      from '../modules/customers/customers.ipc.js'
+
 import { createSalesRepository } from '../modules/sales/sales.repository.js'
 import { createSalesService }    from '../modules/sales/sales.service.js'
 import { registerSalesIpc }      from '../modules/sales/sales.ipc.js'
 
-/**
- * Vite bundle-time glob: carga todas las migraciones como strings en el main
- * process. Elimina la dependencia de rutas en disco en producciones empaquetadas
- * (asar) y mantiene orden lexicografico por nombre de archivo.
- */
 const migrationModules = import.meta.glob('../database/migrations/*.sql', {
   query: '?raw',
   import: 'default',
@@ -36,9 +35,9 @@ function loadMigrations() {
 
 /**
  * Punto unico de inicializacion del main:
- *  1. Abre la DB con sus PRAGMAs.
- *  2. Corre migraciones pendientes.
- *  3. Instancia repos, services y registra handlers IPC por modulo.
+ *   1. Abre la DB con sus PRAGMAs.
+ *   2. Corre migraciones pendientes.
+ *   3. Instancia repos, services y registra handlers IPC por modulo.
  *
  * Llamar UNA vez, despues de `app.whenReady()`.
  */
@@ -55,10 +54,14 @@ export function bootstrap() {
   const productsRepo = createProductsRepository(db)
   const products     = createProductsService(productsRepo)
 
+  const customersRepo = createCustomersRepository(db)
+  const customers     = createCustomersService(customersRepo)
+
   const salesRepo = createSalesRepository(db)
-  const sales     = createSalesService(salesRepo, settings)
+  const sales     = createSalesService(salesRepo, settings, customers)
 
   registerSettingsIpc(settings)
   registerProductsIpc(products)
+  registerCustomersIpc(customers)
   registerSalesIpc(sales)
 }

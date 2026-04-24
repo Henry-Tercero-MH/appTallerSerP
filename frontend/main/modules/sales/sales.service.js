@@ -1,25 +1,23 @@
 /**
  * Capa de negocio de ventas.
  *
- * RESPONSABILIDAD DE SEGURIDAD:
+ * SEGURIDAD:
  *   Este service IGNORA cualquier `total` enviado por el renderer y lo
  *   recalcula siempre desde `items[].price * qty` + tax_rate snapshotado.
- *   Confiar en el total del cliente permitiria fraude trivial via DevTools.
  *
  * SNAPSHOT:
- *   tax_rate, tax_included_in_price y currency_code se leen del
- *   SettingsService al momento de crear la venta y se persisten en la fila.
- *   Lecturas historicas NUNCA deben recomputar contra settings actuales.
+ *   tax_rate/tax_included_in_price/currency_code se leen de settings y se
+ *   persisten en la fila. customer_name/nit se leen de customers y se
+ *   persisten en columnas snapshot. Lecturas historicas NUNCA recomputan.
  *
  * Logica de calculo IDENTICA a renderer/lib/pricing.js computeBreakdown.
- * Si se modifica aqui, modificar alla. Existen dos copias a proposito:
- *   - la fuente de verdad es esta (server).
- *   - el renderer la reproduce solo para preview antes de enviar.
+ * Si se modifica aqui, modificar alla.
  */
 
 /**
  * @typedef {Object} SaleInput
  * @property {Array<{id:number, qty:number, price:number}>} items
+ * @property {number} [customerId]   Si se omite, fallback a 1 (Consumidor Final).
  */
 
 /**
@@ -30,7 +28,27 @@
  * @property {number} taxAmount
  * @property {number} total
  * @property {string} currencyCode
+ * @property {number} customerId
+ * @property {string} customerName
+ * @property {string} customerNit
  */
+
+/**
+ * @typedef {import('./sales.repository.js').SaleRow & {
+ *   items: import('./sales.repository.js').SaleItemRow[]
+ * }} SaleWithItems
+ */
+
+/**
+ * @typedef {Object} SaleListResult
+ * @property {import('./sales.repository.js').SaleRow[]} data
+ * @property {number} total
+ * @property {number} page
+ * @property {number} pageSize
+ */
+
+const MAX_PAGE_SIZE = 200
+const DEFAULT_CUSTOMER_ID = 1 // Consumidor Final, sembrado en migracion 004
 
 /**
  * @param {SaleInput} input
@@ -58,6 +76,13 @@ function assertValidInput(input) {
       })
     }
   }
+  if (input.customerId !== undefined) {
+    if (!Number.isInteger(input.customerId) || input.customerId <= 0) {
+      throw Object.assign(new Error(`customer_id invalido: ${input.customerId}`), {
+        code: 'SALE_INVALID_CUSTOMER',
+      })
+    }
+  }
 }
 
 /**
@@ -71,7 +96,6 @@ function computeBreakdown(rawSum, rate, included, decimals) {
   const factor = Math.pow(10, decimals)
   const round = (n) => Math.round(n * factor) / factor
   if (included) {
-    // rawSum = total bruto (precios con IVA incluido)
     const total = round(rawSum)
     const taxAmount = round(total - total / (1 + rate))
     const subtotal = round(total - taxAmount)
@@ -86,8 +110,9 @@ function computeBreakdown(rawSum, rate, included, decimals) {
 /**
  * @param {ReturnType<typeof import('./sales.repository.js').createSalesRepository>} repo
  * @param {ReturnType<typeof import('../settings/settings.service.js').createSettingsService>} settings
+ * @param {ReturnType<typeof import('../customers/customers.service.js').createCustomersService>} customers
  */
-export function createSalesService(repo, settings) {
+export function createSalesService(repo, settings, customers) {
   return {
     /**
      * @param {SaleInput} input
@@ -100,6 +125,11 @@ export function createSalesService(repo, settings) {
       const taxIncluded = /** @type {boolean} */ (settings.get('tax_included_in_price'))
       const currency    = /** @type {string} */ (settings.get('currency_code'))
       const decimals    = /** @type {number} */ (settings.get('decimal_places'))
+
+      // Snapshot del cliente. requireById lanza CustomerNotFoundError si el
+      // id no existe — protege contra un renderer que envia un id invalido.
+      const customerId = input.customerId ?? DEFAULT_CUSTOMER_ID
+      const customer = customers.requireById(customerId)
 
       const rawSum = input.items.reduce((acc, i) => acc + i.price * i.qty, 0)
       const { subtotal, taxAmount, total } = computeBreakdown(
@@ -116,16 +146,53 @@ export function createSalesService(repo, settings) {
         taxAmount,
         total,
         currencyCode: currency,
+        customerId,
+        customerNameSnapshot: customer.name,
+        customerNitSnapshot: customer.nit,
       })
 
       return {
-        // BigInt no sobrevive structuredClone de Electron en algunas versiones.
         saleId: typeof saleId === 'bigint' ? Number(saleId) : saleId,
         subtotal,
         taxRate,
         taxAmount,
         total,
         currencyCode: currency,
+        customerId,
+        customerName: customer.name,
+        customerNit: customer.nit,
+      }
+    },
+
+    /**
+     * @param {number} id
+     * @returns {SaleWithItems | null}
+     */
+    getById(id) {
+      if (!Number.isInteger(id) || id <= 0) {
+        throw Object.assign(new Error(`sale id invalido: ${id}`), { code: 'SALE_INVALID_ID' })
+      }
+      const sale = repo.findSaleById(id)
+      if (!sale) return null
+      const items = repo.findSaleItems(id)
+      return { ...sale, items }
+    },
+
+    /**
+     * @param {{ page?: number, pageSize?: number }} [opts]
+     * @returns {SaleListResult}
+     */
+    list(opts = {}) {
+      const page = Number.isInteger(opts.page) && /** @type {number} */ (opts.page) > 0 ? /** @type {number} */ (opts.page) : 1
+      const requested = Number.isInteger(opts.pageSize) && /** @type {number} */ (opts.pageSize) > 0 ? /** @type {number} */ (opts.pageSize) : 50
+      const pageSize = Math.min(requested, MAX_PAGE_SIZE)
+      const offset = (page - 1) * pageSize
+
+      return {
+        data: repo.findPage({ limit: pageSize, offset }),
+        total: repo.countAll(),
+        page,
+        pageSize,
       }
     },
   }

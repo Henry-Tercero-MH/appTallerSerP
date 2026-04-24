@@ -1,110 +1,187 @@
-import { useState } from 'react';
-import { MdAdd, MdPerson, MdEmail, MdPhone, MdDirectionsCar, MdEdit } from 'react-icons/md';
+import { useMemo, useState } from 'react'
+import { Pencil, Plus, Power, PowerOff, Search, UserRound } from 'lucide-react'
 
-const MOCK_CLIENTS = [
-  { id: 'CLI-001', name: 'Juan Perez', email: 'juan@demo.com', phone: '555-0101', cars: 2, status: 'Activo' },
-  { id: 'CLI-002', name: 'Maria Gomez', email: 'maria@demo.com', phone: '555-0102', cars: 1, status: 'Activo' },
-  { id: 'CLI-003', name: 'Empresa SA', email: 'contacto@empresa.com', phone: '555-0103', cars: 5, status: 'Empresa' },
-  { id: 'CLI-004', name: 'Luis Torres', email: 'luis@demo.com', phone: '555-0104', cars: 0, status: 'Inactivo' },
-];
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent, CardHeader } from '@/components/ui/card'
 
+import { PageHeader } from '@/components/shared/PageHeader'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
+import { DataTable } from '@/components/shared/DataTable'
+
+import {
+  useSearchCustomers,
+  useToggleCustomerActive,
+} from '@/hooks/useCustomers'
+
+import { CustomerFormDialog } from './CustomerFormDialog'
+
+const PROTECTED_ID = 1 // Consumidor Final — sistema, no editable ni desactivable
+
+/**
+ * Directorio de clientes. Lista+search paginados en memoria (el dataset de
+ * customers cabe sobrado en cualquier instalacion razonable). Si un dia
+ * pasa de ~10k clientes, reemplazar por `useSales`-style paginacion server.
+ */
 export default function ClientsPage() {
-  const [searchTerm, setSearchTerm] = useState('');
+  const [query, setQuery] = useState('')
+  const [editing, setEditing] = useState(/** @type {import('@/schemas/customer.schema').Customer | null} */ (null))
+  const [creating, setCreating] = useState(false)
 
-  const filteredClients = MOCK_CLIENTS.filter(c => 
-    c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    c.email.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // Admin-view: incluye inactivos para poder reactivarlos.
+  const { data: customers = [], isLoading, isError, error, refetch } =
+    useSearchCustomers(query, { includeInactive: true })
+
+  const toggleActive = useToggleCustomerActive()
+
+  /** @type {import('@tanstack/react-table').ColumnDef<import('@/schemas/customer.schema').Customer, any>[]} */
+  const columns = useMemo(() => [
+    {
+      id: 'name',
+      header: 'Cliente',
+      cell: ({ row }) => (
+        <div className="flex items-center gap-2">
+          <UserRound className="h-4 w-4 text-muted-foreground" />
+          <div className="min-w-0">
+            <p className="truncate font-medium">{row.original.name}</p>
+            {row.original.id === PROTECTED_ID && (
+              <Badge variant="secondary" className="mt-0.5">Sistema</Badge>
+            )}
+          </div>
+        </div>
+      ),
+    },
+    {
+      id: 'nit',
+      header: 'NIT',
+      cell: ({ row }) => <span className="font-mono text-sm">{row.original.nit}</span>,
+    },
+    {
+      id: 'contact',
+      header: 'Contacto',
+      cell: ({ row }) => (
+        <div className="flex flex-col text-sm text-muted-foreground">
+          {row.original.email && <span className="truncate">{row.original.email}</span>}
+          {row.original.phone && <span>{row.original.phone}</span>}
+          {!row.original.email && !row.original.phone && (
+            <span className="italic">Sin datos</span>
+          )}
+        </div>
+      ),
+    },
+    {
+      id: 'active',
+      header: 'Estado',
+      cell: ({ row }) =>
+        row.original.active === 1 ? (
+          <Badge variant="success">Activo</Badge>
+        ) : (
+          <Badge variant="outline">Inactivo</Badge>
+        ),
+    },
+    {
+      id: 'actions',
+      header: '',
+      cell: ({ row }) => {
+        const c = row.original
+        const isProtected = c.id === PROTECTED_ID
+        return (
+          <div className="flex justify-end gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setEditing(c)}
+              disabled={isProtected}
+              title={isProtected ? 'Cliente del sistema' : 'Editar'}
+            >
+              <Pencil className="mr-1 h-3.5 w-3.5" /> Editar
+            </Button>
+            {c.active === 1 ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => toggleActive.mutate({ id: c.id, active: false })}
+                disabled={isProtected || toggleActive.isPending}
+                title={isProtected ? 'Cliente del sistema' : 'Desactivar'}
+                className="text-destructive hover:bg-destructive/10"
+              >
+                <PowerOff className="mr-1 h-3.5 w-3.5" /> Desactivar
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => toggleActive.mutate({ id: c.id, active: true })}
+                disabled={toggleActive.isPending}
+                title="Reactivar"
+              >
+                <Power className="mr-1 h-3.5 w-3.5" /> Activar
+              </Button>
+            )}
+          </div>
+        )
+      },
+    },
+  ], [toggleActive])
 
   return (
-    <div className="page">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Directorio de Clientes</h1>
-          <p className="page-subtitle">Gestión de clientes y sus vehículos asociados</p>
-        </div>
-        <button className="btn btn-primary" style={{ background: 'var(--red-600)' }}>
-          <MdAdd /> Nuevo Cliente
-        </button>
-      </div>
+    <div className="p-6">
+      <PageHeader
+        title="Clientes"
+        subtitle="Directorio de clientes para facturacion y ordenes de trabajo"
+        actions={
+          <Button onClick={() => setCreating(true)}>
+            <Plus className="mr-1 h-4 w-4" /> Nuevo cliente
+          </Button>
+        }
+      />
 
-      <div className="stats-row">
-        <div className="stat-card">
-          <span className="stat-value" style={{ color: 'var(--blue-600)' }}>248</span>
-          <span className="stat-label">Total Clientes</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-value" style={{ color: 'var(--green-600)' }}>15</span>
-          <span className="stat-label">Nuevos este mes</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-value" style={{ color: 'var(--red-600)' }}>342</span>
-          <span className="stat-label">Vehículos Registrados</span>
-        </div>
-      </div>
+      <Card>
+        <CardHeader>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              type="text"
+              placeholder="Buscar por nombre o NIT..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="pl-9 max-w-sm"
+            />
+          </div>
+        </CardHeader>
+        <CardContent>
+          {isLoading && <LoadingSpinner label="Cargando clientes..." className="justify-center py-10" />}
 
-      <div className="card-container">
-        <div className="search-bar" style={{ padding: '16px', borderBottom: '1px solid var(--gray-200)' }}>
-          <input 
-            type="text" 
-            placeholder="Buscar por nombre o correo electrónico..." 
-            className="input-field" 
-            style={{ width: '100%', maxWidth: '400px' }}
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-        </div>
+          {isError && (
+            <EmptyState
+              title="No se pudo cargar el directorio"
+              description={error instanceof Error ? error.message : 'Error desconocido'}
+              action={<Button variant="outline" size="sm" onClick={() => refetch()}>Reintentar</Button>}
+            />
+          )}
 
-        <div className="table-wrapper">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>ID Cliente</th>
-                <th>Datos Personales</th>
-                <th>Contacto</th>
-                <th>Vehículos</th>
-                <th>Estado</th>
-                <th style={{ width: '80px' }}>Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredClients.length === 0 ? (
-                <tr><td colSpan={6} className="empty-row">No se encontraron clientes.</td></tr>
-              ) : (
-                filteredClients.map(c => (
-                  <tr key={c.id}>
-                    <td><span className="code-badge">{c.id}</span></td>
-                    <td>
-                      <div style={{ fontWeight: '600', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <MdPerson color="var(--gray-500)"/> {c.name}
-                      </div>
-                    </td>
-                    <td>
-                      <div style={{ fontSize: '13px', color: 'var(--gray-600)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><MdEmail /> {c.email}</span>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><MdPhone /> {c.phone}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: '500' }}>
-                        <MdDirectionsCar color="var(--gray-500)"/> {c.cars} registrados
-                      </div>
-                    </td>
-                    <td>
-                      <span className={`badge ${c.status === 'Inactivo' ? 'badge-inactive' : 'badge-active'}`}>
-                        {c.status}
-                      </span>
-                    </td>
-                    <td>
-                      <button className="btn btn-sm btn-ghost"><MdEdit /> Detalle</button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+          {!isLoading && !isError && (
+            <DataTable
+              columns={columns}
+              data={customers}
+              emptyMessage={query ? 'Sin coincidencias.' : 'No hay clientes todavia.'}
+            />
+          )}
+        </CardContent>
+      </Card>
+
+      <CustomerFormDialog
+        open={creating}
+        onOpenChange={setCreating}
+      />
+
+      <CustomerFormDialog
+        open={editing != null}
+        onOpenChange={(open) => { if (!open) setEditing(null) }}
+        initial={editing}
+      />
     </div>
-  );
+  )
 }

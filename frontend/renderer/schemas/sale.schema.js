@@ -2,39 +2,60 @@ import { z } from 'zod'
 import { saleItemSchema, saleItemInputSchema } from './sale-item.schema.js'
 
 /**
- * Venta persistida. Incluye columnas snapshot de impuesto (migracion 003).
+ * Venta persistida. Incluye snapshots de impuesto (migracion 003) y cliente
+ * (migracion 004).
  */
 export const saleSchema = z.object({
-  id:                z.number().int().positive(),
-  subtotal:          z.number().nonnegative(),
-  tax_rate_applied:  z.number().nonnegative(),
-  tax_amount:        z.number().nonnegative(),
-  total:             z.number().nonnegative(),
-  currency_code:     z.string().min(1),
-  date:              z.string(),
-  items:             z.array(saleItemSchema).optional(),
+  id:                      z.number().int().positive(),
+  subtotal:                z.number().nonnegative(),
+  tax_rate_applied:        z.number().nonnegative(),
+  tax_amount:              z.number().nonnegative(),
+  total:                   z.number().nonnegative(),
+  currency_code:           z.string().min(1),
+  date:                    z.string(),
+  customer_id:             z.number().int().nullable(),
+  customer_name_snapshot:  z.string().nullable(),
+  customer_nit_snapshot:   z.string().nullable(),
+  items:                   z.array(saleItemSchema).optional(),
 })
 
 /** @typedef {z.infer<typeof saleSchema>} Sale */
 
 /**
+ * Venta con items obligatorios (respuesta de sales:get-by-id).
+ */
+export const saleWithItemsSchema = saleSchema.extend({
+  items: z.array(saleItemSchema),
+})
+
+/** @typedef {z.infer<typeof saleWithItemsSchema>} SaleWithItems */
+
+/**
+ * Respuesta de sales:list.
+ */
+export const saleListSchema = z.object({
+  data:     z.array(saleSchema),
+  total:    z.number().int().nonnegative(),
+  page:     z.number().int().positive(),
+  pageSize: z.number().int().positive(),
+})
+
+/** @typedef {z.infer<typeof saleListSchema>} SaleList */
+
+/**
  * Payload que el renderer envia a window.api.sales.create.
- *
- * Sin `total`: el main recalcula autoritativamente ignorando lo que el
- * cliente mande. El frontend muestra un preview pero la verdad final la
- * devuelve `saleCreatedSchema`.
+ * Sin `total` (el main recalcula). `customerId` opcional: si se omite, el
+ * main hace fallback a 1 (Consumidor Final).
  */
 export const saleInputSchema = z.object({
-  items: z.array(saleItemInputSchema).min(1, 'La venta debe tener al menos un item'),
+  items:      z.array(saleItemInputSchema).min(1, 'La venta debe tener al menos un item'),
+  customerId: z.number().int().positive().optional(),
 })
 
 /** @typedef {z.infer<typeof saleInputSchema>} SaleInput */
 
 /**
  * Respuesta de sales:create con los valores efectivamente persistidos.
- * El renderer usa esto para mostrar al operador los montos finales
- * (que pueden diferir del preview por redondeo o cambio de tax_rate
- * entre que abrio el POS y cerro la venta).
  */
 export const saleCreatedSchema = z.object({
   saleId:       z.number().int().positive(),
@@ -43,6 +64,9 @@ export const saleCreatedSchema = z.object({
   taxAmount:    z.number().nonnegative(),
   total:        z.number().nonnegative(),
   currencyCode: z.string().min(1),
+  customerId:   z.number().int().positive(),
+  customerName: z.string(),
+  customerNit:  z.string(),
 })
 
 /** @typedef {z.infer<typeof saleCreatedSchema>} SaleCreated */

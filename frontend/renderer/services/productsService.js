@@ -24,16 +24,10 @@ export async function search(query) {
 }
 
 /**
- * Placeholder: hoy no existe products:get-by-id en el main. Lo dejamos
- * resolviendo por filtrado de la lista para que `useProduct` no quede
- * sin implementar. Sustituir cuando se agregue el handler IPC.
- *
  * @param {number} id
  * @returns {Promise<import('@/schemas/product.schema.js').Product | null>}
  */
 export async function getById(id) {
-  const all = await getAll()
-  const found = all.find((p) => p.id === id)
-  if (!found) return null
-  return productSchema.parse(found)
+  const res = await window.api.products.getById(id)
+  return unwrap('products:get-by-id', res, productSchema.nullable())
 }

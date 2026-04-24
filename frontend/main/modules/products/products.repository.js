@@ -13,6 +13,7 @@
 export function createProductsRepository(db) {
   const stmts = {
     selectAll:    db.prepare('SELECT id, code, name, price, stock FROM products'),
+    selectById:   db.prepare('SELECT id, code, name, price, stock FROM products WHERE id = ?'),
     searchByName: db.prepare(
       'SELECT id, code, name, price, stock FROM products WHERE name LIKE ? OR code LIKE ?'
     ),
@@ -22,6 +23,14 @@ export function createProductsRepository(db) {
     /** @returns {ProductRow[]} */
     findAll() {
       return stmts.selectAll.all()
+    },
+
+    /**
+     * @param {number} id
+     * @returns {ProductRow | undefined}
+     */
+    findById(id) {
+      return stmts.selectById.get(id)
     },
 
     /**
