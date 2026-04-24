@@ -1,0 +1,72 @@
+{
+  "name": "taller-pos-electron",
+  "version": "1.0.0",
+  "description": "Sistema de POS Offline para Taller",
+  "main": "dist-electron/index.js",
+  "type": "module",
+  "files": [
+    "dist",
+    "dist-electron"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && electron-builder",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p jsconfig.json"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.14.2",
+    "better-sqlite3": "^12.9.0",
+    "react-icons": "^5.0.0",
+    "@tanstack/react-query": "^5.56.2",
+    "@tanstack/react-table": "^8.20.5",
+    "zod": "^3.23.8",
+    "zustand": "^4.5.5",
+    "react-hook-form": "^7.53.0",
+    "@hookform/resolvers": "^3.9.0",
+    "sonner": "^1.5.0",
+    "lucide-react": "^0.447.0",
+    "date-fns": "^4.1.0",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^2.5.2",
+    "class-variance-authority": "^0.7.0",
+    "tailwindcss-animate": "^1.0.7",
+    "@radix-ui/react-dialog": "^1.1.2",
+    "@radix-ui/react-label": "^2.1.0",
+    "@radix-ui/react-separator": "^1.1.0",
+    "@radix-ui/react-slot": "^1.1.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.3",
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3",
+    "vite": "^5.4.10",
+    "vite-plugin-electron": "^0.29.1",
+    "vite-plugin-electron-renderer": "^0.14.6",
+    "tailwindcss": "3.4.15",
+    "postcss": "^8.4.31",
+    "autoprefixer": "^10.4.16",
+    "typescript": "^5.6.3"
+  },
+  "build": {
+    "appId": "com.tallerpos.app",
+    "productName": "TallerPOS",
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ]
+  }
+}
