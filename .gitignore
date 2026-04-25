@@ -1,0 +1,8 @@
+# Electron builds
+frontend/release/
+frontend/dist/
+release/
+out/
+*.exe
+*.AppImage
+*.asar
