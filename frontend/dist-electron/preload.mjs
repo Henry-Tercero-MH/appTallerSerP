@@ -1,1 +1,29 @@
-"use strict";const t=require("electron"),s={settings:{getAll:()=>t.ipcRenderer.invoke("settings:get-all"),get:e=>t.ipcRenderer.invoke("settings:get",e),set:(e,r)=>t.ipcRenderer.invoke("settings:set",e,r),getByCategory:e=>t.ipcRenderer.invoke("settings:get-by-category",e)},products:{list:()=>t.ipcRenderer.invoke("products:list"),search:e=>t.ipcRenderer.invoke("products:search",e),getById:e=>t.ipcRenderer.invoke("products:get-by-id",e)},customers:{list:e=>t.ipcRenderer.invoke("customers:list",e),search:(e,r)=>t.ipcRenderer.invoke("customers:search",e,r),getById:e=>t.ipcRenderer.invoke("customers:get-by-id",e),create:e=>t.ipcRenderer.invoke("customers:create",e),update:(e,r)=>t.ipcRenderer.invoke("customers:update",e,r),setActive:(e,r)=>t.ipcRenderer.invoke("customers:set-active",e,r)},sales:{create:e=>t.ipcRenderer.invoke("sales:create",e),getById:e=>t.ipcRenderer.invoke("sales:get-by-id",e),list:e=>t.ipcRenderer.invoke("sales:list",e)}};t.contextBridge.exposeInMainWorld("api",s);
+"use strict";
+const electron = require("electron");
+const api = {
+  settings: {
+    getAll: () => electron.ipcRenderer.invoke("settings:get-all"),
+    get: (key) => electron.ipcRenderer.invoke("settings:get", key),
+    set: (key, value) => electron.ipcRenderer.invoke("settings:set", key, value),
+    getByCategory: (category) => electron.ipcRenderer.invoke("settings:get-by-category", category)
+  },
+  products: {
+    list: () => electron.ipcRenderer.invoke("products:list"),
+    search: (query) => electron.ipcRenderer.invoke("products:search", query),
+    getById: (id) => electron.ipcRenderer.invoke("products:get-by-id", id)
+  },
+  customers: {
+    list: (opts) => electron.ipcRenderer.invoke("customers:list", opts),
+    search: (query, opts) => electron.ipcRenderer.invoke("customers:search", query, opts),
+    getById: (id) => electron.ipcRenderer.invoke("customers:get-by-id", id),
+    create: (input) => electron.ipcRenderer.invoke("customers:create", input),
+    update: (id, patch) => electron.ipcRenderer.invoke("customers:update", id, patch),
+    setActive: (id, active) => electron.ipcRenderer.invoke("customers:set-active", id, active)
+  },
+  sales: {
+    create: (saleData) => electron.ipcRenderer.invoke("sales:create", saleData),
+    getById: (id) => electron.ipcRenderer.invoke("sales:get-by-id", id),
+    list: (opts) => electron.ipcRenderer.invoke("sales:list", opts)
+  }
+};
+electron.contextBridge.exposeInMainWorld("api", api);

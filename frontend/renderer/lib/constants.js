@@ -4,10 +4,11 @@ export const ROUTES = {
   LOGIN: '/login',
   DASHBOARD: '/',
   POS: '/ventas',
+  HISTORY: '/historial',
   WORKSHOP: '/taller',
   INVENTORY: '/inventario',
   CLIENTS: '/clientes',
-  WAREHOUSES: '/bodegas', // Mantenido para retrocompatibilidad interna de components si es necesario
+  WAREHOUSES: '/bodegas',
   PRODUCTS: '/productos',
 };
 

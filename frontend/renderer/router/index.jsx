@@ -12,6 +12,7 @@ import InventoryPage from '../features/warehouses/InventoryPage';
 import POSPage from '../features/pos/POSPage';
 import WorkshopPage from '../features/workshop/WorkshopPage';
 import ClientsPage from '../features/clients/ClientsPage';
+import SalesHistoryPage from '../features/sales/SalesHistoryPage';
 
 // Modulos Legacy Bodega (Mantener solo por seguridad si los necesitan las sub-rutas de bodega, aunque las ocultamos)
 import WarehouseLandingPage from '../features/warehouses/WarehouseLandingPage';
@@ -35,8 +36,9 @@ export const router = createHashRouter([
         children: [
           // Flujo Principal Taller
           { path: ROUTES.POS, element: <POSPage /> },
+          { path: ROUTES.HISTORY, element: <SalesHistoryPage /> },
           { path: ROUTES.WORKSHOP, element: <WorkshopPage /> },
-          { path: ROUTES.INVENTORY, element: <InventoryPage /> }, // Reutilizamos Inventory de bodegas para Productos/Stock
+          { path: ROUTES.INVENTORY, element: <InventoryPage /> },
           { path: ROUTES.CLIENTS, element: <ClientsPage /> },
           { path: ROUTES.DASHBOARD, element: <Navigate to={ROUTES.POS} replace /> },
 

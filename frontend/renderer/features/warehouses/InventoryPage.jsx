@@ -1,242 +1,425 @@
-import { useState } from 'react';
-import { useInventoryStore } from './inventoryStore';
-import ProductForm from './ProductForm';
-import StockMovementModal from './StockMovementModal';
-import Modal from '../../components/Modal';
+import { useMemo, useState } from 'react'
+import { toast } from 'sonner'
+import {
+  ClipboardList,
+  Minus,
+  Package,
+  Pencil,
+  Plus,
+  PowerOff,
+  Power,
+  Printer,
+} from 'lucide-react'
 
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+
+import { PageHeader } from '@/components/shared/PageHeader'
+import { EmptyState } from '@/components/shared/EmptyState'
+import { MoneyDisplay } from '@/components/shared/MoneyDisplay'
+
+import { useInventoryStore } from './inventoryStore'
+import ProductForm from './ProductForm'
+import StockMovementModal from './StockMovementModal'
+
+/**
+ * Inventory page migrada a tokens shadcn. La fuente de datos sigue siendo
+ * `useInventoryStore` (mock en memoria). Conectar al main usando
+ * window.api.products es trabajo aparte.
+ */
 export default function InventoryPage() {
-  const { products, movements, lowStockProducts, createProduct, updateProduct, removeProduct, restoreProduct, addMovement } = useInventoryStore();
-  const [modal, setModal] = useState(null); // null | 'productCreate' | { productEdit: p } | { mvtEntry: p } | { mvtExit: p } | { confirmDeact: p }
-  const [activeTab, setActiveTab] = useState('inventory'); // 'inventory' | 'movements'
-  const [search, setSearch] = useState('');
-  const [showInactive, setShowInactive] = useState(false);
-  const [toast, setToast] = useState(null);
+  const {
+    products,
+    movements,
+    lowStockProducts,
+    createProduct,
+    updateProduct,
+    removeProduct,
+    restoreProduct,
+    addMovement,
+  } = useInventoryStore()
 
-  const showMessage = (msg, type = 'success') => {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 3000);
-  };
+  const [modal, setModal] = useState(/** @type {any} */ (null))
+  const [activeTab, setActiveTab] = useState(/** @type {'inventory'|'movements'} */ ('inventory'))
+  const [search, setSearch] = useState('')
+  const [showInactive, setShowInactive] = useState(false)
 
-  const handleProductSave = (data) => {
+  const filteredProducts = useMemo(() => {
+    return products.filter((p) => {
+      if (!showInactive && !p.isActive) return false
+      if (!search) return true
+      const qs = search.toLowerCase()
+      return (
+        p.name.toLowerCase().includes(qs) ||
+        p.code.toLowerCase().includes(qs) ||
+        p.category.toLowerCase().includes(qs)
+      )
+    })
+  }, [products, showInactive, search])
+
+  const totalUnits = products.reduce((acc, p) => acc + (p.isActive ? p.stock : 0), 0)
+  const activeCount = products.filter((p) => p.isActive).length
+
+  const handleProductSave = (/** @type {any} */ data) => {
     if (modal?.productEdit) {
-      updateProduct(modal.productEdit.id, data);
-      showMessage('Producto actualizado correctamente');
+      updateProduct(modal.productEdit.id, data)
+      toast.success('Producto actualizado correctamente')
     } else {
-      createProduct(data);
-      showMessage('Producto agregado al inventario');
+      createProduct(data)
+      toast.success('Producto agregado al inventario')
     }
-    setModal(null);
-  };
+    setModal(null)
+  }
 
-  const handleMovementSave = (mvtData) => {
-    addMovement(mvtData);
-    showMessage(`Movimiento de ${mvtData.type === 'entry' ? 'entrada' : 'salida'} registrado`);
-    setModal(null);
-  };
+  const handleMovementSave = (/** @type {any} */ mvtData) => {
+    addMovement(mvtData)
+    toast.success(`Movimiento de ${mvtData.type === 'entry' ? 'entrada' : 'salida'} registrado`)
+    setModal(null)
+  }
 
-  const handleDelete = (p) => {
-    removeProduct(p.id);
-    showMessage(`Producto "${p.name}" desactivado`, 'warning');
-    setModal(null);
-  };
+  const handleDelete = (/** @type {any} */ p) => {
+    removeProduct(p.id)
+    toast.warning(`Producto "${p.name}" desactivado`)
+    setModal(null)
+  }
 
-  const filteredProducts = products.filter(p => {
-    if (!showInactive && !p.isActive) return false;
-    if (search) {
-      const qs = search.toLowerCase();
-      return p.name.toLowerCase().includes(qs) || p.code.toLowerCase().includes(qs) || p.category.toLowerCase().includes(qs);
-    }
-    return true;
-  });
-
-  const totalStockStr = products.reduce((acc, p) => acc + (p.isActive ? p.stock : 0), 0);
+  const isProductDialogOpen = modal === 'productCreate' || modal?.productEdit != null
+  const isMovementDialogOpen = modal?.mvtEntry != null || modal?.mvtExit != null
 
   return (
-    <div className="page print-friendly">
-      <div className="page-header no-print">
-        <div>
-          <h1 className="page-title">Bodega Central</h1>
-          <p className="page-subtitle">Gestión de inventario del taller</p>
-        </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button className="btn btn-ghost" onClick={() => window.print()}>🖨️ Imprimir Reporte</button>
-          <button className="btn btn-primary" onClick={() => setModal('productCreate')}>+ Nuevo Producto</button>
-        </div>
+    <div className="p-6 print-friendly">
+      <div className="no-print">
+        <PageHeader
+          title="Bodega Central"
+          subtitle="Gestion de inventario del taller"
+          actions={
+            <>
+              <Button variant="outline" size="sm" onClick={() => window.print()}>
+                <Printer className="mr-1 h-4 w-4" /> Imprimir
+              </Button>
+              <Button size="sm" onClick={() => setModal('productCreate')}>
+                <Plus className="mr-1 h-4 w-4" /> Nuevo producto
+              </Button>
+            </>
+          }
+        />
       </div>
 
-      <div className="stats-row no-print">
-        <div className="stat-card">
-          <span className="stat-value">{products.filter(p => p.isActive).length}</span>
-          <span className="stat-label">Items Activos</span>
-        </div>
-        <div className="stat-card">
-          <span className="stat-value">{totalStockStr}</span>
-          <span className="stat-label">Unidades Totales</span>
-        </div>
-        <div className="stat-card" style={lowStockProducts.length > 0 ? { borderLeft: '4px solid var(--red-600)' } : {}}>
-          <span className="stat-value" style={lowStockProducts.length > 0 ? { color: 'var(--red-600)' } : {}}>
-            {lowStockProducts.length}
-          </span>
-          <span className="stat-label">Items con Stock Bajo</span>
-        </div>
+      <div className="no-print mb-6 grid grid-cols-1 gap-4 md:grid-cols-3">
+        <StatCard label="Items activos" value={activeCount} />
+        <StatCard label="Unidades totales" value={totalUnits} />
+        <StatCard
+          label="Items con stock bajo"
+          value={lowStockProducts.length}
+          tone={lowStockProducts.length > 0 ? 'warning' : 'default'}
+        />
       </div>
 
-      <div className="card-container no-print">
-        <div className="tabs">
-          <button 
-            className={`tab-btn ${activeTab === 'inventory' ? 'active' : ''}`} 
-            onClick={() => setActiveTab('inventory')}
-          >
-            📊 Listado de Inventario
-          </button>
-          <button 
-            className={`tab-btn ${activeTab === 'movements' ? 'active' : ''}`} 
-            onClick={() => setActiveTab('movements')}
-          >
-            📋 Historial de Movimientos
-          </button>
+      <Card className="no-print">
+        <div className="flex border-b">
+          <TabButton active={activeTab === 'inventory'} onClick={() => setActiveTab('inventory')}>
+            <Package className="mr-2 h-4 w-4" /> Listado de inventario
+          </TabButton>
+          <TabButton active={activeTab === 'movements'} onClick={() => setActiveTab('movements')}>
+            <ClipboardList className="mr-2 h-4 w-4" /> Historial de movimientos
+          </TabButton>
         </div>
 
-      {activeTab === 'inventory' && (
-        <div className="tab-container">
-          <div className="toolbar no-print">
-            <input
-              className="search-input"
-              type="text"
-              placeholder="Buscar por código, nombre o categoría..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-            <label className="toggle-label toggle-switch" style={{ marginLeft: 'auto' }}>
-              <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
-              Mostrar inactivos
-            </label>
-          </div>
+        <CardContent className="p-4">
+          {activeTab === 'inventory' && (
+            <>
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+                <Input
+                  type="text"
+                  placeholder="Buscar por codigo, nombre o categoria..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="max-w-sm"
+                />
+                <label className="ml-auto flex items-center gap-2 text-sm text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={showInactive}
+                    onChange={(e) => setShowInactive(e.target.checked)}
+                    className="h-4 w-4 rounded border-input"
+                  />
+                  Mostrar inactivos
+                </label>
+              </div>
 
-          <div className="table-wrapper">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Código</th>
-                  <th>Producto</th>
-                  <th>Categoría</th>
-                  <th>Ubicación</th>
-                  <th>Stock</th>
-                  <th className="no-print">Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredProducts.length === 0 && (
-                  <tr><td colSpan={6} className="empty-row">No hay productos que coincidan con la búsqueda.</td></tr>
-                )}
-                {filteredProducts.map(p => (
-                  <tr key={p.id} className={!p.isActive ? 'row-inactive' : (p.stock <= p.minStock ? 'row-warning' : '')}>
-                    <td><span className="code-badge">{p.code}</span></td>
-                    <td>
-                      <div style={{ fontWeight: '600' }}>{p.name}</div>
-                      <div style={{ fontSize: '12px', color: '#666' }}>{p.brand} | {p.condition}</div>
-                    </td>
-                    <td>{p.category}</td>
-                    <td>{p.location}</td>
-                    <td>
-                      <strong style={{ color: p.stock <= p.minStock ? 'var(--red-600)' : 'inherit', fontSize: '16px' }}>
-                        {p.stock}
-                      </strong>
-                    </td>
-                    <td className="no-print">
-                      <div className="action-btns" style={{ display: 'flex', gap: '4px' }}>
-                        {p.isActive ? (
-                          <>
-                            <button className="btn btn-sm btn-primary" style={{ padding: '4px 8px' }} onClick={() => setModal({ mvtEntry: p })}>+</button>
-                            <button className="btn btn-sm" style={{ padding: '4px 8px', backgroundColor: '#e0e0e0', color: '#333' }} onClick={() => setModal({ mvtExit: p })}>-</button>
-                            <button className="btn btn-sm btn-ghost" onClick={() => setModal({ productEdit: p })}>Editar</button>
-                            <button className="btn btn-sm btn-danger-ghost" onClick={() => setModal({ confirmDeact: p })}>Desactivar</button>
-                          </>
-                        ) : (
-                          <button className="btn btn-sm btn-ghost" onClick={() => restoreProduct(p.id)}>Activar</button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'movements' && (
-        <div className="tab-container">
-          <div className="table-wrapper">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Fecha / Hora</th>
-                <th>Tipo</th>
-                <th>Producto (Ref)</th>
-                <th>Cant.</th>
-                <th>Notas</th>
-              </tr>
-            </thead>
-            <tbody>
-              {movements.length === 0 && (
-                <tr><td colSpan={5} className="empty-row">No hay movimientos registrados.</td></tr>
+              {filteredProducts.length === 0 ? (
+                <EmptyState
+                  title="Sin resultados"
+                  description="Ajusta los terminos de busqueda o cambia el filtro."
+                />
+              ) : (
+                <div className="rounded-md border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Codigo</TableHead>
+                        <TableHead>Producto</TableHead>
+                        <TableHead>Categoria</TableHead>
+                        <TableHead>Ubicacion</TableHead>
+                        <TableHead>Precio</TableHead>
+                        <TableHead>Stock</TableHead>
+                        <TableHead className="text-right no-print">Acciones</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredProducts.map((p) => {
+                        const lowStock = p.isActive && p.stock <= (p.minStock ?? 5)
+                        return (
+                          <TableRow
+                            key={p.id}
+                            className={!p.isActive ? 'opacity-60' : lowStock ? 'bg-warning/10' : undefined}
+                          >
+                            <TableCell>
+                              <Badge variant="outline" className="font-mono">{p.code}</Badge>
+                            </TableCell>
+                            <TableCell>
+                              <p className="font-semibold">{p.name}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {p.brand} · {p.condition}
+                              </p>
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">{p.category}</TableCell>
+                            <TableCell className="font-mono text-xs">{p.location}</TableCell>
+                            <TableCell>
+                              <MoneyDisplay amount={p.price} />
+                            </TableCell>
+                            <TableCell>
+                              <strong className={lowStock ? 'text-destructive' : undefined}>
+                                {p.stock}
+                              </strong>
+                            </TableCell>
+                            <TableCell className="text-right no-print">
+                              <div className="flex justify-end gap-1">
+                                {p.isActive ? (
+                                  <>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-7 w-7"
+                                      onClick={() => setModal({ mvtEntry: p })}
+                                      title="Registrar entrada"
+                                    >
+                                      <Plus className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-7 w-7"
+                                      onClick={() => setModal({ mvtExit: p })}
+                                      title="Registrar salida"
+                                    >
+                                      <Minus className="h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => setModal({ productEdit: p })}
+                                    >
+                                      <Pencil className="mr-1 h-3.5 w-3.5" /> Editar
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="text-destructive hover:bg-destructive/10"
+                                      onClick={() => setModal({ confirmDeact: p })}
+                                    >
+                                      <PowerOff className="mr-1 h-3.5 w-3.5" /> Desactivar
+                                    </Button>
+                                  </>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => restoreProduct(p.id)}
+                                  >
+                                    <Power className="mr-1 h-3.5 w-3.5" /> Activar
+                                  </Button>
+                                )}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
               )}
-              {movements.map(m => (
-                <tr key={m.id}>
-                  <td style={{ whiteSpace: 'nowrap' }}>{new Date(m.createdAt).toLocaleString()}</td>
-                  <td>
-                    <span className={`badge ${m.type === 'entry' ? 'badge-active' : 'badge-inactive'}`} style={{ backgroundColor: m.type === 'entry' ? '#e2f5e9' : '#ffebee', color: m.type === 'entry' ? '#1b5e20' : '#c62828' }}>
-                      {m.type === 'entry' ? 'Entrada' : 'Salida'}
-                    </span>
-                  </td>
-                  <td style={{ fontWeight: '500' }}>{m.productName}</td>
-                  <td>
-                    <strong style={{ color: m.type === 'entry' ? '#2e7d32' : '#c62828' }}>
-                      {m.type === 'entry' ? '+' : '-'}{m.qty}
-                    </strong>
-                  </td>
-                  <td style={{ color: '#555', fontSize: '14px' }}>{m.notes}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      )}
-      </div>
+            </>
+          )}
 
-      {/* Modales */}
-      {(modal === 'productCreate' || modal?.productEdit) && (
-        <Modal title={modal === 'productCreate' ? 'Ingresar Nuevo Producto' : 'Editar Producto'} onClose={() => setModal(null)}>
-          <ProductForm initial={modal?.productEdit ?? null} onSave={handleProductSave} onCancel={() => setModal(null)} />
-        </Modal>
-      )}
+          {activeTab === 'movements' && (
+            <div className="rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Fecha / hora</TableHead>
+                    <TableHead>Tipo</TableHead>
+                    <TableHead>Producto</TableHead>
+                    <TableHead className="text-right">Cant.</TableHead>
+                    <TableHead>Notas</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {movements.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
+                        No hay movimientos registrados.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    movements.map((m) => (
+                      <TableRow key={m.id}>
+                        <TableCell className="whitespace-nowrap text-sm">
+                          {new Date(m.createdAt).toLocaleString()}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={m.type === 'entry' ? 'success' : 'destructive'}>
+                            {m.type === 'entry' ? 'Entrada' : 'Salida'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="font-medium">{m.productName}</TableCell>
+                        <TableCell className="text-right">
+                          <strong className={m.type === 'entry' ? 'text-success' : 'text-destructive'}>
+                            {m.type === 'entry' ? '+' : '-'}{m.qty}
+                          </strong>
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{m.notes}</TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
-      {(modal?.mvtEntry || modal?.mvtExit) && (
-        <Modal title={modal.mvtEntry ? 'Registrar Entrada' : 'Registrar Salida'} onClose={() => setModal(null)}>
-          <StockMovementModal 
-            product={modal.mvtEntry || modal.mvtExit} 
-            isEntry={!!modal.mvtEntry} 
-            onSave={handleMovementSave} 
-            onCancel={() => setModal(null)} 
-          />
-        </Modal>
-      )}
+      <Dialog
+        open={isProductDialogOpen}
+        onOpenChange={(open) => { if (!open) setModal(null) }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {modal === 'productCreate' ? 'Ingresar nuevo producto' : 'Editar producto'}
+            </DialogTitle>
+          </DialogHeader>
+          {isProductDialogOpen && (
+            <ProductForm
+              initial={modal?.productEdit ?? null}
+              onSave={handleProductSave}
+              onCancel={() => setModal(null)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
 
-      {modal?.confirmDeact && (
-        <Modal title="Confirmar Acción" onClose={() => setModal(null)}>
-          <p className="confirm-text">¿Seguro que deseas desactivar el producto <strong>{modal.confirmDeact.name}</strong>? Ya no aparecerá en las listas activas.</p>
-          <div className="form-actions">
-            <button className="btn btn-ghost" onClick={() => setModal(null)}>Cancelar</button>
-            <button className="btn btn-danger" onClick={() => handleDelete(modal.confirmDeact)}>Desactivar Producto</button>
-          </div>
-        </Modal>
-      )}
+      <Dialog
+        open={isMovementDialogOpen}
+        onOpenChange={(open) => { if (!open) setModal(null) }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {modal?.mvtEntry ? 'Registrar entrada' : 'Registrar salida'}
+            </DialogTitle>
+          </DialogHeader>
+          {isMovementDialogOpen && (
+            <StockMovementModal
+              product={modal.mvtEntry || modal.mvtExit}
+              isEntry={!!modal.mvtEntry}
+              onSave={handleMovementSave}
+              onCancel={() => setModal(null)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
 
-      {toast && (
-        <div className={`toast toast-${toast.type}`}>{toast.msg}</div>
-      )}
+      <Dialog
+        open={modal?.confirmDeact != null}
+        onOpenChange={(open) => { if (!open) setModal(null) }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirmar desactivacion</DialogTitle>
+            <DialogDescription>
+              ¿Seguro que deseas desactivar el producto{' '}
+              <strong className="text-foreground">{modal?.confirmDeact?.name}</strong>?
+              Ya no aparecera en las listas activas.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <Button type="button" variant="outline" onClick={() => setModal(null)}>
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => modal?.confirmDeact && handleDelete(modal.confirmDeact)}
+            >
+              Desactivar producto
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
-  );
+  )
+}
+
+/** @param {{ active: boolean, onClick: () => void, children: React.ReactNode }} props */
+function TabButton({ active, onClick, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        active
+          ? 'flex items-center border-b-2 border-primary px-4 py-3 text-sm font-semibold text-primary'
+          : 'flex items-center border-b-2 border-transparent px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground'
+      }
+    >
+      {children}
+    </button>
+  )
+}
+
+/**
+ * @param {{ label: string, value: number | string, tone?: 'default' | 'warning' }} props
+ */
+function StatCard({ label, value, tone = 'default' }) {
+  return (
+    <Card className={tone === 'warning' ? 'border-l-4 border-l-destructive' : undefined}>
+      <CardContent className="p-4">
+        <p className={
+          'text-2xl font-bold ' + (tone === 'warning' ? 'text-destructive' : 'text-primary')
+        }>
+          {value}
+        </p>
+        <p className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">{label}</p>
+      </CardContent>
+    </Card>
+  )
 }

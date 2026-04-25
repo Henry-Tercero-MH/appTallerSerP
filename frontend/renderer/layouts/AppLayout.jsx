@@ -1,17 +1,18 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuthContext } from '../features/auth/AuthContext';
 import { ROUTES, APP_NAME } from '../lib/constants';
-import { 
-  MdPointOfSale, 
-  MdBuild, 
-  MdInventory, 
-  MdPeopleOutline, 
+import {
+  MdPointOfSale,
+  MdInventory,
+  MdPeopleOutline,
   MdInsertChartOutlined,
-  MdExitToApp 
+  MdReceiptLong,
+  MdExitToApp
 } from 'react-icons/md';
 
 const NAV = [
   { to: ROUTES.POS, label: 'Facturar', icon: MdPointOfSale },
+  { to: ROUTES.HISTORY, label: 'Historial', icon: MdReceiptLong },
   { to: ROUTES.INVENTORY, label: 'Productos / Stock', icon: MdInventory },
   { to: ROUTES.CLIENTS, label: 'Clientes', icon: MdPeopleOutline },
   { to: ROUTES.DASHBOARD, label: 'Reportes', icon: MdInsertChartOutlined, disabled: true },
