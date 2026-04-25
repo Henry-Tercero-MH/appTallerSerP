@@ -6,3 +6,16 @@ out/
 *.exe
 *.AppImage
 *.asar
+# dependencies
+node_modules/
+
+# electron builds
+frontend/release/
+frontend/dist/
+release/
+out/
+
+# files
+*.exe
+*.AppImage
+*.asar
