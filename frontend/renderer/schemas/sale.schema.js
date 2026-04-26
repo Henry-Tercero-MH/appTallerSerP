@@ -16,6 +16,9 @@ export const saleSchema = z.object({
   customer_id:             z.number().int().nullable(),
   customer_name_snapshot:  z.string().nullable(),
   customer_nit_snapshot:   z.string().nullable(),
+  payment_method:          z.enum(['cash', 'credit', 'card', 'transfer']).optional().nullable(),
+  client_type:             z.enum(['cf', 'registered', 'company']).optional().nullable(),
+  status:                  z.enum(['active', 'voided']).optional().default('active'),
   items:                   z.array(saleItemSchema).optional(),
 })
 
@@ -48,8 +51,10 @@ export const saleListSchema = z.object({
  * main hace fallback a 1 (Consumidor Final).
  */
 export const saleInputSchema = z.object({
-  items:      z.array(saleItemInputSchema).min(1, 'La venta debe tener al menos un item'),
-  customerId: z.number().int().positive().optional(),
+  items:         z.array(saleItemInputSchema).min(1, 'La venta debe tener al menos un item'),
+  customerId:    z.number().int().positive().optional(),
+  paymentMethod: z.enum(['cash', 'credit', 'card', 'transfer']).optional(),
+  clientType:    z.enum(['cf', 'registered', 'company']).optional(),
 })
 
 /** @typedef {z.infer<typeof saleInputSchema>} SaleInput */

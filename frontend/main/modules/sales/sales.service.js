@@ -17,7 +17,9 @@
 /**
  * @typedef {Object} SaleInput
  * @property {Array<{id:number, qty:number, price:number}>} items
- * @property {number} [customerId]   Si se omite, fallback a 1 (Consumidor Final).
+ * @property {number} [customerId]
+ * @property {string} [paymentMethod]
+ * @property {string} [clientType]
  */
 
 /**
@@ -111,8 +113,9 @@ function computeBreakdown(rawSum, rate, included, decimals) {
  * @param {ReturnType<typeof import('./sales.repository.js').createSalesRepository>} repo
  * @param {ReturnType<typeof import('../settings/settings.service.js').createSettingsService>} settings
  * @param {ReturnType<typeof import('../customers/customers.service.js').createCustomersService>} customers
+ * @param {ReturnType<typeof import('../audit/audit.service.js').createAuditService>} [audit]
  */
-export function createSalesService(repo, settings, customers) {
+export function createSalesService(repo, settings, customers, audit) {
   return {
     /**
      * @param {SaleInput} input
@@ -149,6 +152,8 @@ export function createSalesService(repo, settings, customers) {
         customerId,
         customerNameSnapshot: customer.name,
         customerNitSnapshot: customer.nit,
+        paymentMethod: input.paymentMethod ?? 'cash',
+        clientType:    input.clientType    ?? 'cf',
       })
 
       return {
@@ -193,6 +198,55 @@ export function createSalesService(repo, settings, customers) {
         total: repo.countAll(),
         page,
         pageSize,
+      }
+    },
+
+    /**
+     * Anula una venta, restaura stock y registra en bitácora.
+     * @param {{ saleId: number, reason: string, userId?: number, userName?: string }} input
+     */
+    voidSale(input) {
+      if (!Number.isInteger(input.saleId) || input.saleId <= 0) {
+        throw Object.assign(new Error(`sale id invalido: ${input.saleId}`), { code: 'SALE_INVALID_ID' })
+      }
+      if (!input.reason || input.reason.trim().length < 5) {
+        throw Object.assign(new Error('El motivo debe tener al menos 5 caracteres'), { code: 'VOID_REASON_REQUIRED' })
+      }
+
+      const sale = repo.findSaleById(input.saleId)
+      if (!sale) {
+        throw Object.assign(new Error(`Venta ${input.saleId} no encontrada`), { code: 'SALE_NOT_FOUND' })
+      }
+      if (sale.status === 'voided') {
+        throw Object.assign(new Error(`La venta ${input.saleId} ya está anulada`), { code: 'SALE_ALREADY_VOIDED' })
+      }
+
+      const items = repo.findSaleItems(input.saleId)
+      const voided = repo.voidSale(
+        { saleId: input.saleId, reason: input.reason.trim(), userId: input.userId },
+        items
+      )
+
+      if (voided) {
+        audit?.log({
+          action: 'sale_voided',
+          entity: 'sale',
+          entityId: input.saleId,
+          description: `Venta #${input.saleId} anulada. Motivo: ${input.reason.trim()}`,
+          payload: { total: sale.total, customer: sale.customer_name_snapshot, reason: input.reason.trim() },
+          userId: input.userId,
+          userName: input.userName,
+        })
+      }
+
+      return { voided, saleId: input.saleId }
+    },
+
+    /** Reporte del día: totales + top 5 productos. */
+    dailyReport() {
+      return {
+        summary:     repo.getDailySummary(),
+        topProducts: repo.getTopProducts(),
       }
     },
   }

@@ -1,15 +1,18 @@
 export const APP_NAME = 'SerProMec';
 
 export const ROUTES = {
-  LOGIN: '/login',
+  LOGIN:     '/login',
   DASHBOARD: '/',
-  POS: '/ventas',
-  HISTORY: '/historial',
-  WORKSHOP: '/taller',
+  POS:       '/ventas',
+  HISTORY:   '/historial',
+  WORKSHOP:  '/taller',
   INVENTORY: '/inventario',
-  CLIENTS: '/clientes',
-  WAREHOUSES: '/bodegas',
-  PRODUCTS: '/productos',
+  CLIENTS:   '/clientes',
+  REPORTS:   '/reportes',
+  USERS:     '/usuarios',
+  SETTINGS:  '/configuracion',
+  AUDIT:     '/bitacora',
+  CASH:      '/caja',
 };
 
 export const ROLES = {

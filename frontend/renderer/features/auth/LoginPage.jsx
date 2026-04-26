@@ -11,7 +11,8 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
 import { useAuthContext } from './AuthContext'
-import { ROUTES, APP_NAME } from '../../lib/constants'
+import { useBusinessSettings } from '@/hooks/useSettings'
+import { ROUTES } from '../../lib/constants'
 
 const loginSchema = z.object({
   email:    z.string().trim().email('Email invalido'),
@@ -26,6 +27,7 @@ const loginSchema = z.object({
 export default function LoginPage() {
   const { login } = useAuthContext()
   const navigate = useNavigate()
+  const { name: appName, logo } = useBusinessSettings()
   const [authError, setAuthError] = useState(/** @type {string | null} */ (null))
   const [submitting, setSubmitting] = useState(false)
 
@@ -39,10 +41,8 @@ export default function LoginPage() {
     setAuthError(null)
     setSubmitting(true)
     try {
-      login(values.email, values.password)
-      // Ruta post-login: POS, que es el flujo principal de la app.
-      // Si mañana hay roles, redirigir segun rol desde useAuth.
-      navigate(ROUTES.POS)
+      await login(values.email, values.password)
+      navigate(ROUTES.DASHBOARD)
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : 'Error al ingresar')
     } finally {
@@ -51,13 +51,20 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-primary-950 p-6">
+    <div className="flex min-h-screen items-center justify-center p-6"
+      style={{ background: 'var(--sidebar-bg)' }}>
       <Card className="w-full max-w-md border-0 shadow-2xl">
         <CardHeader className="items-center text-center">
-          <div className="mb-2 flex h-14 w-14 items-center justify-center rounded-md bg-destructive text-destructive-foreground shadow-md">
-            <ShieldCheck className="h-7 w-7" />
+          <div
+            className="mb-2 h-16 w-16 rounded-full shadow-md overflow-hidden text-white flex items-center justify-center"
+            style={{ background: logo ? '#fff' : 'var(--primary)' }}
+          >
+            {logo
+              ? <img src={logo} alt={appName} className="h-full w-full object-cover" />
+              : <ShieldCheck className="h-7 w-7" />
+            }
           </div>
-          <CardTitle className="text-2xl">{APP_NAME}</CardTitle>
+          <CardTitle className="text-2xl">{appName}</CardTitle>
           <CardDescription>Sistema de Gestion — Taller &amp; POS</CardDescription>
         </CardHeader>
 
@@ -102,7 +109,7 @@ export default function LoginPage() {
 
             <Button
               type="submit"
-              variant="destructive"
+              variant="default"
               className="w-full"
               disabled={submitting}
             >
@@ -112,7 +119,7 @@ export default function LoginPage() {
           </form>
 
           <p className="mt-6 border-t pt-4 text-center text-xs text-muted-foreground">
-            Demo: <span className="font-medium text-foreground">admin@empresa.com</span>
+            Admin: <span className="font-medium text-foreground">admin@taller.local</span>
             {' / '}
             <span className="font-medium text-foreground">admin123</span>
           </p>

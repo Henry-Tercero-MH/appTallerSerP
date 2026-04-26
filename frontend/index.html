@@ -4,10 +4,69 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SerProMec</title>
+    <!--
+      Script síncrono: aplica el tema guardado ANTES de que React monte.
+      Evita el flash de colores incorrectos en Login y cualquier otra ruta.
+      Debe mantenerse sincronizado con THEMES en renderer/lib/themes.js.
+    -->
+    <script>
+      (function () {
+        var THEMES = {
+          crimson: {
+            '--blue-600': '#112060', '--blue-700': '#0d1a50', '--blue-800': '#0a1340', '--blue-900': '#071030',
+            '--red-400': '#ff4d66', '--red-500': '#ff1a33', '--red-600': '#e5001f', '--red-700': '#cc001b',
+            '--primary': 'var(--blue-600)', '--primary-hover': 'var(--blue-700)', '--primary-light': '#eef0f8',
+            '--danger': 'var(--red-600)', '--danger-hover': 'var(--red-700)', '--danger-light': '#fff0f2',
+            '--sidebar-bg': '#071030', '--sidebar-text': '#8a9ec4',
+          },
+          ocean: {
+            '--blue-600': '#0369a1', '--blue-700': '#075985', '--blue-800': '#0c4a6e', '--blue-900': '#0c2340',
+            '--red-400': '#22d3ee', '--red-500': '#06b6d4', '--red-600': '#0891b2', '--red-700': '#0e7490',
+            '--primary': 'var(--blue-600)', '--primary-hover': 'var(--blue-700)', '--primary-light': '#e0f2fe',
+            '--danger': 'var(--red-600)', '--danger-hover': 'var(--red-700)', '--danger-light': '#ecfeff',
+            '--sidebar-bg': '#0c2340', '--sidebar-text': '#7dd3fc',
+          },
+          forest: {
+            '--blue-600': '#16a34a', '--blue-700': '#15803d', '--blue-800': '#166534', '--blue-900': '#052e16',
+            '--red-400': '#4ade80', '--red-500': '#22c55e', '--red-600': '#16a34a', '--red-700': '#15803d',
+            '--primary': 'var(--blue-600)', '--primary-hover': 'var(--blue-700)', '--primary-light': '#dcfce7',
+            '--danger': '#dc2626', '--danger-hover': '#b91c1c', '--danger-light': '#fee2e2',
+            '--sidebar-bg': '#052e16', '--sidebar-text': '#86efac',
+          },
+          violet: {
+            '--blue-600': '#6d28d9', '--blue-700': '#5b21b6', '--blue-800': '#4c1d95', '--blue-900': '#1e0a3c',
+            '--red-400': '#c084fc', '--red-500': '#a855f7', '--red-600': '#9333ea', '--red-700': '#7e22ce',
+            '--primary': 'var(--blue-600)', '--primary-hover': 'var(--blue-700)', '--primary-light': '#f3e8ff',
+            '--danger': '#dc2626', '--danger-hover': '#b91c1c', '--danger-light': '#fee2e2',
+            '--sidebar-bg': '#1e0a3c', '--sidebar-text': '#d8b4fe',
+          },
+          slate: {
+            '--blue-600': '#475569', '--blue-700': '#334155', '--blue-800': '#1e293b', '--blue-900': '#0f172a',
+            '--red-400': '#94a3b8', '--red-500': '#64748b', '--red-600': '#475569', '--red-700': '#334155',
+            '--primary': 'var(--blue-600)', '--primary-hover': 'var(--blue-700)', '--primary-light': '#f1f5f9',
+            '--danger': '#dc2626', '--danger-hover': '#b91c1c', '--danger-light': '#fee2e2',
+            '--sidebar-bg': '#0f172a', '--sidebar-text': '#94a3b8',
+          },
+          amber: {
+            '--blue-600': '#d97706', '--blue-700': '#b45309', '--blue-800': '#92400e', '--blue-900': '#1c0a00',
+            '--red-400': '#fbbf24', '--red-500': '#f59e0b', '--red-600': '#d97706', '--red-700': '#b45309',
+            '--primary': 'var(--blue-600)', '--primary-hover': 'var(--blue-700)', '--primary-light': '#fffbeb',
+            '--danger': '#dc2626', '--danger-hover': '#b91c1c', '--danger-light': '#fee2e2',
+            '--sidebar-bg': '#1c0a00', '--sidebar-text': '#fcd34d',
+          },
+        };
+        try {
+          var id = localStorage.getItem('app-theme') || 'crimson';
+          var vars = THEMES[id] || THEMES['crimson'];
+          var root = document.documentElement;
+          for (var k in vars) root.style.setProperty(k, vars[k]);
+          root.setAttribute('data-theme', id);
+        } catch (e) { /* private mode / SSR */ }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/renderer/main.jsx"></script>
   </body>
 </html>
-  

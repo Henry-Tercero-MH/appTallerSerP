@@ -1,53 +1,56 @@
 import { useState, useEffect } from 'react'
-import { MOCK_USERS } from '../../lib/mockData'
+import * as usersService from '@/services/usersService.js'
 
 const SESSION_KEY = 'erp_session'
 
 /**
- * Forma del usuario tras despojar la password. Alineado con MOCK_USERS
- * en lib/mockData.js. Cuando auth se conecte a DB real, re-tipar aqui.
- *
  * @typedef {Object} SessionUser
- * @property {string} id
- * @property {string} email
- * @property {string} fullName
- * @property {string} role
+ * @property {number}      id
+ * @property {string}      email
+ * @property {string}      full_name
+ * @property {string}      role
+ * @property {string|null} [avatar]
  */
 
 /**
  * @typedef {Object} AuthValue
  * @property {SessionUser | null} user
  * @property {boolean} loading
- * @property {(email: string, password: string) => SessionUser} login
+ * @property {(email: string, password: string) => Promise<SessionUser>} login
  * @property {() => void} logout
+ * @property {(patch: Partial<SessionUser>) => void} patchUser
  */
 
-/**
- * @returns {AuthValue}
- */
+/** @returns {AuthValue} */
 export function useAuth() {
   const [user, setUser] = useState(/** @type {SessionUser | null} */ (null))
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const saved = sessionStorage.getItem(SESSION_KEY)
-    if (saved) setUser(JSON.parse(saved))
+    if (saved) {
+      try { setUser(JSON.parse(saved)) } catch { sessionStorage.removeItem(SESSION_KEY) }
+    }
     setLoading(false)
   }, [])
 
   /**
    * @param {string} email
    * @param {string} password
+   * @returns {Promise<SessionUser>}
    */
-  function login(email, password) {
-    const found = MOCK_USERS.find(
-      (u) => u.email === email && u.password === password
-    )
-    if (!found) throw new Error('Credenciales incorrectas')
-    const { password: _password, ...safeUser } = found
-    sessionStorage.setItem(SESSION_KEY, JSON.stringify(safeUser))
-    setUser(safeUser)
-    return safeUser
+  async function login(email, password) {
+    const dbUser = await usersService.login(email, password)
+    const session = /** @type {SessionUser} */ ({
+      id:        dbUser.id,
+      email:     dbUser.email,
+      full_name: dbUser.full_name,
+      role:      dbUser.role,
+      avatar:    dbUser.avatar ?? null,
+    })
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify(session))
+    setUser(session)
+    return session
   }
 
   function logout() {
@@ -55,5 +58,15 @@ export function useAuth() {
     setUser(null)
   }
 
-  return { user, loading, login, logout }
+  /** Actualiza campos del usuario en sesión (ej: avatar) sin re-login */
+  function patchUser(patch) {
+    setUser(prev => {
+      if (!prev) return prev
+      const next = { ...prev, ...patch }
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify(next))
+      return next
+    })
+  }
+
+  return { user, loading, login, logout, patchUser }
 }

@@ -17,3 +17,24 @@ export async function getAll() {
   const res = await window.api.settings.getAll()
   return unwrap('settings:get-all', res, settingsShapeSchema)
 }
+
+/**
+ * @param {string} key
+ * @param {unknown} value
+ * @returns {Promise<true>}
+ */
+export async function set(key, value) {
+  const res = await window.api.settings.set(key, value)
+  return unwrap('settings:set', res, z.literal(true))
+}
+
+/**
+ * Como set() pero crea la clave si no existe (tipo string).
+ * @param {string} key
+ * @param {string} value
+ * @returns {Promise<true>}
+ */
+export async function upsert(key, value) {
+  const res = await window.api.settings.upsert(key, value)
+  return unwrap('settings:upsert', res, z.literal(true))
+}

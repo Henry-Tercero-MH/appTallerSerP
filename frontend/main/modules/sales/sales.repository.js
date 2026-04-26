@@ -16,6 +16,8 @@
  * @property {number} customerId
  * @property {string} customerNameSnapshot
  * @property {string} customerNitSnapshot
+ * @property {string} [paymentMethod]
+ * @property {string} [clientType]
  */
 
 /**
@@ -30,6 +32,17 @@
  * @property {number | null} customer_id
  * @property {string | null} customer_name_snapshot
  * @property {string | null} customer_nit_snapshot
+ * @property {string} status
+ * @property {string | null} payment_method
+ * @property {string | null} client_type
+ */
+
+/**
+ * @typedef {Object} VoidInput
+ * @property {number} saleId
+ * @property {string} reason
+ * @property {number} [userId]
+ * @property {string} [userName]
  */
 
 /**
@@ -51,7 +64,8 @@
 
 const SALE_COLUMNS = `
   id, subtotal, tax_rate_applied, tax_amount, total, currency_code, date,
-  customer_id, customer_name_snapshot, customer_nit_snapshot
+  customer_id, customer_name_snapshot, customer_nit_snapshot,
+  payment_method, client_type, status
 `
 
 /**
@@ -62,8 +76,9 @@ export function createSalesRepository(db) {
     insertSale: db.prepare(
       `INSERT INTO sales (
          total, subtotal, tax_rate_applied, tax_amount, currency_code,
-         customer_id, customer_name_snapshot, customer_nit_snapshot
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+         customer_id, customer_name_snapshot, customer_nit_snapshot,
+         payment_method, client_type
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ),
     insertItem: db.prepare(
       'INSERT INTO sale_items (sale_id, product_id, qty, price) VALUES (?, ?, ?, ?)'
@@ -93,6 +108,44 @@ export function createSalesRepository(db) {
         LIMIT ? OFFSET ?`
     ),
     countAll: db.prepare('SELECT COUNT(*) AS total FROM sales'),
+
+    dailySummary: db.prepare(`
+      SELECT
+        COUNT(*)                          AS sale_count,
+        COALESCE(SUM(subtotal), 0)        AS subtotal,
+        COALESCE(SUM(tax_amount), 0)      AS tax_amount,
+        COALESCE(SUM(total), 0)           AS total,
+        currency_code
+      FROM sales
+      WHERE date(date) = date('now', 'localtime')
+      GROUP BY currency_code
+    `),
+
+    markVoided: db.prepare(
+      `UPDATE sales SET status = 'voided' WHERE id = ? AND status = 'active'`
+    ),
+    insertVoid: db.prepare(
+      `INSERT INTO sale_voids (sale_id, reason, voided_by) VALUES (?, ?, ?)`
+    ),
+    restoreStock: db.prepare(
+      `UPDATE products SET stock = stock + ? WHERE id = ?`
+    ),
+
+    topProducts: db.prepare(`
+      SELECT
+        p.id,
+        p.code,
+        p.name,
+        SUM(si.qty)         AS units_sold,
+        SUM(si.qty * si.price) AS revenue
+      FROM sale_items si
+      LEFT JOIN products p ON p.id = si.product_id
+      JOIN  sales s ON s.id = si.sale_id
+      WHERE date(s.date) = date('now', 'localtime')
+      GROUP BY si.product_id
+      ORDER BY units_sold DESC
+      LIMIT 5
+    `),
   }
 
   /**
@@ -108,7 +161,9 @@ export function createSalesRepository(db) {
       record.currencyCode,
       record.customerId,
       record.customerNameSnapshot,
-      record.customerNitSnapshot
+      record.customerNitSnapshot,
+      record.paymentMethod ?? 'cash',
+      record.clientType    ?? 'cf'
     )
     const saleId = info.lastInsertRowid
     for (const item of record.items) {
@@ -120,6 +175,23 @@ export function createSalesRepository(db) {
 
   return {
     insertSale,
+
+    /**
+     * Anula una venta en transacción: marca status='voided', registra en
+     * sale_voids y devuelve el stock de cada item.
+     * @param {VoidInput} input
+     * @param {import('../sales/sales.repository.js').SaleItemRow[]} items
+     * @returns {boolean} true si se anuló, false si ya estaba anulada
+     */
+    voidSale: db.transaction((input, items) => {
+      const info = stmts.markVoided.run(input.saleId)
+      if (info.changes === 0) return false
+      stmts.insertVoid.run(input.saleId, input.reason, input.userId ?? null)
+      for (const item of items) {
+        stmts.restoreStock.run(item.qty, item.product_id)
+      }
+      return true
+    }),
 
     /**
      * @param {number} id
@@ -149,6 +221,22 @@ export function createSalesRepository(db) {
     countAll() {
       const row = /** @type {{ total: number }} */ (stmts.countAll.get())
       return row.total
+    },
+
+    /**
+     * Resumen del día actual (fecha local del servidor/electron).
+     * @returns {{ sale_count: number, subtotal: number, tax_amount: number, total: number, currency_code: string } | null}
+     */
+    getDailySummary() {
+      return /** @type {any} */ (stmts.dailySummary.get()) ?? null
+    },
+
+    /**
+     * Top 5 productos vendidos hoy por unidades.
+     * @returns {{ id: number, code: string, name: string, units_sold: number, revenue: number }[]}
+     */
+    getTopProducts() {
+      return /** @type {any[]} */ (stmts.topProducts.all())
     },
   }
 }

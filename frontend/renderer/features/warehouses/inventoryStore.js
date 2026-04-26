@@ -1,96 +1,93 @@
-import { useState, useMemo } from 'react';
-import { MOCK_PRODUCTS, MOCK_MOVEMENTS } from '../../lib/mockData';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import * as productsService from '@/services/productsService.js'
+import { productKeys } from '@/hooks/queryKeys.js'
 
-let nextProductId = 100;
-let nextMovementId = 100;
+// ── Consultas ──────────────────────────────────────────────────────────────
 
-export function useInventoryStore() {
-  const [products, setProducts] = useState(MOCK_PRODUCTS.map(p => ({ ...p, minStock: p.minStock || 5 })));
-  const [movements, setMovements] = useState(MOCK_MOVEMENTS);
+/** Todos los productos (activos + inactivos) para la vista de admin. */
+export function useInventoryProducts() {
+  return useQuery({
+    queryKey: [...productKeys.lists, { all: true }],
+    queryFn:  productsService.getAll,
+    staleTime: 30_000,
+  })
+}
 
-  function getProducts() {
-    return products;
-  }
+// ── Mutaciones ─────────────────────────────────────────────────────────────
 
-  function getMovements() {
-    return movements;
-  }
+function invalidateProducts(qc) {
+  qc.invalidateQueries({ queryKey: productKeys.all })
+}
 
-  function getProduct(id) {
-    return products.find(p => p.id === id);
-  }
+export function useCreateProduct() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (input) => productsService.create(input),
+    onSuccess: () => {
+      invalidateProducts(qc)
+      toast.success('Producto agregado al inventario')
+    },
+    onError: (err) => toast.error('No se pudo crear el producto', {
+      description: err instanceof Error ? err.message : 'Error desconocido',
+    }),
+  })
+}
 
-  function createProduct(data) {
-    const newItem = {
-      ...data,
-      id: String(++nextProductId),
-      isActive: true,
-      stock: Number(data.stock) || 0,
-      createdAt: new Date().toISOString(),
-    };
-    setProducts(prev => [newItem, ...prev]);
-    return newItem;
-  }
+export function useUpdateProduct() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, patch }) => productsService.update(id, patch),
+    onSuccess: () => {
+      invalidateProducts(qc)
+      toast.success('Producto actualizado correctamente')
+    },
+    onError: (err) => toast.error('No se pudo actualizar el producto', {
+      description: err instanceof Error ? err.message : 'Error desconocido',
+    }),
+  })
+}
 
-  function updateProduct(id, data) {
-    setProducts(prev =>
-      prev.map(p => (p.id === id ? { ...p, ...data, stock: data.stock !== undefined ? Number(data.stock) : p.stock } : p))
-    );
-  }
+export function useRemoveProduct() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id) => productsService.remove(id),
+    onSuccess: () => {
+      invalidateProducts(qc)
+      toast.warning('Producto desactivado')
+    },
+    onError: (err) => toast.error('No se pudo desactivar el producto', {
+      description: err instanceof Error ? err.message : 'Error desconocido',
+    }),
+  })
+}
 
-  function removeProduct(id) {
-    setProducts(prev =>
-      prev.map(p => (p.id === id ? { ...p, isActive: false } : p))
-    );
-  }
+export function useRestoreProduct() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id) => productsService.restore(id),
+    onSuccess: () => {
+      invalidateProducts(qc)
+      toast.success('Producto reactivado')
+    },
+    onError: (err) => toast.error('No se pudo reactivar el producto', {
+      description: err instanceof Error ? err.message : 'Error desconocido',
+    }),
+  })
+}
 
-  function restoreProduct(id) {
-    setProducts(prev =>
-      prev.map(p => (p.id === id ? { ...p, isActive: true } : p))
-    );
-  }
-
-  function addMovement({ productId, type, qty, notes }) {
-    const product = products.find(p => p.id === productId);
-    if (!product) return;
-    
-    // Convert qty to number
-    const numQty = Number(qty);
-
-    const newMovement = {
-      id: 'm' + (++nextMovementId),
-      productId,
-      productName: product.name,
-      type,
-      qty: numQty,
-      notes,
-      createdAt: new Date().toISOString()
-    };
-
-    setMovements(prev => [newMovement, ...prev]);
-
-    // Update stock
-    const diff = type === 'entry' ? numQty : -numQty;
-    setProducts(prev =>
-      prev.map(p => p.id === productId ? { ...p, stock: Math.max(0, p.stock + diff) } : p)
-    );
-  }
-
-  const lowStockProducts = useMemo(() => {
-    return products.filter(p => p.isActive && p.stock <= p.minStock);
-  }, [products]);
-
-  return {
-    products,
-    movements,
-    lowStockProducts,
-    getProducts,
-    getMovements,
-    getProduct,
-    createProduct,
-    updateProduct,
-    removeProduct,
-    restoreProduct,
-    addMovement
-  };
+export function useAdjustStock() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, type, qty }) => productsService.adjustStock(id, type, qty),
+    onSuccess: (_, { type }) => {
+      invalidateProducts(qc)
+      toast.success(
+        type === 'entry' ? 'Entrada de stock registrada' : 'Salida de stock registrada'
+      )
+    },
+    onError: (err) => toast.error('No se pudo registrar el movimiento', {
+      description: err instanceof Error ? err.message : 'Error desconocido',
+    }),
+  })
 }

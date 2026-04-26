@@ -5,6 +5,6 @@ import { ROUTES } from '../lib/constants';
 export default function AuthLayout() {
   const { user, loading } = useAuthContext();
   if (loading) return null;
-  if (user) return <Navigate to={ROUTES.WAREHOUSES} replace />;
+  if (user) return <Navigate to={ROUTES.DASHBOARD} replace />;
   return <Outlet />;
 }

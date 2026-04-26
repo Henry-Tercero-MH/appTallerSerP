@@ -182,5 +182,18 @@ export function createSettingsService(repo) {
       const fresh = repo.findByKey(key)
       cache.set(key, deserialize(fresh))
     },
+
+    /**
+     * Como set() pero crea la clave si no existe (tipo string).
+     * Usar solo para keys que pueden llegar antes de su migracion.
+     * @param {string} key
+     * @param {string} value
+     */
+    upsert(key, value) {
+      if (typeof value !== 'string') throw new SettingValidationError(key, 'string', value)
+      repo.upsertValue(key, value)
+      const fresh = repo.findByKey(key)
+      if (fresh) cache.set(key, deserialize(fresh))
+    },
   }
 }

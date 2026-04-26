@@ -33,6 +33,13 @@ export function createSettingsRepository(db) {
              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
        WHERE key = ?`
     ),
+    upsertValue: db.prepare(
+      `INSERT INTO settings (key, value, type, category, description)
+         VALUES (?, ?, 'string', 'app', '')
+       ON CONFLICT(key) DO UPDATE
+         SET value = excluded.value,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`
+    ),
   }
 
   return {
@@ -67,6 +74,17 @@ export function createSettingsRepository(db) {
     updateValue(key, serializedValue) {
       const info = stmts.updateValue.run(serializedValue, key)
       return info.changes
+    },
+
+    /**
+     * INSERT OR UPDATE: crea la fila si no existe, actualiza si existe.
+     * Solo para keys de tipo string que pueden llegar antes de que la
+     * migracion las haya creado (ej. app_theme durante desarrollo).
+     * @param {string} key
+     * @param {string} serializedValue
+     */
+    upsertValue(key, serializedValue) {
+      stmts.upsertValue.run(key, serializedValue)
     },
   }
 }

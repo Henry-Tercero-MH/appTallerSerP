@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Check, Plus, Search, UserRound, X } from 'lucide-react'
+import { useState, useRef, useEffect } from 'react'
+import { Check, ChevronDown, Plus, Search, UserRound, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -7,14 +7,9 @@ import { useCustomer, useSearchCustomers, useCreateCustomer } from '@/hooks/useC
 import { cn } from '@/lib/utils'
 
 /**
- * Combobox de cliente para POS. Maneja:
- *  - Busqueda live por nombre o NIT
- *  - Seleccion de resultado
- *  - Quick-create inline: crea un cliente nuevo y lo auto-selecciona
- *
- * Value es customerId o null; onChange recibe el customerId tras seleccion
- * o creacion. El caller controla el estado (no guardamos cliente completo,
- * solo id — la UI consulta por id cuando necesita mostrar el chip).
+ * Combobox compacto de cliente para POS.
+ * Muestra un campo con el cliente seleccionado o placeholder;
+ * al hacer click abre un dropdown con buscador y lista de resultados.
  *
  * @param {{
  *   value: number | null,
@@ -22,65 +17,100 @@ import { cn } from '@/lib/utils'
  * }} props
  */
 export function CustomerCombobox({ value, onChange }) {
-  const [query, setQuery] = useState('')
+  const [open, setOpen]       = useState(false)
   const [creating, setCreating] = useState(false)
+  const [query, setQuery]     = useState('')
+  const containerRef          = useRef(/** @type {HTMLDivElement|null} */ (null))
 
   const { data: selected } = useCustomer(value)
 
-  // Si hay cliente seleccionado, mostrar chip; click en X deselecciona.
-  if (selected) {
-    return (
-      <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-2">
-        <div className="flex items-center gap-2">
-          <UserRound className="h-4 w-4 text-muted-foreground" />
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium">{selected.name}</p>
-            <p className="text-xs text-muted-foreground">
-              NIT: <span className="font-mono">{selected.nit}</span>
-            </p>
-          </div>
-        </div>
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          className="h-7 w-7"
-          onClick={() => {
-            onChange(null)
-            setQuery('')
-          }}
-          aria-label="Cambiar cliente"
-        >
-          <X className="h-4 w-4" />
-        </Button>
-      </div>
-    )
+  // Cierra el dropdown si se hace click fuera
+  useEffect(() => {
+    if (!open) return
+    function handler(e) {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false)
+        setCreating(false)
+        setQuery('')
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  function handleSelect(id) {
+    onChange(id)
+    setOpen(false)
+    setCreating(false)
+    setQuery('')
   }
 
-  if (creating) {
-    return (
-      <QuickCreateForm
-        initialName={query}
-        onCancel={() => setCreating(false)}
-        onCreated={(newId) => {
-          setCreating(false)
-          setQuery('')
-          onChange(newId)
-        }}
-      />
-    )
+  function handleClear(e) {
+    e.stopPropagation()
+    onChange(null)
+    setQuery('')
   }
 
   return (
-    <CustomerSearchBox
-      query={query}
-      setQuery={setQuery}
-      onSelect={(id) => {
-        onChange(id)
-        setQuery('')
-      }}
-      onRequestCreate={() => setCreating(true)}
-    />
+    <div ref={containerRef} className="relative">
+      {/* Trigger */}
+      <button
+        type="button"
+        onClick={() => { setOpen((o) => !o); setCreating(false) }}
+        className={cn(
+          'flex w-full items-center justify-between gap-2',
+          'h-8 rounded-md border border-input bg-background px-2.5 text-xs',
+          'hover:bg-muted/50 focus:outline-none focus:ring-1 focus:ring-ring',
+          open && 'ring-1 ring-ring'
+        )}
+      >
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          <UserRound className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          {selected ? (
+            <span className="truncate font-medium">{selected.name}</span>
+          ) : (
+            <span className="text-muted-foreground">Seleccionar cliente...</span>
+          )}
+        </div>
+        <div className="flex items-center gap-0.5 shrink-0">
+          {selected && (
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={handleClear}
+              onKeyDown={(e) => e.key === 'Enter' && handleClear(e)}
+              className="flex h-4 w-4 items-center justify-center rounded hover:text-destructive"
+            >
+              <X className="h-3 w-3" />
+            </span>
+          )}
+          <ChevronDown className={cn('h-3.5 w-3.5 text-muted-foreground transition-transform', open && 'rotate-180')} />
+        </div>
+      </button>
+
+      {/* Dropdown */}
+      {open && (
+        <div className="absolute left-0 right-0 top-full z-50 mt-1 rounded-md border bg-popover shadow-lg">
+          {creating ? (
+            <div className="p-2">
+              <QuickCreateForm
+                initialName={query}
+                onCancel={() => setCreating(false)}
+                onCreated={(newId) => handleSelect(newId)}
+              />
+            </div>
+          ) : (
+            <CustomerSearchPanel
+              query={query}
+              setQuery={setQuery}
+              selectedId={value}
+              onSelect={handleSelect}
+              onRequestCreate={() => setCreating(true)}
+            />
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -88,72 +118,72 @@ export function CustomerCombobox({ value, onChange }) {
  * @param {{
  *   query: string,
  *   setQuery: (q: string) => void,
+ *   selectedId: number | null,
  *   onSelect: (id: number) => void,
  *   onRequestCreate: () => void,
  * }} props
  */
-function CustomerSearchBox({ query, setQuery, onSelect, onRequestCreate }) {
+function CustomerSearchPanel({ query, setQuery, selectedId, onSelect, onRequestCreate }) {
   const { data: results = [], isLoading } = useSearchCustomers(query)
 
   return (
-    <div className="space-y-2">
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Buscar cliente por nombre o NIT..."
-          className="pl-9"
-          autoFocus
-        />
+    <>
+      <div className="p-1.5 border-b">
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Buscar por nombre o NIT..."
+            className="h-7 pl-7 text-xs"
+            autoFocus
+          />
+        </div>
       </div>
 
-      <div className="max-h-56 overflow-y-auto rounded-md border">
+      <div className="max-h-44 overflow-y-auto">
         {isLoading && (
-          <div className="p-3 text-center text-sm text-muted-foreground">Buscando...</div>
+          <div className="py-3 text-center text-xs text-muted-foreground">Buscando...</div>
         )}
-
         {!isLoading && results.length === 0 && (
-          <div className="space-y-2 p-3 text-center">
-            <p className="text-sm text-muted-foreground">
-              {query ? 'Sin coincidencias.' : 'Escribe para buscar.'}
-            </p>
+          <div className="py-3 text-center text-xs text-muted-foreground">
+            {query ? 'Sin coincidencias.' : 'Escribe para buscar.'}
           </div>
         )}
-
         {!isLoading && results.map((c) => (
           <button
             key={c.id}
             type="button"
             onClick={() => onSelect(c.id)}
             className={cn(
-              'flex w-full items-center justify-between border-b px-3 py-2 text-left last:border-0',
-              'hover:bg-muted/50 focus:bg-muted focus:outline-none'
+              'flex w-full items-center justify-between px-2.5 py-1.5 text-left',
+              'hover:bg-muted/60 focus:bg-muted focus:outline-none',
+              selectedId === c.id && 'bg-muted'
             )}
           >
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium">{c.name}</p>
-              <p className="text-xs text-muted-foreground">
-                <span className="font-mono">{c.nit}</span>
-                {c.id === 1 && <Badge variant="secondary" className="ml-2">Por defecto</Badge>}
-              </p>
+              <p className="truncate text-xs font-medium">{c.name}</p>
+              <p className="text-xs text-muted-foreground font-mono">{c.nit}</p>
             </div>
-            <Check className="h-4 w-4 opacity-0" />
+            {selectedId === c.id && <Check className="h-3.5 w-3.5 text-primary shrink-0" />}
+            {c.id === 1 && selectedId !== c.id && (
+              <Badge variant="secondary" className="text-xs shrink-0">C/F</Badge>
+            )}
           </button>
         ))}
       </div>
 
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={onRequestCreate}
-        className="w-full"
-      >
-        <Plus className="mr-1 h-4 w-4" /> Nuevo cliente
-      </Button>
-    </div>
+      <div className="p-1.5 border-t">
+        <button
+          type="button"
+          onClick={onRequestCreate}
+          className="flex w-full items-center justify-center gap-1 rounded-md py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <Plus className="h-3.5 w-3.5" /> Nuevo cliente
+        </button>
+      </div>
+    </>
   )
 }
 
@@ -165,48 +195,41 @@ function CustomerSearchBox({ query, setQuery, onSelect, onRequestCreate }) {
  * }} props
  */
 function QuickCreateForm({ initialName = '', onCancel, onCreated }) {
-  const [name, setName] = useState(initialName)
-  const [nit, setNit] = useState('')
+  const [name, setName]   = useState(initialName)
+  const [nit, setNit]     = useState('')
   const [phone, setPhone] = useState('')
 
   const createMutation = useCreateCustomer()
-
   const disabled = createMutation.isPending || name.trim().length < 2
 
   return (
-    <div className="space-y-3 rounded-md border bg-muted/30 p-3">
-      <p className="text-sm font-medium">Nuevo cliente</p>
+    <div className="space-y-1.5">
+      <p className="text-xs font-medium">Nuevo cliente</p>
       <Input
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder="Nombre *"
+        className="h-7 text-xs"
         autoFocus
       />
       <Input
         value={nit}
         onChange={(e) => setNit(e.target.value)}
-        placeholder="NIT (vacio = C/F)"
+        placeholder="NIT (vacío = C/F)"
+        className="h-7 text-xs"
       />
       <Input
         value={phone}
         onChange={(e) => setPhone(e.target.value)}
-        placeholder="Telefono (opcional)"
+        placeholder="Teléfono (opcional)"
+        className="h-7 text-xs"
       />
-      <div className="flex gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="flex-1"
-          onClick={onCancel}
-          disabled={createMutation.isPending}
-        >
+      <div className="flex gap-1.5 pt-0.5">
+        <Button type="button" variant="outline" size="sm" className="flex-1 h-7 text-xs"
+          onClick={onCancel} disabled={createMutation.isPending}>
           Cancelar
         </Button>
-        <Button
-          type="button"
-          size="sm"
-          className="flex-1"
+        <Button type="button" size="sm" className="flex-1 h-7 text-xs"
           disabled={disabled}
           onClick={() => {
             createMutation.mutate(
@@ -215,7 +238,7 @@ function QuickCreateForm({ initialName = '', onCancel, onCreated }) {
             )
           }}
         >
-          {createMutation.isPending ? 'Creando...' : 'Crear y seleccionar'}
+          {createMutation.isPending ? 'Creando...' : 'Crear'}
         </Button>
       </div>
     </div>

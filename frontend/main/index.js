@@ -10,7 +10,7 @@ function createWindow() {
     width: 1200,
     height: 800,
     webPreferences: {
-      preload: join(app.getAppPath(), 'dist-electron', 'preload.js'),
+      preload: join(app.getAppPath(), 'dist-electron', 'preload.mjs'),
       contextIsolation: true,
       nodeIntegration: false,
     },
@@ -18,6 +18,7 @@ function createWindow() {
 
   if (process.env.VITE_DEV_SERVER_URL) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL)
+    win.webContents.openDevTools()
   } else {
     win.loadFile(join(app.getAppPath(), 'dist', 'index.html'))
   }

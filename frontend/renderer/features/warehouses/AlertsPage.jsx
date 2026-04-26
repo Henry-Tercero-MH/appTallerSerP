@@ -1,8 +1,9 @@
-import { useInventoryStore } from './inventoryStore';
+import { useInventoryProducts } from './inventoryStore';
 import AlertsPanel from './AlertsPanel';
 
 export default function AlertsPage() {
-  const { lowStockProducts } = useInventoryStore();
+  const { data: products = [] } = useInventoryProducts();
+  const lowStockProducts = products.filter(p => p.is_active === 1 && p.stock <= p.min_stock);
 
   return (
     <div className="page">

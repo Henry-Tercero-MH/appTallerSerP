@@ -17,6 +17,22 @@ import { createSalesRepository } from '../modules/sales/sales.repository.js'
 import { createSalesService }    from '../modules/sales/sales.service.js'
 import { registerSalesIpc }      from '../modules/sales/sales.ipc.js'
 
+import { createUsersRepository } from '../modules/users/users.repository.js'
+import { createUsersService }    from '../modules/users/users.service.js'
+import { registerUsersIpc }      from '../modules/users/users.ipc.js'
+
+import { createAuditRepository } from '../modules/audit/audit.repository.js'
+import { createAuditService }    from '../modules/audit/audit.service.js'
+import { registerAuditIpc }      from '../modules/audit/audit.ipc.js'
+
+import { createCashRepository } from '../modules/cash/cash.repository.js'
+import { createCashService }    from '../modules/cash/cash.service.js'
+import { registerCashIpc }      from '../modules/cash/cash.ipc.js'
+
+import { createPurchasesRepository } from '../modules/purchases/purchases.repository.js'
+import { createPurchasesService }    from '../modules/purchases/purchases.service.js'
+import { registerPurchasesIpc }      from '../modules/purchases/purchases.ipc.js'
+
 const migrationModules = import.meta.glob('../database/migrations/*.sql', {
   query: '?raw',
   import: 'default',
@@ -57,11 +73,27 @@ export function bootstrap() {
   const customersRepo = createCustomersRepository(db)
   const customers     = createCustomersService(customersRepo)
 
+  const auditRepo = createAuditRepository(db)
+  const audit     = createAuditService(auditRepo)
+
   const salesRepo = createSalesRepository(db)
-  const sales     = createSalesService(salesRepo, settings, customers)
+  const sales     = createSalesService(salesRepo, settings, customers, audit)
+
+  const usersRepo = createUsersRepository(db)
+  const users     = createUsersService(usersRepo)
+
+  const cashRepo = createCashRepository(db)
+  const cash     = createCashService(cashRepo)
+
+  const purchasesRepo = createPurchasesRepository(db)
+  const purchases     = createPurchasesService(purchasesRepo)
 
   registerSettingsIpc(settings)
   registerProductsIpc(products)
   registerCustomersIpc(customers)
   registerSalesIpc(sales)
+  registerUsersIpc(users)
+  registerAuditIpc(audit)
+  registerCashIpc(cash)
+  registerPurchasesIpc(purchases)
 }

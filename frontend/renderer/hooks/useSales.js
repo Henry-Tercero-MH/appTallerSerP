@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as salesService from '@/services/salesService.js'
 import { saleKeys } from './queryKeys.js'
 
@@ -30,5 +30,32 @@ export function useSales(opts = {}) {
     queryFn: () => salesService.list(opts),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
+  })
+}
+
+/**
+ * Anula una venta e invalida el historial y el detalle.
+ */
+export function useVoidSale() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: salesService.voidSale,
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: saleKeys.all })
+      qc.invalidateQueries({ queryKey: saleKeys.detail(variables.saleId) })
+    },
+  })
+}
+
+/**
+ * Reporte del día: totales + top 5 productos.
+ * Se refresca cada 60s y al invalidar saleKeys.all (tras crear venta).
+ */
+export function useDailyReport() {
+  return useQuery({
+    queryKey: [...saleKeys.all, 'daily-report'],
+    queryFn: salesService.dailyReport,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
   })
 }

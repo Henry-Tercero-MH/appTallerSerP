@@ -10,10 +10,12 @@ import { Toaster as SonnerToaster } from 'sonner'
 export function Toaster(props) {
   return (
     <SonnerToaster
-      position="bottom-right"
+      position="top-left"
+      offset={{ left: 250, top: 16 }}
       richColors
       closeButton
       toastOptions={{
+        duration: 1000,
         classNames: {
           toast: 'bg-card text-card-foreground border border-border shadow-md',
           title: 'font-semibold',

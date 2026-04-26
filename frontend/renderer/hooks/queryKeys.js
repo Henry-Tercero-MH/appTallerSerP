@@ -29,3 +29,8 @@ export const customerKeys = {
 export const settingsKeys = {
   all: /** @type {const} */ (['settings']),
 }
+
+export const auditKeys = {
+  all:  /** @type {const} */ (['audit']),
+  list: (/** @type {object} */ opts) => /** @type {const} */ (['audit', 'list', opts]),
+}

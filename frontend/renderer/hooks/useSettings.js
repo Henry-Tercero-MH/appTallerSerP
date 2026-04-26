@@ -38,3 +38,19 @@ export function useTaxSettings() {
     included: typeof tax?.tax_included_in_price === 'boolean' ? tax.tax_included_in_price : false,
   }
 }
+
+export function useBusinessSettings() {
+  const { data } = useSettings()
+  const b   = /** @type {Record<string,unknown>|undefined} */ (data?.business)
+  const app = /** @type {Record<string,unknown>|undefined} */ (data?.app)
+  return {
+    name:        typeof app?.app_name         === 'string' && app.app_name         ? app.app_name         : (typeof b?.business_name === 'string' && b.business_name ? b.business_name : 'SerProMec'),
+    logo:        typeof b?.business_logo_base64 === 'string' ? b.business_logo_base64 : '',
+    nit:         typeof b?.business_nit      === 'string' ? b.business_nit      : '',
+    address:     typeof b?.business_address  === 'string' ? b.business_address  : '',
+    phone:       typeof b?.business_phone    === 'string' ? b.business_phone    : '',
+    email:       typeof b?.business_email    === 'string' ? b.business_email    : '',
+    city:        typeof b?.business_city     === 'string' ? b.business_city     : '',
+    country:     typeof b?.business_country  === 'string' ? b.business_country  : '',
+  }
+}

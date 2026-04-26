@@ -1,4 +1,4 @@
-import { Printer, ReceiptText, UserRound } from 'lucide-react'
+import { Printer, ReceiptText, UserRound, Ban } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -39,8 +39,16 @@ export function SaleDetailDialog({ open, onOpenChange, saleId }) {
       <DialogContent className="max-w-xl">
         <DialogHeader className="no-print">
           <DialogTitle className="flex items-center gap-2">
-            <ReceiptText className="h-5 w-5 text-primary" />
+            {data?.status === 'voided'
+              ? <Ban className="h-5 w-5 text-destructive" />
+              : <ReceiptText className="h-5 w-5 text-primary" />
+            }
             {saleId != null ? `Venta #${saleId}` : 'Venta'}
+            {data?.status === 'voided' && (
+              <span className="ml-1 rounded-full bg-destructive/10 border border-destructive/30 px-2 py-0.5 text-xs font-bold text-destructive">
+                ANULADA
+              </span>
+            )}
           </DialogTitle>
         </DialogHeader>
 
@@ -84,10 +92,48 @@ export function SaleDetailDialog({ open, onOpenChange, saleId }) {
  * @param {{ sale: import('@/schemas/sale.schema').SaleWithItems }} props
  */
 function Ticket({ sale }) {
-  const taxPct = Math.round(sale.tax_rate_applied * 100)
+  const taxPct   = Math.round(sale.tax_rate_applied * 100)
+  const isVoided = sale.status === 'voided'
 
   return (
-    <div className="print-friendly space-y-4 text-sm">
+    <div className="print-friendly space-y-4 text-sm relative overflow-hidden">
+      {/* Marca de agua ANULADA */}
+      {isVoided && (
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            pointerEvents: 'none',
+            zIndex: 10,
+            transform: 'rotate(-30deg)',
+          }}
+        >
+          <span style={{
+            fontSize: 72,
+            fontWeight: 900,
+            color: 'rgba(220,38,38,0.12)',
+            letterSpacing: '0.05em',
+            textTransform: 'uppercase',
+            userSelect: 'none',
+            whiteSpace: 'nowrap',
+          }}>
+            ANULADA
+          </span>
+        </div>
+      )}
+
+      {/* Banner de anulación */}
+      {isVoided && (
+        <div className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2">
+          <span className="text-xs font-bold text-destructive uppercase tracking-wide">⚠ Venta anulada</span>
+          <span className="text-xs text-destructive/70">— Los montos mostrados son de referencia histórica.</span>
+        </div>
+      )}
+
       <header className="space-y-1 text-center">
         <p className="text-base font-semibold">Comprobante de venta</p>
         <p className="text-xs text-muted-foreground">
