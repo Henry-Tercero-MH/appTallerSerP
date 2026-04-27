@@ -20,6 +20,8 @@
  * @property {number} [customerId]
  * @property {string} [paymentMethod]
  * @property {string} [clientType]
+ * @property {'none'|'percent'|'fixed'} [discountType]
+ * @property {number} [discountValue]
  */
 
 /**
@@ -135,8 +137,21 @@ export function createSalesService(repo, settings, customers, audit) {
       const customer = customers.requireById(customerId)
 
       const rawSum = input.items.reduce((acc, i) => acc + i.price * i.qty, 0)
+
+      const discountType  = input.discountType  ?? 'none'
+      const discountValue = input.discountValue ?? 0
+      const factor = Math.pow(10, decimals)
+      const roundD = (n) => Math.round(n * factor) / factor
+      let discountAmount = 0
+      if (discountType === 'percent' && discountValue > 0) {
+        discountAmount = roundD(rawSum * (discountValue / 100))
+      } else if (discountType === 'fixed' && discountValue > 0) {
+        discountAmount = roundD(Math.min(discountValue, rawSum))
+      }
+      const discountedSum = roundD(Math.max(0, rawSum - discountAmount))
+
       const { subtotal, taxAmount, total } = computeBreakdown(
-        rawSum,
+        discountedSum,
         taxRate,
         taxIncluded,
         decimals
@@ -148,12 +163,15 @@ export function createSalesService(repo, settings, customers, audit) {
         taxRate,
         taxAmount,
         total,
-        currencyCode: currency,
+        currencyCode:  currency,
         customerId,
         customerNameSnapshot: customer.name,
-        customerNitSnapshot: customer.nit,
-        paymentMethod: input.paymentMethod ?? 'cash',
-        clientType:    input.clientType    ?? 'cf',
+        customerNitSnapshot:  customer.nit,
+        paymentMethod:  input.paymentMethod ?? 'cash',
+        clientType:     input.clientType    ?? 'cf',
+        discountType,
+        discountValue,
+        discountAmount,
       })
 
       return {
@@ -188,14 +206,18 @@ export function createSalesService(repo, settings, customers, audit) {
      * @returns {SaleListResult}
      */
     list(opts = {}) {
-      const page = Number.isInteger(opts.page) && /** @type {number} */ (opts.page) > 0 ? /** @type {number} */ (opts.page) : 1
+      const page      = Number.isInteger(opts.page) && /** @type {number} */ (opts.page) > 0 ? /** @type {number} */ (opts.page) : 1
       const requested = Number.isInteger(opts.pageSize) && /** @type {number} */ (opts.pageSize) > 0 ? /** @type {number} */ (opts.pageSize) : 50
-      const pageSize = Math.min(requested, MAX_PAGE_SIZE)
-      const offset = (page - 1) * pageSize
+      const pageSize  = Math.min(requested, MAX_PAGE_SIZE)
+      const offset    = (page - 1) * pageSize
+      const search    = opts.search?.trim()  || null
+      const from      = opts.from?.trim()    || null
+      const to        = opts.to?.trim()      || null
+      const status    = opts.status?.trim()  || null
 
       return {
-        data: repo.findPage({ limit: pageSize, offset }),
-        total: repo.countAll(),
+        data:  repo.findPage({ limit: pageSize, offset, search, from, to, status }),
+        total: repo.countAll({ search, from, to, status }),
         page,
         pageSize,
       }

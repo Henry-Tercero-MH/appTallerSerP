@@ -8,6 +8,7 @@ import {
   PowerOff,
   Power,
   Printer,
+  RefreshCw,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -22,9 +23,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 
-import { PageHeader } from '@/components/shared/PageHeader'
-import { EmptyState } from '@/components/shared/EmptyState'
-import { MoneyDisplay } from '@/components/shared/MoneyDisplay'
+import { PageHeader }     from '@/components/shared/PageHeader'
+import { EmptyState }     from '@/components/shared/EmptyState'
+import { MoneyDisplay }   from '@/components/shared/MoneyDisplay'
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 
 import {
@@ -33,13 +34,119 @@ import {
   useUpdateProduct,
   useRemoveProduct,
   useRestoreProduct,
-  useAdjustStock,
 } from './inventoryStore'
+import { useAdjustStock, useInventoryMovements } from '@/hooks/useInventory'
+import { useAuthContext } from '@/features/auth/AuthContext'
 import ProductForm from './ProductForm'
 import StockMovementModal from './StockMovementModal'
 
+const MVT_LABELS = {
+  in:         { label: 'Entrada',     cls: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
+  out:        { label: 'Salida',      cls: 'text-red-700 bg-red-50 border-red-200' },
+  adjustment: { label: 'Ajuste',      cls: 'text-blue-700 bg-blue-50 border-blue-200' },
+  sale:       { label: 'Venta',       cls: 'text-amber-700 bg-amber-50 border-amber-200' },
+  purchase:   { label: 'Compra',      cls: 'text-violet-700 bg-violet-50 border-violet-200' },
+  return:     { label: 'Devolución',  cls: 'text-teal-700 bg-teal-50 border-teal-200' },
+}
+
+const mvtDateFmt = new Intl.DateTimeFormat('es-GT', {
+  dateStyle: 'short', timeStyle: 'short', hour12: false,
+})
+
+function MovementsTab() {
+  const [mvtPage, setMvtPage] = useState(1)
+  const PAGE_SIZE = 50
+  const { data, isLoading, refetch, isFetching } = useInventoryMovements({ page: mvtPage, pageSize: PAGE_SIZE })
+
+  const movements  = data?.data  ?? []
+  const total      = data?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+  if (isLoading) return <LoadingSpinner label="Cargando movimientos..." className="py-10" />
+
+  if (movements.length === 0) return (
+    <EmptyState
+      title="Sin movimientos registrados"
+      description="Los ajustes de stock, ventas, compras y devoluciones aparecerán aquí."
+    />
+  )
+
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching}>
+          <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? 'animate-spin' : ''}`} />
+        </Button>
+      </div>
+
+      <div className="sh-table-card">
+        <div className="sh-table-scroll">
+          <table className="sh-table">
+            <thead>
+              <tr>
+                <th className="sh-th w-36">Fecha</th>
+                <th className="sh-th">Producto</th>
+                <th className="sh-th w-28">Tipo</th>
+                <th className="sh-th sh-num w-20">Cant.</th>
+                <th className="sh-th w-28">Stock</th>
+                <th className="sh-th">Notas</th>
+                <th className="sh-th w-28">Usuario</th>
+              </tr>
+            </thead>
+            <tbody>
+              {movements.map((m, idx) => {
+                const t          = MVT_LABELS[m.type] ?? { label: m.type, cls: '' }
+                const isPositive = m.qty_after >= m.qty_before
+                return (
+                  <tr key={m.id} className={idx % 2 === 0 ? 'sh-tr-even' : 'sh-tr-odd'}>
+                    <td className="sh-td sh-muted text-xs">
+                      {mvtDateFmt.format(new Date(m.created_at.replace(' ', 'T')))}
+                    </td>
+                    <td className="sh-td font-medium text-sm">{m.product_name}</td>
+                    <td className="sh-td">
+                      <span className={`sh-payment-badge text-xs ${t.cls}`}>{t.label}</span>
+                    </td>
+                    <td className="sh-td sh-num">
+                      <span className={isPositive ? 'text-emerald-600 font-semibold' : 'text-red-600 font-semibold'}>
+                        {isPositive ? '+' : '-'}{m.qty}
+                      </span>
+                    </td>
+                    <td className="sh-td sh-muted text-xs">
+                      {m.qty_before} → {m.qty_after}
+                    </td>
+                    <td className="sh-td sh-muted text-xs truncate max-w-[180px]">{m.notes ?? '—'}</td>
+                    <td className="sh-td sh-muted text-xs">{m.created_by_name ?? '—'}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>{total} movimientos en total</span>
+          <div className="flex items-center gap-1">
+            <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs"
+              disabled={mvtPage <= 1} onClick={() => setMvtPage(p => p - 1)}>
+              Anterior
+            </Button>
+            <span className="px-2">Pág. {mvtPage} / {totalPages}</span>
+            <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs"
+              disabled={mvtPage >= totalPages} onClick={() => setMvtPage(p => p + 1)}>
+              Siguiente
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function InventoryPage() {
-  const { data: products = /** @type {import('@/schemas/product.schema.js').ProductList} */ ([]), isLoading, isError } = useInventoryProducts()
+  const { user } = useAuthContext()
+  const { data: products = [], isLoading, isError } = useInventoryProducts()
 
   const createProduct  = useCreateProduct()
   const updateProduct  = useUpdateProduct()
@@ -47,9 +154,9 @@ export default function InventoryPage() {
   const restoreProduct = useRestoreProduct()
   const adjustStock    = useAdjustStock()
 
-  const [modal, setModal]             = useState(/** @type {any} */ (null))
-  const [activeTab, setActiveTab]     = useState(/** @type {'inventory'|'movements'} */ ('inventory'))
-  const [search, setSearch]           = useState('')
+  const [modal,        setModal]        = useState(null)
+  const [activeTab,    setActiveTab]    = useState('inventory')
+  const [search,       setSearch]       = useState('')
   const [showInactive, setShowInactive] = useState(false)
 
   const filteredProducts = useMemo(() => {
@@ -69,7 +176,7 @@ export default function InventoryPage() {
   const totalUnits   = products.reduce((acc, p) => acc + (p.is_active === 1 ? p.stock : 0), 0)
   const lowStockList = products.filter((p) => p.is_active === 1 && p.stock <= p.min_stock)
 
-  const handleProductSave = (/** @type {any} */ data) => {
+  const handleProductSave = (data) => {
     if (modal?.productEdit) {
       updateProduct.mutate({ id: modal.productEdit.id, patch: data })
     } else {
@@ -78,12 +185,19 @@ export default function InventoryPage() {
     setModal(null)
   }
 
-  const handleMovementSave = (/** @type {any} */ mvtData) => {
-    adjustStock.mutate({ id: mvtData.productId, type: mvtData.type, qty: mvtData.qty })
+  const handleMovementSave = (mvtData) => {
+    adjustStock.mutate({
+      productId:      mvtData.productId,
+      type:           mvtData.type,
+      qty:            mvtData.qty,
+      notes:          mvtData.notes,
+      createdBy:      user?.id,
+      createdByName:  user?.full_name,
+    })
     setModal(null)
   }
 
-  const handleDeactivate = (/** @type {any} */ p) => {
+  const handleDeactivate = (p) => {
     removeProduct.mutate(p.id)
     setModal(null)
   }
@@ -145,7 +259,7 @@ export default function InventoryPage() {
             <Package className="mr-2 h-4 w-4" /> Listado de inventario
           </TabButton>
           <TabButton active={activeTab === 'movements'} onClick={() => setActiveTab('movements')}>
-            <ClipboardList className="mr-2 h-4 w-4" /> Movimientos recientes
+            <ClipboardList className="mr-2 h-4 w-4" /> Movimientos / Kardex
           </TabButton>
         </div>
 
@@ -263,12 +377,7 @@ export default function InventoryPage() {
             </>
           )}
 
-          {activeTab === 'movements' && (
-            <EmptyState
-              title="Historial de movimientos"
-              description="Los movimientos de stock se registran en esta sesión. El historial completo estará disponible próximamente."
-            />
-          )}
+          {activeTab === 'movements' && <MovementsTab />}
         </CardContent>
       </Card>
 

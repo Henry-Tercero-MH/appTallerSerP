@@ -88,14 +88,16 @@ export const useCartStore = create(
           }
         }),
 
-      clear: () => set({ items: [], customer: null }),
+      discount: /** @type {{ type: 'none'|'percent'|'fixed', value: number }} */ ({ type: 'none', value: 0 }),
+      setDiscount: (type, value) => set({ discount: { type, value } }),
+
+      clear: () => set({ items: [], customer: null, discount: { type: 'none', value: 0 } }),
       setCustomer: (customer) => set({ customer }),
     }),
     {
       name: 'cart-store',
       storage,
-      // Persistir solo estado, no acciones (zustand ya lo hace pero explicitar).
-      partialize: (state) => ({ items: state.items, customer: state.customer }),
+      partialize: (state) => ({ items: state.items, customer: state.customer, discount: state.discount }),
     }
   )
 )
@@ -112,9 +114,8 @@ export const selectItemCount = (state) => state.items.reduce((acc, i) => acc + i
 export const selectSubtotal = (state) =>
   state.items.reduce((acc, i) => acc + i.price * i.qty, 0)
 
-/**
- * Total sin impuesto (igual a subtotal hoy; cuando main aplique tax_rate
- * snapshotado, este selector dejara de usarse para el total final).
- * @param {CartState} state
- */
+/** @param {CartState} state */
+export const selectDiscount = (state) => state.discount ?? { type: 'none', value: 0 }
+
+/** @param {CartState} state */
 export const selectTotal = (state) => selectSubtotal(state)

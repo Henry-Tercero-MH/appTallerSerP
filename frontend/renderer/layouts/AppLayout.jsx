@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuthContext } from '../features/auth/AuthContext';
 import { useBusinessSettings } from '../hooks/useSettings';
+import { useInventoryProducts } from '../features/warehouses/inventoryStore';
 import { ROUTES } from '../lib/constants';
 import {
   MdDashboard,
@@ -18,7 +19,7 @@ import {
   MdChevronRight,
   MdShield,
 } from 'react-icons/md';
-import { Landmark, ShoppingCart, Wallet, FileText } from 'lucide-react';
+import { Landmark, ShoppingCart, Wallet, FileText, TrendingDown } from 'lucide-react';
 
 const NAV = [
   { to: ROUTES.DASHBOARD, label: 'Dashboard',         icon: MdDashboard },
@@ -34,6 +35,7 @@ const ADMIN_NAV = [
   { to: ROUTES.PURCHASES,   label: 'Compras',            icon: ShoppingCart },
   { to: ROUTES.RECEIVABLES, label: 'Cuentas por Cobrar', icon: Wallet },
   { to: ROUTES.QUOTES,      label: 'Cotizaciones',       icon: FileText },
+  { to: ROUTES.EXPENSES,    label: 'Gastos',             icon: TrendingDown },
   { to: ROUTES.USERS,     label: 'Usuarios',        icon: MdManageAccounts },
   { to: ROUTES.SETTINGS,  label: 'Configuración',   icon: MdSettings },
   { to: ROUTES.AUDIT,     label: 'Bitácora',        icon: MdShield },
@@ -66,6 +68,8 @@ export default function AppLayout() {
 
   const isAdmin = user?.role === 'admin';
   const { name: appName, logo } = useBusinessSettings();
+  const { data: products = [] }  = useInventoryProducts();
+  const lowStockCount = products.filter(p => p.is_active === 1 && p.stock <= p.min_stock).length;
 
   return (
     <div className={`app-shell${collapsed ? ' sidebar-collapsed' : ''}`}>
@@ -96,7 +100,14 @@ export default function AppLayout() {
                 `nav-item${isActive ? ' nav-item-active' : ''}${collapsed ? ' nav-item-collapsed' : ''}`
               }
             >
-              <Icon className="nav-icon" />
+              <span className="relative">
+                <Icon className="nav-icon" />
+                {to === ROUTES.INVENTORY && lowStockCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 h-4 min-w-[16px] px-0.5 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center leading-none">
+                    {lowStockCount > 9 ? '9+' : lowStockCount}
+                  </span>
+                )}
+              </span>
               {!collapsed && <span className="nav-label">{label}</span>}
             </NavLink>
           ))}

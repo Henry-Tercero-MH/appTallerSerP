@@ -17,7 +17,14 @@ import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { useSettings }        from '@/hooks/useSettings'
 import * as settingsService   from '@/services/settingsService.js'
 import { settingsKeys }       from '@/hooks/queryKeys.js'
-import { THEMES, applyTheme } from '@/lib/themes'
+import { THEMES, THEME_MAP, applyTheme } from '@/lib/themes'
+
+const THEME_GROUPS = [
+  { label: 'Clásicos',  ids: ['crimson','ocean','forest','violet','slate','amber','rose','teal','indigo','emerald','coral','carbon'] },
+  { label: 'Claros',    ids: ['light-sky','light-sand'] },
+  { label: 'Mate',      ids: ['matte-steel','matte-earth'] },
+  { label: 'Neón',      ids: ['neon-cyan','neon-magenta'] },
+]
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -143,43 +150,53 @@ function ThemeSection({ currentTheme, appName, setMut, upsertMut }) {
       </Card>
 
       <Dialog open={open} onOpenChange={(o) => { if (!o) handleCancel() }}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Palette className="h-4 w-4" /> Elegir paleta de colores
             </DialogTitle>
           </DialogHeader>
 
-          <div className="grid grid-cols-2 gap-3 py-2">
-            {THEMES.map((theme) => {
-              const selected = preview === theme.id
+          <div className="max-h-[60vh] overflow-y-auto pr-1 space-y-4 py-1">
+            {THEME_GROUPS.map(({ label, ids }) => {
+              const themes = ids.map(id => THEME_MAP[id]).filter(Boolean)
               return (
-                <button
-                  key={theme.id}
-                  type="button"
-                  onClick={() => handleSelect(theme.id)}
-                  className={[
-                    'relative flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
-                    selected
-                      ? 'border-primary bg-primary/5'
-                      : 'border-border hover:border-muted-foreground/40',
-                  ].join(' ')}
-                >
-                  <div className="flex flex-col gap-1 shrink-0">
-                    {[theme.preview.sidebar, theme.preview.primary, theme.preview.accent].map((c, i) => (
-                      <span key={i} className="block h-4 w-4 rounded-full border border-black/10" style={{ background: c }} />
-                    ))}
+                <div key={label}>
+                  <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2 px-0.5">{label}</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {themes.map((theme) => {
+                      const selected = preview === theme.id
+                      return (
+                        <button
+                          key={theme.id}
+                          type="button"
+                          onClick={() => handleSelect(theme.id)}
+                          className={[
+                            'relative flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+                            selected
+                              ? 'border-primary bg-primary/5'
+                              : 'border-border hover:border-muted-foreground/40',
+                          ].join(' ')}
+                        >
+                          <div className="flex gap-1 shrink-0">
+                            {[theme.preview.sidebar, theme.preview.primary, theme.preview.accent].map((c, i) => (
+                              <span key={i} className="block h-5 w-5 rounded-full border border-black/10" style={{ background: c }} />
+                            ))}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold leading-tight truncate">{theme.name}</p>
+                            <p className="text-xs text-muted-foreground leading-tight mt-0.5 line-clamp-2">{theme.description}</p>
+                          </div>
+                          {selected && (
+                            <span className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-white">
+                              <Check className="h-3 w-3" />
+                            </span>
+                          )}
+                        </button>
+                      )
+                    })}
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold leading-tight">{theme.name}</p>
-                    <p className="text-xs text-muted-foreground leading-tight mt-0.5">{theme.description}</p>
-                  </div>
-                  {selected && (
-                    <span className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-white">
-                      <Check className="h-3 w-3" />
-                    </span>
-                  )}
-                </button>
+                </div>
               )
             })}
           </div>

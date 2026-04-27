@@ -1,8 +1,8 @@
 import { useState, useMemo } from 'react'
 import {
-  BarChart3, RefreshCw, ShoppingCart, TrendingUp, Package,
+  BarChart3, RefreshCw, ShoppingCart, TrendingUp, TrendingDown, Package,
   FileSpreadsheet, FileText, Download, AlertTriangle, Users,
-  CalendarDays, ClipboardList, Clock, CreditCard,
+  CalendarDays, ClipboardList, Clock, CreditCard, Scale,
 } from 'lucide-react'
 import {
   BarChart, Bar, LineChart, Line,
@@ -17,6 +17,7 @@ import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { MoneyDisplay } from '@/components/shared/MoneyDisplay'
 
 import { useDailyReport, useRangeReport } from '@/hooks/useSales'
+import { useExpenseSummary }              from '@/hooks/useExpenses'
 import { useProducts }        from '@/hooks/useProducts'
 import { useSearchCustomers } from '@/hooks/useCustomers'
 
@@ -49,9 +50,15 @@ export default function ReportsPage() {
   })
   const [chartType, setChartType] = useState(/** @type {'bar'|'line'} */ ('bar'))
   const [loadingReport, setLoadingReport] = useState(/** @type {string|null} */ (null))
+  const [plRange, setPlRange] = useState({
+    from: new Date(Date.now() - 29 * 86400_000).toISOString().slice(0, 10),
+    to:   new Date().toISOString().slice(0, 10),
+  })
 
   const { data: dailyData, isLoading: dailyLoading, isError: dailyError, refetch, isFetching } = useDailyReport()
   const { data: rangeData, isLoading: rangeLoading } = useRangeReport(chartRange)
+  const { data: plRangeData }   = useRangeReport(plRange)
+  const { data: plExpenses }    = useExpenseSummary(plRange.from, plRange.to)
   const { data: products = [] } = useProducts()
   const { data: customers = [] } = useSearchCustomers('', { includeInactive: true })
 
@@ -145,6 +152,14 @@ export default function ReportsPage() {
 
       {/* ── Análisis por rango ────────────────────────────────────────────── */}
       <AnalyticsSection chartRange={chartRange} setChartRange={setChartRange} rangeData={rangeData} rangeLoading={rangeLoading} />
+
+      {/* ── P&L Ingresos vs Egresos ─────────────────────────────────────────── */}
+      <PLSection
+        plRange={plRange}
+        setPlRange={setPlRange}
+        rangeData={plRangeData}
+        expenses={plExpenses}
+      />
 
       {/* ── Sección de reportes descargables ──────────────────────────────── */}
       <div className="rp-downloads-title">
@@ -305,6 +320,114 @@ export default function ReportsPage() {
         />
 
       </div>
+    </div>
+  )
+}
+
+// ─── P&L ─────────────────────────────────────────────────────────────────────
+
+function PLSection({ plRange, setPlRange, rangeData, expenses }) {
+  const ingresos = rangeData?.series?.reduce((s, r) => s + r.total, 0) ?? 0
+  const egresos  = expenses?.total ?? 0
+  const utilidad = ingresos - egresos
+  const margen   = ingresos > 0 ? ((utilidad / ingresos) * 100).toFixed(1) : '0.0'
+
+  return (
+    <div className="rp-chart-section">
+      <div className="rp-chart-header">
+        <div className="rp-section-header">
+          <Scale className="h-4 w-4 text-primary" />
+          <span>Ingresos vs Egresos (P&amp;L)</span>
+        </div>
+        <div className="rp-date-range">
+          <div className="rp-date-field">
+            <label>Desde</label>
+            <input type="date" value={plRange.from}
+              onChange={e => setPlRange(r => ({ ...r, from: e.target.value }))}
+              className="al-filter-input" />
+          </div>
+          <div className="rp-date-field">
+            <label>Hasta</label>
+            <input type="date" value={plRange.to}
+              onChange={e => setPlRange(r => ({ ...r, to: e.target.value }))}
+              className="al-filter-input" />
+          </div>
+        </div>
+      </div>
+
+      <div className="rp-kpi-grid">
+        <div className="rp-kpi">
+          <div className="rp-kpi-top">
+            <TrendingUp className="h-4 w-4 text-emerald-600" />
+            <span className="rp-kpi-label">Ingresos (ventas)</span>
+          </div>
+          <div className="rp-kpi-value text-emerald-700">{fmtMoney(ingresos)}</div>
+        </div>
+        <div className="rp-kpi">
+          <div className="rp-kpi-top">
+            <TrendingDown className="h-4 w-4 text-red-500" />
+            <span className="rp-kpi-label">Egresos (gastos)</span>
+          </div>
+          <div className="rp-kpi-value text-red-600">{fmtMoney(egresos)}</div>
+        </div>
+        <div className={`rp-kpi ${utilidad >= 0 ? 'rp-kpi-hl' : ''}`} style={utilidad < 0 ? { borderColor: '#fca5a5', background: '#fff1f2' } : {}}>
+          <div className="rp-kpi-top">
+            <Scale className="h-4 w-4" style={{ color: utilidad >= 0 ? 'var(--primary)' : '#dc2626' }} />
+            <span className="rp-kpi-label">Utilidad neta</span>
+          </div>
+          <div className="rp-kpi-value" style={{ color: utilidad >= 0 ? 'var(--primary)' : '#dc2626' }}>
+            {fmtMoney(utilidad)}
+          </div>
+          <p className="rp-kpi-suffix">Margen: {margen}%</p>
+        </div>
+        <div className="rp-kpi">
+          <div className="rp-kpi-top">
+            <BarChart3 className="h-4 w-4 text-violet-500" />
+            <span className="rp-kpi-label">Gastos registrados</span>
+          </div>
+          <div className="rp-kpi-value">{expenses?.count ?? 0}</div>
+          <p className="rp-kpi-suffix">registros en el período</p>
+        </div>
+      </div>
+
+      {expenses?.byCategory?.length > 0 && (
+        <div className="sh-table-card mt-4">
+          <div className="rp-section-header px-3 pt-3">
+            <TrendingDown className="h-3.5 w-3.5 text-red-500" />
+            <span className="text-sm font-medium">Gastos por categoría</span>
+          </div>
+          <div className="sh-table-scroll">
+            <table className="sh-table">
+              <thead>
+                <tr>
+                  <th className="sh-th">Categoría</th>
+                  <th className="sh-th sh-num w-32">Monto</th>
+                  <th className="sh-th w-36">% del total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {expenses.byCategory.map((cat, i) => {
+                  const pct = egresos > 0 ? ((cat.total / egresos) * 100).toFixed(1) : '0'
+                  return (
+                    <tr key={cat.category} className={i % 2 === 0 ? 'sh-tr-even' : 'sh-tr-odd'}>
+                      <td className="sh-td font-medium capitalize">{cat.category}</td>
+                      <td className="sh-td sh-num text-red-600 font-semibold">{fmtMoney(cat.total)}</td>
+                      <td className="sh-td">
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 bg-muted rounded-full h-1.5">
+                            <div className="bg-red-400 rounded-full h-1.5" style={{ width: `${pct}%` }} />
+                          </div>
+                          <span className="text-xs text-muted-foreground w-10 text-right">{pct}%</span>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

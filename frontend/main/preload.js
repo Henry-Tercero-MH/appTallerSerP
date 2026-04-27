@@ -105,6 +105,29 @@ const api = {
     getPath: () => ipcRenderer.invoke('db:get-path'),
   },
 
+  expenses: {
+    list:       (opts)        => ipcRenderer.invoke('expenses:list', opts),
+    get:        (id)          => ipcRenderer.invoke('expenses:get', id),
+    create:     (input)       => ipcRenderer.invoke('expenses:create', input),
+    update:     (id, input)   => ipcRenderer.invoke('expenses:update', id, input),
+    remove:     (id)          => ipcRenderer.invoke('expenses:remove', id),
+    summary:    (from, to)    => ipcRenderer.invoke('expenses:summary', from, to),
+    categories: ()            => ipcRenderer.invoke('expenses:categories'),
+  },
+
+  returns: {
+    list:       ()        => ipcRenderer.invoke('returns:list'),
+    listBySale: (saleId)  => ipcRenderer.invoke('returns:list-by-sale', saleId),
+    get:        (id)      => ipcRenderer.invoke('returns:get', id),
+    create:     (input)   => ipcRenderer.invoke('returns:create', input),
+  },
+
+  inventory: {
+    stock:     ()      => ipcRenderer.invoke('inventory:stock'),
+    movements: (opts)  => ipcRenderer.invoke('inventory:movements', opts),
+    adjust:    (input) => ipcRenderer.invoke('inventory:adjust', input),
+  },
+
   receivables: {
     list:         ()       => ipcRenderer.invoke('receivables:list'),
     get:          (id)     => ipcRenderer.invoke('receivables:get', id),

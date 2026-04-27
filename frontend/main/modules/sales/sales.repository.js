@@ -65,7 +65,8 @@
 const SALE_COLUMNS = `
   id, subtotal, tax_rate_applied, tax_amount, total, currency_code, date,
   customer_id, customer_name_snapshot, customer_nit_snapshot,
-  payment_method, client_type, status
+  payment_method, client_type, status,
+  discount_type, discount_value, discount_amount
 `
 
 /**
@@ -77,8 +78,9 @@ export function createSalesRepository(db) {
       `INSERT INTO sales (
          total, subtotal, tax_rate_applied, tax_amount, currency_code,
          customer_id, customer_name_snapshot, customer_nit_snapshot,
-         payment_method, client_type
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         payment_method, client_type,
+         discount_type, discount_value, discount_amount
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ),
     insertItem: db.prepare(
       'INSERT INTO sale_items (sale_id, product_id, qty, price) VALUES (?, ?, ?, ?)'
@@ -101,13 +103,30 @@ export function createSalesRepository(db) {
         WHERE si.sale_id = ?
      ORDER BY si.id ASC`
     ),
-    selectPage: db.prepare(
-      `SELECT ${SALE_COLUMNS}
-         FROM sales
-     ORDER BY id DESC
-        LIMIT ? OFFSET ?`
-    ),
-    countAll: db.prepare('SELECT COUNT(*) AS total FROM sales'),
+    findPageFiltered: db.prepare(`
+      SELECT ${SALE_COLUMNS}
+        FROM sales
+       WHERE (@search IS NULL
+              OR lower(customer_name_snapshot) LIKE '%' || lower(@search) || '%'
+              OR lower(customer_nit_snapshot)  LIKE '%' || lower(@search) || '%'
+              OR CAST(id AS TEXT) LIKE '%' || @search || '%')
+         AND (@from   IS NULL OR date(date) >= @from)
+         AND (@to     IS NULL OR date(date) <= @to)
+         AND (@status IS NULL OR status = @status)
+       ORDER BY id DESC
+       LIMIT @limit OFFSET @offset
+    `),
+    countFiltered: db.prepare(`
+      SELECT COUNT(*) AS total
+        FROM sales
+       WHERE (@search IS NULL
+              OR lower(customer_name_snapshot) LIKE '%' || lower(@search) || '%'
+              OR lower(customer_nit_snapshot)  LIKE '%' || lower(@search) || '%'
+              OR CAST(id AS TEXT) LIKE '%' || @search || '%')
+         AND (@from   IS NULL OR date(date) >= @from)
+         AND (@to     IS NULL OR date(date) <= @to)
+         AND (@status IS NULL OR status = @status)
+    `),
 
     dailySummary: db.prepare(`
       SELECT
@@ -130,6 +149,15 @@ export function createSalesRepository(db) {
     restoreStock: db.prepare(
       `UPDATE products SET stock = stock + ? WHERE id = ?`
     ),
+    getProductForMove: db.prepare(
+      `SELECT id, name, stock FROM products WHERE id = ?`
+    ),
+    insertMovement: db.prepare(`
+      INSERT INTO stock_movements
+        (product_id, product_name, type, qty, qty_before, qty_after, reference_type, reference_id, notes, created_by, created_by_name)
+      VALUES
+        (@product_id, @product_name, @type, @qty, @qty_before, @qty_after, @reference_type, @reference_id, @notes, @created_by, @created_by_name)
+    `),
 
     topProducts: db.prepare(`
       SELECT
@@ -233,13 +261,31 @@ export function createSalesRepository(db) {
       record.customerId,
       record.customerNameSnapshot,
       record.customerNitSnapshot,
-      record.paymentMethod ?? 'cash',
-      record.clientType    ?? 'cf'
+      record.paymentMethod  ?? 'cash',
+      record.clientType     ?? 'cf',
+      record.discountType   ?? 'none',
+      record.discountValue  ?? 0,
+      record.discountAmount ?? 0
     )
     const saleId = info.lastInsertRowid
     for (const item of record.items) {
+      const prod       = stmts.getProductForMove.get(item.id)
+      const qtyBefore  = prod?.stock ?? 0
       stmts.insertItem.run(saleId, item.id, item.qty, item.price)
       stmts.updateStock.run(item.qty, item.id)
+      stmts.insertMovement.run({
+        product_id:      item.id,
+        product_name:    prod?.name ?? '',
+        type:            'sale',
+        qty:             item.qty,
+        qty_before:      qtyBefore,
+        qty_after:       qtyBefore - item.qty,
+        reference_type:  'sale',
+        reference_id:    saleId,
+        notes:           null,
+        created_by:      null,
+        created_by_name: null,
+      })
     }
     return saleId
   })
@@ -259,7 +305,22 @@ export function createSalesRepository(db) {
       if (info.changes === 0) return false
       stmts.insertVoid.run(input.saleId, input.reason, input.userId ?? null)
       for (const item of items) {
+        const prod      = stmts.getProductForMove.get(item.product_id)
+        const qtyBefore = prod?.stock ?? 0
         stmts.restoreStock.run(item.qty, item.product_id)
+        stmts.insertMovement.run({
+          product_id:      item.product_id,
+          product_name:    prod?.name ?? item.product_name ?? '',
+          type:            'in',
+          qty:             item.qty,
+          qty_before:      qtyBefore,
+          qty_after:       qtyBefore + item.qty,
+          reference_type:  'sale_void',
+          reference_id:    input.saleId,
+          notes:           `Anulación venta #${input.saleId}`,
+          created_by:      null,
+          created_by_name: null,
+        })
       }
       return true
     }),
@@ -281,16 +342,16 @@ export function createSalesRepository(db) {
     },
 
     /**
-     * @param {PageOptions} opts
+     * @param {{ limit: number, offset: number, search?: string|null, from?: string|null, to?: string|null, status?: string|null }} opts
      * @returns {SaleRow[]}
      */
-    findPage({ limit, offset }) {
-      return stmts.selectPage.all(limit, offset)
+    findPage({ limit, offset, search = null, from = null, to = null, status = null }) {
+      return stmts.findPageFiltered.all({ limit, offset, search, from, to, status })
     },
 
-    /** @returns {number} */
-    countAll() {
-      const row = /** @type {{ total: number }} */ (stmts.countAll.get())
+    /** @param {{ search?: string|null, from?: string|null, to?: string|null, status?: string|null }} [opts] */
+    countAll({ search = null, from = null, to = null, status = null } = {}) {
+      const row = /** @type {{ total: number }} */ (stmts.countFiltered.get({ search, from, to, status }))
       return row.total
     },
 

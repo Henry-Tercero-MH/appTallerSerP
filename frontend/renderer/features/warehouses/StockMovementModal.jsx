@@ -29,7 +29,7 @@ export default function StockMovementModal({ product, isEntry, onSave, onCancel 
         }
         onSave({
           productId: product.id,
-          type: isEntry ? 'entry' : 'exit',
+          type: isEntry ? 'in' : 'out',
           qty,
           notes,
         })

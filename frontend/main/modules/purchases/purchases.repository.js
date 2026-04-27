@@ -115,6 +115,15 @@ export function createPurchasesRepository(db) {
     updateProductCost: db.prepare(
       `UPDATE products SET cost = @cost WHERE id = @id`
     ),
+    getProductForMove: db.prepare(
+      `SELECT id, name, stock FROM products WHERE id = ?`
+    ),
+    insertMovement: db.prepare(`
+      INSERT INTO stock_movements
+        (product_id, product_name, type, qty, qty_before, qty_after, reference_type, reference_id, notes, created_by, created_by_name)
+      VALUES
+        (@product_id, @product_name, @type, @qty, @qty_before, @qty_after, @reference_type, @reference_id, @notes, @created_by, @created_by_name)
+    `),
   }
 
   return {
@@ -159,10 +168,25 @@ export function createPurchasesRepository(db) {
         /** @type {PurchaseItemRow} */
         const row = stmts.findItemsByOrder.all(orderId).find(i => i.id === item.id)
         if (row?.product_id && item.qty_received > 0) {
+          const prod      = stmts.getProductForMove.get(row.product_id)
+          const qtyBefore = prod?.stock ?? 0
           stmts.addStock.run({ id: row.product_id, qty: item.qty_received })
           if (row.unit_cost > 0) {
             stmts.updateProductCost.run({ id: row.product_id, cost: row.unit_cost })
           }
+          stmts.insertMovement.run({
+            product_id:      row.product_id,
+            product_name:    prod?.name ?? row.product_name,
+            type:            'purchase',
+            qty:             item.qty_received,
+            qty_before:      qtyBefore,
+            qty_after:       qtyBefore + item.qty_received,
+            reference_type:  'purchase',
+            reference_id:    orderId,
+            notes:           null,
+            created_by:      null,
+            created_by_name: null,
+          })
         }
         total += (row?.unit_cost ?? 0) * item.qty_received
       }

@@ -16,6 +16,7 @@ export const ROUTES = {
   PURCHASES:   '/compras',
   RECEIVABLES: '/cuentas-cobrar',
   QUOTES:      '/cotizaciones',
+  EXPENSES:    '/gastos',
 };
 
 export const ROLES = {

@@ -1,157 +1,74 @@
-import { app as S, ipcMain as l, dialog as K, BrowserWindow as X } from "electron";
-import Q, { join as v } from "node:path";
-import z from "path";
-import Z from "better-sqlite3";
-import J, { createHash as ee } from "node:crypto";
-const te = `-- 001_init.sql\r
--- Preserva el esquema actual (products, sales, sale_items) y la data semilla.\r
--- No cambia estructura: solo mueve la creacion a una migracion versionada.\r
--- Los redisenios de negocio iran en migraciones posteriores.\r
-\r
-CREATE TABLE IF NOT EXISTS products (\r
-  id    INTEGER PRIMARY KEY AUTOINCREMENT,\r
-  code  TEXT    NOT NULL UNIQUE,\r
-  name  TEXT    NOT NULL,\r
-  price REAL    NOT NULL,\r
-  stock INTEGER NOT NULL DEFAULT 0\r
-);\r
-\r
-CREATE TABLE IF NOT EXISTS sales (\r
-  id    INTEGER PRIMARY KEY AUTOINCREMENT,\r
-  total REAL    NOT NULL,\r
-  date  TEXT    DEFAULT CURRENT_TIMESTAMP\r
-);\r
-\r
-CREATE TABLE IF NOT EXISTS sale_items (\r
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,\r
-  sale_id    INTEGER NOT NULL,\r
-  product_id INTEGER NOT NULL,\r
-  qty        INTEGER NOT NULL,\r
-  price      REAL    NOT NULL,\r
-  FOREIGN KEY (sale_id)    REFERENCES sales(id),\r
-  FOREIGN KEY (product_id) REFERENCES products(id)\r
-);\r
-\r
--- Data semilla. INSERT OR IGNORE garantiza idempotencia si alguna instalacion\r
--- ya la tuviera (por ejemplo una DB preexistente del bootstrap antiguo).\r
-INSERT OR IGNORE INTO products (code, name, price, stock) VALUES\r
-  ('ACE-001', 'Aceite de Motor 10W40 Chevron',    45.00,  12),\r
-  ('FIL-002', 'Filtro de Aceite ECOBREX',         15.50,   5),\r
-  ('FRE-003', 'Pastillas de Freno Ceramicas',    120.00,   8),\r
-  ('BAT-004', 'Bateria 12V 70Ah LTH',            650.00,   2),\r
-  ('SRV-001', 'Servicio de Diagnostico Escaner', 150.00, 999);\r
-`, ne = `-- 002_settings.sql\r
--- Tabla de configuracion parametrica. \`type\` restringe los valores que el\r
--- service aceptara y como deserializa \`value\` (que siempre se almacena TEXT).\r
--- CHECK evita que la capa de datos quede en estado invalido incluso si alguien\r
--- escribe sin pasar por el service.\r
-\r
-CREATE TABLE IF NOT EXISTS settings (\r
-  key         TEXT PRIMARY KEY,\r
-  value       TEXT NOT NULL,\r
-  type        TEXT NOT NULL CHECK (type IN ('string', 'number', 'boolean', 'json')),\r
-  category    TEXT NOT NULL,\r
-  description TEXT NOT NULL DEFAULT '',\r
-  updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\r
-);\r
-\r
-CREATE INDEX IF NOT EXISTS idx_settings_category ON settings(category);\r
-\r
--- Valores por defecto. INSERT OR IGNORE para no sobrescribir nada que el\r
--- usuario haya editado antes (ej. tras reinstalar con DB preservada).\r
--- Booleans se almacenan como '0'/'1' por consistencia con el serializador.\r
-INSERT OR IGNORE INTO settings (key, value, type, category, description) VALUES\r
-  ('tax_rate',               '0.12',  'number',  'tax',      'IVA aplicado a ventas (decimal, ej. 0.12 = 12%)'),\r
-  ('tax_included_in_price',  '0',     'boolean', 'tax',      'Si los precios ya incluyen IVA'),\r
-  ('currency_code',          'GTQ',   'string',  'currency', 'Codigo ISO 4217 de la moneda'),\r
-  ('currency_symbol',        'Q',     'string',  'currency', 'Simbolo que se muestra en UI/tickets'),\r
-  ('decimal_places',         '2',     'number',  'currency', 'Decimales para mostrar importes'),\r
-  ('allow_negative_stock',   '0',     'boolean', 'inventory','Permitir vender sin stock disponible'),\r
-  ('business_name',          '',      'string',  'business', 'Razon social / nombre comercial'),\r
-  ('business_nit',           '',      'string',  'business', 'NIT del emisor'),\r
-  ('business_address',       '',      'string',  'business', 'Direccion fiscal'),\r
-  ('business_phone',         '',      'string',  'business', 'Telefono de contacto');\r
-`, re = `-- 003_sales_tax_snapshot.sql\r
--- Snapshotea impuesto y moneda al momento de la venta. Motivo: reimprimir\r
--- un ticket mañana con la tasa vigente hoy da totales distintos al cobrado,\r
--- lo cual es legalmente y contablemente invalido. Ver Prompt 1, seccion\r
--- "Snapshot de impuestos en ventas".\r
-\r
-ALTER TABLE sales ADD COLUMN subtotal         REAL NOT NULL DEFAULT 0;\r
-ALTER TABLE sales ADD COLUMN tax_rate_applied REAL NOT NULL DEFAULT 0;\r
-ALTER TABLE sales ADD COLUMN tax_amount       REAL NOT NULL DEFAULT 0;\r
-ALTER TABLE sales ADD COLUMN currency_code    TEXT NOT NULL DEFAULT 'GTQ';\r
-\r
--- Backfill dev: filas pre-migracion no tienen desglose historico. Asumimos\r
--- total == subtotal con tax_amount=0 para que la suma cuadre. Esto NO es\r
--- fielmente historico; en una migracion de produccion habria que coordinar\r
--- con contabilidad un criterio acordado (ej. retro-aplicar tax_rate actual).\r
-UPDATE sales SET subtotal = total WHERE subtotal = 0;\r
-`, ae = `-- 004_customers.sql\r
--- Tabla de clientes + enlace desde sales con snapshot de nombre/NIT.\r
---\r
--- Motivo snapshot: un cliente puede renombrarse o darse de baja despues de\r
--- emitir la venta. La reimpresion del ticket/factura debe mostrar el nombre\r
--- y NIT tal como estaban al momento del cobro. Misma logica que tax_rate\r
--- (ver migracion 003).\r
---\r
--- Sobre NIT: en Guatemala "C/F" (Consumidor Final) es un NIT valido y se\r
--- repite, asi que NO hay UNIQUE sobre la columna. Validacion fina queda en\r
--- la capa de servicio si se requiere.\r
-\r
-CREATE TABLE IF NOT EXISTS customers (\r
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,\r
-  nit         TEXT    NOT NULL DEFAULT 'C/F',\r
-  name        TEXT    NOT NULL,\r
-  email       TEXT,\r
-  phone       TEXT,\r
-  address     TEXT,\r
-  active      INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),\r
-  created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),\r
-  updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\r
-);\r
-\r
-CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name);\r
-CREATE INDEX IF NOT EXISTS idx_customers_nit  ON customers(nit);\r
-\r
--- Seed del cliente "Consumidor Final". id=1 reservado: los handlers lo\r
--- usan como fallback cuando el POS no identifica al cliente. Nunca\r
--- borrarlo; marcarlo como inactive no tiene sentido aqui.\r
-INSERT OR IGNORE INTO customers (id, nit, name) VALUES (1, 'C/F', 'Consumidor Final');\r
-\r
--- Columnas en sales. Nullable a nivel DB; la capa service siempre las\r
--- persiste no-null (con Consumidor Final como fallback).\r
-ALTER TABLE sales ADD COLUMN customer_id             INTEGER REFERENCES customers(id);\r
-ALTER TABLE sales ADD COLUMN customer_name_snapshot  TEXT;\r
-ALTER TABLE sales ADD COLUMN customer_nit_snapshot   TEXT;\r
-\r
--- Backfill: ventas pre-migracion se asocian a Consumidor Final.\r
-UPDATE sales\r
-   SET customer_id            = 1,\r
-       customer_name_snapshot = 'Consumidor Final',\r
-       customer_nit_snapshot  = 'C/F'\r
- WHERE customer_id IS NULL;\r
-`, se = `-- 005_products_extended.sql
--- Extiende la tabla products con los campos que usa el modulo de Inventario:
--- categoria, marca, ubicacion, condicion, stock minimo y estado activo.
---
--- Se usa ALTER TABLE ... ADD COLUMN porque la tabla ya existe con datos.
--- Todas las columnas nuevas tienen DEFAULT para que los 5 registros semilla
--- queden validos sin backfill manual.
---
--- is_active: 1=activo, 0=inactivo (soft-delete). Default 1 para no romper
--- productos existentes.
+import { app, ipcMain, dialog, BrowserWindow } from "electron";
+import path, { join } from "node:path";
+import path$1 from "path";
+import Database from "better-sqlite3";
+import crypto, { createHash } from "node:crypto";
+const __vite_glob_0_0 = "-- 001_init.sql\n-- Preserva el esquema actual (products, sales, sale_items) y la data semilla.\n-- No cambia estructura: solo mueve la creacion a una migracion versionada.\n-- Los redisenios de negocio iran en migraciones posteriores.\n\nCREATE TABLE IF NOT EXISTS products (\n  id    INTEGER PRIMARY KEY AUTOINCREMENT,\n  code  TEXT    NOT NULL UNIQUE,\n  name  TEXT    NOT NULL,\n  price REAL    NOT NULL,\n  stock INTEGER NOT NULL DEFAULT 0\n);\n\nCREATE TABLE IF NOT EXISTS sales (\n  id    INTEGER PRIMARY KEY AUTOINCREMENT,\n  total REAL    NOT NULL,\n  date  TEXT    DEFAULT CURRENT_TIMESTAMP\n);\n\nCREATE TABLE IF NOT EXISTS sale_items (\n  id         INTEGER PRIMARY KEY AUTOINCREMENT,\n  sale_id    INTEGER NOT NULL,\n  product_id INTEGER NOT NULL,\n  qty        INTEGER NOT NULL,\n  price      REAL    NOT NULL,\n  FOREIGN KEY (sale_id)    REFERENCES sales(id),\n  FOREIGN KEY (product_id) REFERENCES products(id)\n);\n\n-- Data semilla. INSERT OR IGNORE garantiza idempotencia si alguna instalacion\n-- ya la tuviera (por ejemplo una DB preexistente del bootstrap antiguo).\nINSERT OR IGNORE INTO products (code, name, price, stock) VALUES\n  ('ACE-001', 'Aceite de Motor 10W40 Chevron',    45.00,  12),\n  ('FIL-002', 'Filtro de Aceite ECOBREX',         15.50,   5),\n  ('FRE-003', 'Pastillas de Freno Ceramicas',    120.00,   8),\n  ('BAT-004', 'Bateria 12V 70Ah LTH',            650.00,   2),\n  ('SRV-001', 'Servicio de Diagnostico Escaner', 150.00, 999);\n";
+const __vite_glob_0_1 = "-- 002_settings.sql\n-- Tabla de configuracion parametrica. `type` restringe los valores que el\n-- service aceptara y como deserializa `value` (que siempre se almacena TEXT).\n-- CHECK evita que la capa de datos quede en estado invalido incluso si alguien\n-- escribe sin pasar por el service.\n\nCREATE TABLE IF NOT EXISTS settings (\n  key         TEXT PRIMARY KEY,\n  value       TEXT NOT NULL,\n  type        TEXT NOT NULL CHECK (type IN ('string', 'number', 'boolean', 'json')),\n  category    TEXT NOT NULL,\n  description TEXT NOT NULL DEFAULT '',\n  updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\n);\n\nCREATE INDEX IF NOT EXISTS idx_settings_category ON settings(category);\n\n-- Valores por defecto. INSERT OR IGNORE para no sobrescribir nada que el\n-- usuario haya editado antes (ej. tras reinstalar con DB preservada).\n-- Booleans se almacenan como '0'/'1' por consistencia con el serializador.\nINSERT OR IGNORE INTO settings (key, value, type, category, description) VALUES\n  ('tax_rate',               '0.12',  'number',  'tax',      'IVA aplicado a ventas (decimal, ej. 0.12 = 12%)'),\n  ('tax_included_in_price',  '0',     'boolean', 'tax',      'Si los precios ya incluyen IVA'),\n  ('currency_code',          'GTQ',   'string',  'currency', 'Codigo ISO 4217 de la moneda'),\n  ('currency_symbol',        'Q',     'string',  'currency', 'Simbolo que se muestra en UI/tickets'),\n  ('decimal_places',         '2',     'number',  'currency', 'Decimales para mostrar importes'),\n  ('allow_negative_stock',   '0',     'boolean', 'inventory','Permitir vender sin stock disponible'),\n  ('business_name',          '',      'string',  'business', 'Razon social / nombre comercial'),\n  ('business_nit',           '',      'string',  'business', 'NIT del emisor'),\n  ('business_address',       '',      'string',  'business', 'Direccion fiscal'),\n  ('business_phone',         '',      'string',  'business', 'Telefono de contacto');\n";
+const __vite_glob_0_2 = `-- 003_sales_tax_snapshot.sql
+-- Snapshotea impuesto y moneda al momento de la venta. Motivo: reimprimir
+-- un ticket mañana con la tasa vigente hoy da totales distintos al cobrado,
+-- lo cual es legalmente y contablemente invalido. Ver Prompt 1, seccion
+-- "Snapshot de impuestos en ventas".
 
-ALTER TABLE products ADD COLUMN category  TEXT    NOT NULL DEFAULT 'General';
-ALTER TABLE products ADD COLUMN brand     TEXT    NOT NULL DEFAULT '';
-ALTER TABLE products ADD COLUMN location  TEXT    NOT NULL DEFAULT '';
-ALTER TABLE products ADD COLUMN condition TEXT    NOT NULL DEFAULT 'Nuevo';
-ALTER TABLE products ADD COLUMN min_stock INTEGER NOT NULL DEFAULT 5;
-ALTER TABLE products ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1));
+ALTER TABLE sales ADD COLUMN subtotal         REAL NOT NULL DEFAULT 0;
+ALTER TABLE sales ADD COLUMN tax_rate_applied REAL NOT NULL DEFAULT 0;
+ALTER TABLE sales ADD COLUMN tax_amount       REAL NOT NULL DEFAULT 0;
+ALTER TABLE sales ADD COLUMN currency_code    TEXT NOT NULL DEFAULT 'GTQ';
 
-CREATE INDEX IF NOT EXISTS idx_products_category  ON products(category);
-CREATE INDEX IF NOT EXISTS idx_products_is_active ON products(is_active);
-`, oe = `-- 006_users.sql
+-- Backfill dev: filas pre-migracion no tienen desglose historico. Asumimos
+-- total == subtotal con tax_amount=0 para que la suma cuadre. Esto NO es
+-- fielmente historico; en una migracion de produccion habria que coordinar
+-- con contabilidad un criterio acordado (ej. retro-aplicar tax_rate actual).
+UPDATE sales SET subtotal = total WHERE subtotal = 0;
+`;
+const __vite_glob_0_3 = `-- 004_customers.sql
+-- Tabla de clientes + enlace desde sales con snapshot de nombre/NIT.
+--
+-- Motivo snapshot: un cliente puede renombrarse o darse de baja despues de
+-- emitir la venta. La reimpresion del ticket/factura debe mostrar el nombre
+-- y NIT tal como estaban al momento del cobro. Misma logica que tax_rate
+-- (ver migracion 003).
+--
+-- Sobre NIT: en Guatemala "C/F" (Consumidor Final) es un NIT valido y se
+-- repite, asi que NO hay UNIQUE sobre la columna. Validacion fina queda en
+-- la capa de servicio si se requiere.
+
+CREATE TABLE IF NOT EXISTS customers (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  nit         TEXT    NOT NULL DEFAULT 'C/F',
+  name        TEXT    NOT NULL,
+  email       TEXT,
+  phone       TEXT,
+  address     TEXT,
+  active      INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+  created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name);
+CREATE INDEX IF NOT EXISTS idx_customers_nit  ON customers(nit);
+
+-- Seed del cliente "Consumidor Final". id=1 reservado: los handlers lo
+-- usan como fallback cuando el POS no identifica al cliente. Nunca
+-- borrarlo; marcarlo como inactive no tiene sentido aqui.
+INSERT OR IGNORE INTO customers (id, nit, name) VALUES (1, 'C/F', 'Consumidor Final');
+
+-- Columnas en sales. Nullable a nivel DB; la capa service siempre las
+-- persiste no-null (con Consumidor Final como fallback).
+ALTER TABLE sales ADD COLUMN customer_id             INTEGER REFERENCES customers(id);
+ALTER TABLE sales ADD COLUMN customer_name_snapshot  TEXT;
+ALTER TABLE sales ADD COLUMN customer_nit_snapshot   TEXT;
+
+-- Backfill: ventas pre-migracion se asocian a Consumidor Final.
+UPDATE sales
+   SET customer_id            = 1,
+       customer_name_snapshot = 'Consumidor Final',
+       customer_nit_snapshot  = 'C/F'
+ WHERE customer_id IS NULL;
+`;
+const __vite_glob_0_4 = "-- 005_products_extended.sql\n-- Extiende la tabla products con los campos que usa el modulo de Inventario:\n-- categoria, marca, ubicacion, condicion, stock minimo y estado activo.\n--\n-- Se usa ALTER TABLE ... ADD COLUMN porque la tabla ya existe con datos.\n-- Todas las columnas nuevas tienen DEFAULT para que los 5 registros semilla\n-- queden validos sin backfill manual.\n--\n-- is_active: 1=activo, 0=inactivo (soft-delete). Default 1 para no romper\n-- productos existentes.\n\nALTER TABLE products ADD COLUMN category  TEXT    NOT NULL DEFAULT 'General';\nALTER TABLE products ADD COLUMN brand     TEXT    NOT NULL DEFAULT '';\nALTER TABLE products ADD COLUMN location  TEXT    NOT NULL DEFAULT '';\nALTER TABLE products ADD COLUMN condition TEXT    NOT NULL DEFAULT 'Nuevo';\nALTER TABLE products ADD COLUMN min_stock INTEGER NOT NULL DEFAULT 5;\nALTER TABLE products ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1));\n\nCREATE INDEX IF NOT EXISTS idx_products_category  ON products(category);\nCREATE INDEX IF NOT EXISTS idx_products_is_active ON products(is_active);\n";
+const __vite_glob_0_5 = `-- 006_users.sql
 -- Tabla de usuarios del sistema con autenticacion local.
 --
 -- SEGURIDAD:
@@ -207,220 +124,32 @@ UPDATE sales
    SET created_by_user_id       = 1,
        created_by_user_snapshot = 'Administrador'
  WHERE created_by_user_id IS NULL;
-`, ie = `-- 007_settings_extended.sql
--- Amplía la tabla settings con configuraciones de negocio genéricas:
--- identidad visual, contacto, ticket y preferencias de app.
--- INSERT OR IGNORE: nunca pisa valores que el usuario ya haya guardado.
-
-INSERT OR IGNORE INTO settings (key, value, type, category, description) VALUES
-  -- Identidad
-  ('business_email',       '',           'string',  'business',  'Correo electronico de contacto'),
-  ('business_website',     '',           'string',  'business',  'Sitio web del negocio'),
-  ('business_city',        '',           'string',  'business',  'Ciudad / municipio'),
-  ('business_country',     'Guatemala',  'string',  'business',  'Pais'),
-  ('business_logo_base64', '',           'string',  'business',  'Logo en base64 (data URL completa)'),
-
-  -- Ticket / impresion
-  ('ticket_footer_line1',  '',           'string',  'ticket',    'Primera linea del pie de ticket'),
-  ('ticket_footer_line2',  '',           'string',  'ticket',    'Segunda linea del pie de ticket'),
-  ('ticket_show_logo',     '1',          'boolean', 'ticket',    'Mostrar logo en el ticket impreso'),
-  ('ticket_show_tax',      '1',          'boolean', 'ticket',    'Desglosar IVA en el ticket'),
-  ('ticket_copies',        '1',          'number',  'ticket',    'Copias a imprimir por venta'),
-
-  -- Apariencia / app
-  ('app_name',             'SerProMec',  'string',  'app',       'Nombre que aparece en la barra lateral y titulo'),
-  ('app_accent_color',     '#e5001f',    'string',  'app',       'Color de acento principal (hex)');
-`, de = `-- 008_settings_theme.sql
--- Agrega la clave app_theme para persistir la paleta de colores seleccionada.
-
-INSERT OR IGNORE INTO settings (key, value, type, category, description) VALUES
-  ('app_theme', 'crimson', 'string', 'app', 'Paleta de colores del sistema (slug de tema)');
-`, ce = `-- 009_sales_payment.sql
--- Agrega método de pago y tipo de cliente a la tabla de ventas.
-
-ALTER TABLE sales ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'cash'
-  CHECK (payment_method IN ('cash', 'credit', 'card', 'transfer'));
-
-ALTER TABLE sales ADD COLUMN client_type TEXT NOT NULL DEFAULT 'cf'
-  CHECK (client_type IN ('cf', 'registered', 'company'));
-`, le = `-- 010_sales_void_audit.sql
--- Anulación de ventas + bitácora general de la aplicación.
-
--- 1. Estado de la venta (activa / anulada)
-ALTER TABLE sales ADD COLUMN status TEXT NOT NULL DEFAULT 'active'
-  CHECK (status IN ('active', 'voided'));
-
--- 2. Registro de anulaciones (quién anuló, por qué y cuándo)
-CREATE TABLE IF NOT EXISTS sale_voids (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  sale_id    INTEGER NOT NULL REFERENCES sales(id),
-  reason     TEXT    NOT NULL,
-  voided_by  INTEGER REFERENCES users(id),
-  voided_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
-);
-
--- 3. Bitácora general de eventos del sistema
-CREATE TABLE IF NOT EXISTS audit_log (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  action       TEXT NOT NULL,           -- 'sale_voided', 'sale_created', 'settings_changed', etc.
-  entity       TEXT,                    -- 'sale', 'product', 'user', ...
-  entity_id    INTEGER,
-  description  TEXT,                    -- texto legible del evento
-  payload_json TEXT,                    -- datos extra en JSON (opcional)
-  user_id      INTEGER REFERENCES users(id),
-  user_name    TEXT,                    -- snapshot del nombre al momento del evento
-  created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_audit_log_action     ON audit_log(action);
-CREATE INDEX IF NOT EXISTS idx_audit_log_entity     ON audit_log(entity, entity_id);
-CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at DESC);
-`, ue = `ALTER TABLE users ADD COLUMN avatar TEXT;
-`, Ee = `-- 012_cash_sessions.sql
--- Apertura y cierre de caja con movimientos manuales.
-
-CREATE TABLE IF NOT EXISTS cash_sessions (
-  id               INTEGER PRIMARY KEY AUTOINCREMENT,
-  opened_by        INTEGER NOT NULL REFERENCES users(id),
-  opened_by_name   TEXT    NOT NULL,
-  opened_at        TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
-  opening_amount   REAL    NOT NULL DEFAULT 0,
-  closed_by        INTEGER REFERENCES users(id),
-  closed_by_name   TEXT,
-  closed_at        TEXT,
-  closing_amount   REAL,
-  expected_amount  REAL,
-  difference       REAL,
-  notes            TEXT,
-  status           TEXT    NOT NULL DEFAULT 'open'
-                   CHECK (status IN ('open', 'closed'))
-);
-
-CREATE TABLE IF NOT EXISTS cash_movements (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id  INTEGER NOT NULL REFERENCES cash_sessions(id),
-  type        TEXT    NOT NULL CHECK (type IN ('in', 'out')),
-  amount      REAL    NOT NULL CHECK (amount > 0),
-  concept     TEXT    NOT NULL,
-  created_by  INTEGER REFERENCES users(id),
-  created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_cash_sessions_status    ON cash_sessions(status);
-CREATE INDEX IF NOT EXISTS idx_cash_sessions_opened_at ON cash_sessions(opened_at DESC);
-CREATE INDEX IF NOT EXISTS idx_cash_movements_session  ON cash_movements(session_id);
-`, me = `-- 013_purchases.sql
--- Proveedores y órdenes de compra.
-
-CREATE TABLE IF NOT EXISTS suppliers (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  name         TEXT    NOT NULL,
-  contact_name TEXT,
-  phone        TEXT,
-  email        TEXT,
-  address      TEXT,
-  notes        TEXT,
-  active       INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
-  created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
-  updated_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))
-);
-
-CREATE TABLE IF NOT EXISTS purchase_orders (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  supplier_id  INTEGER NOT NULL REFERENCES suppliers(id),
-  status       TEXT    NOT NULL DEFAULT 'draft'
-               CHECK (status IN ('draft','sent','received','cancelled')),
-  notes        TEXT,
-  created_by   INTEGER REFERENCES users(id),
-  created_by_name TEXT,
-  created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),
-  received_at  TEXT,
-  total_cost   REAL    NOT NULL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS purchase_items (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  order_id     INTEGER NOT NULL REFERENCES purchase_orders(id),
-  product_id   INTEGER REFERENCES products(id),
-  product_name TEXT    NOT NULL,
-  product_code TEXT,
-  qty_ordered  REAL    NOT NULL CHECK (qty_ordered > 0),
-  qty_received REAL    NOT NULL DEFAULT 0,
-  unit_cost    REAL    NOT NULL DEFAULT 0
-);
-
--- Costo de compra en productos (para calcular margen)
-ALTER TABLE products ADD COLUMN cost REAL NOT NULL DEFAULT 0;
-
-CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier ON purchase_orders(supplier_id);
-CREATE INDEX IF NOT EXISTS idx_purchase_orders_status   ON purchase_orders(status);
-CREATE INDEX IF NOT EXISTS idx_purchase_items_order     ON purchase_items(order_id);
-`, _e = `-- Cuentas por cobrar
-CREATE TABLE IF NOT EXISTS receivables (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  customer_id   INTEGER,
-  customer_name TEXT    NOT NULL,
-  customer_nit  TEXT,
-  description   TEXT    NOT NULL,
-  amount        REAL    NOT NULL DEFAULT 0,
-  amount_paid   REAL    NOT NULL DEFAULT 0,
-  due_date      TEXT,
-  status        TEXT    NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','partial','paid','cancelled')),
-  notes         TEXT,
-  created_by    INTEGER,
-  created_by_name TEXT,
-  created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime')),
-  updated_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime'))
-);
-
--- Pagos aplicados a cada cuenta
-CREATE TABLE IF NOT EXISTS receivable_payments (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  receivable_id   INTEGER NOT NULL REFERENCES receivables(id),
-  amount          REAL    NOT NULL,
-  payment_method  TEXT    NOT NULL DEFAULT 'cash',
-  notes           TEXT,
-  created_by      INTEGER,
-  created_by_name TEXT,
-  created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime'))
-);
-`, Te = `CREATE TABLE IF NOT EXISTS quotes (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  customer_id     INTEGER,
-  customer_name   TEXT    NOT NULL,
-  customer_nit    TEXT,
-  status          TEXT    NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','sent','accepted','rejected','converted')),
-  notes           TEXT,
-  valid_until     TEXT,
-  subtotal        REAL    NOT NULL DEFAULT 0,
-  tax_rate        REAL    NOT NULL DEFAULT 0,
-  tax_amount      REAL    NOT NULL DEFAULT 0,
-  total           REAL    NOT NULL DEFAULT 0,
-  created_by      INTEGER,
-  created_by_name TEXT,
-  sale_id         INTEGER,
-  created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime')),
-  updated_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime'))
-);
-
-CREATE TABLE IF NOT EXISTS quote_items (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  quote_id     INTEGER NOT NULL REFERENCES quotes(id),
-  product_id   INTEGER,
-  product_name TEXT    NOT NULL,
-  product_code TEXT,
-  qty          REAL    NOT NULL DEFAULT 1,
-  unit_price   REAL    NOT NULL DEFAULT 0,
-  subtotal     REAL    NOT NULL DEFAULT 0
-);
 `;
-let U = null;
-function pe() {
-  if (U) return U;
-  const e = Q.join(S.getPath("userData"), "taller_pos.sqlite"), n = new Z(e);
-  return n.pragma("journal_mode = WAL"), n.pragma("foreign_keys = ON"), n.pragma("synchronous = NORMAL"), U = n, n;
+const __vite_glob_0_6 = "-- 007_settings_extended.sql\n-- Amplía la tabla settings con configuraciones de negocio genéricas:\n-- identidad visual, contacto, ticket y preferencias de app.\n-- INSERT OR IGNORE: nunca pisa valores que el usuario ya haya guardado.\n\nINSERT OR IGNORE INTO settings (key, value, type, category, description) VALUES\n  -- Identidad\n  ('business_email',       '',           'string',  'business',  'Correo electronico de contacto'),\n  ('business_website',     '',           'string',  'business',  'Sitio web del negocio'),\n  ('business_city',        '',           'string',  'business',  'Ciudad / municipio'),\n  ('business_country',     'Guatemala',  'string',  'business',  'Pais'),\n  ('business_logo_base64', '',           'string',  'business',  'Logo en base64 (data URL completa)'),\n\n  -- Ticket / impresion\n  ('ticket_footer_line1',  '',           'string',  'ticket',    'Primera linea del pie de ticket'),\n  ('ticket_footer_line2',  '',           'string',  'ticket',    'Segunda linea del pie de ticket'),\n  ('ticket_show_logo',     '1',          'boolean', 'ticket',    'Mostrar logo en el ticket impreso'),\n  ('ticket_show_tax',      '1',          'boolean', 'ticket',    'Desglosar IVA en el ticket'),\n  ('ticket_copies',        '1',          'number',  'ticket',    'Copias a imprimir por venta'),\n\n  -- Apariencia / app\n  ('app_name',             'SerProMec',  'string',  'app',       'Nombre que aparece en la barra lateral y titulo'),\n  ('app_accent_color',     '#e5001f',    'string',  'app',       'Color de acento principal (hex)');\n";
+const __vite_glob_0_7 = "-- 008_settings_theme.sql\n-- Agrega la clave app_theme para persistir la paleta de colores seleccionada.\n\nINSERT OR IGNORE INTO settings (key, value, type, category, description) VALUES\n  ('app_theme', 'crimson', 'string', 'app', 'Paleta de colores del sistema (slug de tema)');\n";
+const __vite_glob_0_8 = "-- 009_sales_payment.sql\n-- Agrega método de pago y tipo de cliente a la tabla de ventas.\n\nALTER TABLE sales ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'cash'\n  CHECK (payment_method IN ('cash', 'credit', 'card', 'transfer'));\n\nALTER TABLE sales ADD COLUMN client_type TEXT NOT NULL DEFAULT 'cf'\n  CHECK (client_type IN ('cf', 'registered', 'company'));\n";
+const __vite_glob_0_9 = "-- 010_sales_void_audit.sql\n-- Anulación de ventas + bitácora general de la aplicación.\n\n-- 1. Estado de la venta (activa / anulada)\nALTER TABLE sales ADD COLUMN status TEXT NOT NULL DEFAULT 'active'\n  CHECK (status IN ('active', 'voided'));\n\n-- 2. Registro de anulaciones (quién anuló, por qué y cuándo)\nCREATE TABLE IF NOT EXISTS sale_voids (\n  id         INTEGER PRIMARY KEY AUTOINCREMENT,\n  sale_id    INTEGER NOT NULL REFERENCES sales(id),\n  reason     TEXT    NOT NULL,\n  voided_by  INTEGER REFERENCES users(id),\n  voided_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))\n);\n\n-- 3. Bitácora general de eventos del sistema\nCREATE TABLE IF NOT EXISTS audit_log (\n  id           INTEGER PRIMARY KEY AUTOINCREMENT,\n  action       TEXT NOT NULL,           -- 'sale_voided', 'sale_created', 'settings_changed', etc.\n  entity       TEXT,                    -- 'sale', 'product', 'user', ...\n  entity_id    INTEGER,\n  description  TEXT,                    -- texto legible del evento\n  payload_json TEXT,                    -- datos extra en JSON (opcional)\n  user_id      INTEGER REFERENCES users(id),\n  user_name    TEXT,                    -- snapshot del nombre al momento del evento\n  created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))\n);\n\nCREATE INDEX IF NOT EXISTS idx_audit_log_action     ON audit_log(action);\nCREATE INDEX IF NOT EXISTS idx_audit_log_entity     ON audit_log(entity, entity_id);\nCREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at DESC);\n";
+const __vite_glob_0_10 = "ALTER TABLE users ADD COLUMN avatar TEXT;\n";
+const __vite_glob_0_11 = "-- 012_cash_sessions.sql\n-- Apertura y cierre de caja con movimientos manuales.\n\nCREATE TABLE IF NOT EXISTS cash_sessions (\n  id               INTEGER PRIMARY KEY AUTOINCREMENT,\n  opened_by        INTEGER NOT NULL REFERENCES users(id),\n  opened_by_name   TEXT    NOT NULL,\n  opened_at        TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),\n  opening_amount   REAL    NOT NULL DEFAULT 0,\n  closed_by        INTEGER REFERENCES users(id),\n  closed_by_name   TEXT,\n  closed_at        TEXT,\n  closing_amount   REAL,\n  expected_amount  REAL,\n  difference       REAL,\n  notes            TEXT,\n  status           TEXT    NOT NULL DEFAULT 'open'\n                   CHECK (status IN ('open', 'closed'))\n);\n\nCREATE TABLE IF NOT EXISTS cash_movements (\n  id          INTEGER PRIMARY KEY AUTOINCREMENT,\n  session_id  INTEGER NOT NULL REFERENCES cash_sessions(id),\n  type        TEXT    NOT NULL CHECK (type IN ('in', 'out')),\n  amount      REAL    NOT NULL CHECK (amount > 0),\n  concept     TEXT    NOT NULL,\n  created_by  INTEGER REFERENCES users(id),\n  created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))\n);\n\nCREATE INDEX IF NOT EXISTS idx_cash_sessions_status    ON cash_sessions(status);\nCREATE INDEX IF NOT EXISTS idx_cash_sessions_opened_at ON cash_sessions(opened_at DESC);\nCREATE INDEX IF NOT EXISTS idx_cash_movements_session  ON cash_movements(session_id);\n";
+const __vite_glob_0_12 = "-- 013_purchases.sql\n-- Proveedores y órdenes de compra.\n\nCREATE TABLE IF NOT EXISTS suppliers (\n  id           INTEGER PRIMARY KEY AUTOINCREMENT,\n  name         TEXT    NOT NULL,\n  contact_name TEXT,\n  phone        TEXT,\n  email        TEXT,\n  address      TEXT,\n  notes        TEXT,\n  active       INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),\n  created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),\n  updated_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))\n);\n\nCREATE TABLE IF NOT EXISTS purchase_orders (\n  id           INTEGER PRIMARY KEY AUTOINCREMENT,\n  supplier_id  INTEGER NOT NULL REFERENCES suppliers(id),\n  status       TEXT    NOT NULL DEFAULT 'draft'\n               CHECK (status IN ('draft','sent','received','cancelled')),\n  notes        TEXT,\n  created_by   INTEGER REFERENCES users(id),\n  created_by_name TEXT,\n  created_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'localtime')),\n  received_at  TEXT,\n  total_cost   REAL    NOT NULL DEFAULT 0\n);\n\nCREATE TABLE IF NOT EXISTS purchase_items (\n  id           INTEGER PRIMARY KEY AUTOINCREMENT,\n  order_id     INTEGER NOT NULL REFERENCES purchase_orders(id),\n  product_id   INTEGER REFERENCES products(id),\n  product_name TEXT    NOT NULL,\n  product_code TEXT,\n  qty_ordered  REAL    NOT NULL CHECK (qty_ordered > 0),\n  qty_received REAL    NOT NULL DEFAULT 0,\n  unit_cost    REAL    NOT NULL DEFAULT 0\n);\n\n-- Costo de compra en productos (para calcular margen)\nALTER TABLE products ADD COLUMN cost REAL NOT NULL DEFAULT 0;\n\nCREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier ON purchase_orders(supplier_id);\nCREATE INDEX IF NOT EXISTS idx_purchase_orders_status   ON purchase_orders(status);\nCREATE INDEX IF NOT EXISTS idx_purchase_items_order     ON purchase_items(order_id);\n";
+const __vite_glob_0_13 = "-- Cuentas por cobrar\nCREATE TABLE IF NOT EXISTS receivables (\n  id            INTEGER PRIMARY KEY AUTOINCREMENT,\n  customer_id   INTEGER,\n  customer_name TEXT    NOT NULL,\n  customer_nit  TEXT,\n  description   TEXT    NOT NULL,\n  amount        REAL    NOT NULL DEFAULT 0,\n  amount_paid   REAL    NOT NULL DEFAULT 0,\n  due_date      TEXT,\n  status        TEXT    NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','partial','paid','cancelled')),\n  notes         TEXT,\n  created_by    INTEGER,\n  created_by_name TEXT,\n  created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime')),\n  updated_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime'))\n);\n\n-- Pagos aplicados a cada cuenta\nCREATE TABLE IF NOT EXISTS receivable_payments (\n  id              INTEGER PRIMARY KEY AUTOINCREMENT,\n  receivable_id   INTEGER NOT NULL REFERENCES receivables(id),\n  amount          REAL    NOT NULL,\n  payment_method  TEXT    NOT NULL DEFAULT 'cash',\n  notes           TEXT,\n  created_by      INTEGER,\n  created_by_name TEXT,\n  created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime'))\n);\n";
+const __vite_glob_0_14 = "CREATE TABLE IF NOT EXISTS quotes (\n  id              INTEGER PRIMARY KEY AUTOINCREMENT,\n  customer_id     INTEGER,\n  customer_name   TEXT    NOT NULL,\n  customer_nit    TEXT,\n  status          TEXT    NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','sent','accepted','rejected','converted')),\n  notes           TEXT,\n  valid_until     TEXT,\n  subtotal        REAL    NOT NULL DEFAULT 0,\n  tax_rate        REAL    NOT NULL DEFAULT 0,\n  tax_amount      REAL    NOT NULL DEFAULT 0,\n  total           REAL    NOT NULL DEFAULT 0,\n  created_by      INTEGER,\n  created_by_name TEXT,\n  sale_id         INTEGER,\n  created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime')),\n  updated_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime'))\n);\n\nCREATE TABLE IF NOT EXISTS quote_items (\n  id           INTEGER PRIMARY KEY AUTOINCREMENT,\n  quote_id     INTEGER NOT NULL REFERENCES quotes(id),\n  product_id   INTEGER,\n  product_name TEXT    NOT NULL,\n  product_code TEXT,\n  qty          REAL    NOT NULL DEFAULT 1,\n  unit_price   REAL    NOT NULL DEFAULT 0,\n  subtotal     REAL    NOT NULL DEFAULT 0\n);\n";
+const __vite_glob_0_15 = "-- Descuentos en ventas\nALTER TABLE sales ADD COLUMN discount_type   TEXT NOT NULL DEFAULT 'none';\nALTER TABLE sales ADD COLUMN discount_value  REAL NOT NULL DEFAULT 0;\nALTER TABLE sales ADD COLUMN discount_amount REAL NOT NULL DEFAULT 0;\n";
+const __vite_glob_0_16 = "-- Gastos / egresos operativos\nCREATE TABLE IF NOT EXISTS expenses (\n  id              INTEGER PRIMARY KEY AUTOINCREMENT,\n  category        TEXT    NOT NULL DEFAULT 'otros',\n  description     TEXT    NOT NULL,\n  amount          REAL    NOT NULL DEFAULT 0,\n  payment_method  TEXT    NOT NULL DEFAULT 'cash',\n  expense_date    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d','now','localtime')),\n  notes           TEXT,\n  created_by      INTEGER,\n  created_by_name TEXT,\n  created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime'))\n);\n";
+const __vite_glob_0_17 = "-- Devoluciones de ventas\nCREATE TABLE IF NOT EXISTS returns (\n  id              INTEGER PRIMARY KEY AUTOINCREMENT,\n  sale_id         INTEGER NOT NULL REFERENCES sales(id),\n  reason          TEXT    NOT NULL,\n  notes           TEXT,\n  total_refund    REAL    NOT NULL DEFAULT 0,\n  created_by      INTEGER,\n  created_by_name TEXT,\n  created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime'))\n);\n\nCREATE TABLE IF NOT EXISTS return_items (\n  id            INTEGER PRIMARY KEY AUTOINCREMENT,\n  return_id     INTEGER NOT NULL REFERENCES returns(id),\n  sale_item_id  INTEGER NOT NULL,\n  product_id    INTEGER NOT NULL,\n  product_name  TEXT    NOT NULL,\n  qty_returned  REAL    NOT NULL DEFAULT 0,\n  unit_price    REAL    NOT NULL DEFAULT 0,\n  subtotal      REAL    NOT NULL DEFAULT 0\n);\n";
+const __vite_glob_0_18 = "-- Movimientos de inventario (kardex)\nCREATE TABLE IF NOT EXISTS stock_movements (\n  id             INTEGER PRIMARY KEY AUTOINCREMENT,\n  product_id     INTEGER NOT NULL,\n  product_name   TEXT    NOT NULL,\n  type           TEXT    NOT NULL CHECK(type IN ('in','out','adjustment','sale','purchase','return')),\n  qty            REAL    NOT NULL,\n  qty_before     REAL    NOT NULL DEFAULT 0,\n  qty_after      REAL    NOT NULL DEFAULT 0,\n  reference_type TEXT,\n  reference_id   INTEGER,\n  notes          TEXT,\n  created_by     INTEGER,\n  created_by_name TEXT,\n  created_at     TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime'))\n);\n\nCREATE INDEX IF NOT EXISTS idx_stock_movements_product ON stock_movements(product_id, created_at DESC);\n";
+let instance = null;
+function getDb() {
+  if (instance) return instance;
+  const dbPath = path.join(app.getPath("userData"), "taller_pos.sqlite");
+  const db = new Database(dbPath);
+  db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
+  db.pragma("synchronous = NORMAL");
+  instance = db;
+  return db;
 }
-const Ne = `
+const CREATE_CONTROL_TABLE = `
   CREATE TABLE IF NOT EXISTS schema_migrations (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT    NOT NULL UNIQUE,
@@ -428,48 +157,56 @@ const Ne = `
     executed_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 `;
-function Oe(e) {
-  const n = e.replace(/\r\n/g, `
-`);
-  return J.createHash("sha256").update(n, "utf8").digest("hex");
+function checksumOf(sql) {
+  const normalized = sql.replace(/\r\n/g, "\n");
+  return crypto.createHash("sha256").update(normalized, "utf8").digest("hex");
 }
-function Ie(e, n) {
-  e.exec(Ne);
-  const t = e.prepare("SELECT checksum FROM schema_migrations WHERE name = ?"), r = e.prepare(
+function runMigrations(db, migrations) {
+  db.exec(CREATE_CONTROL_TABLE);
+  const findByName = db.prepare("SELECT checksum FROM schema_migrations WHERE name = ?");
+  const insertRecord = db.prepare(
     "INSERT INTO schema_migrations (name, checksum) VALUES (?, ?)"
-  ), a = [...n].sort((o, d) => o.name.localeCompare(d.name)), s = [], i = [];
-  for (const o of a) {
-    const d = Oe(o.sql), c = t.get(o.name);
-    if (c) {
-      if (c.checksum !== d)
+  );
+  const sorted = [...migrations].sort((a, b) => a.name.localeCompare(b.name));
+  const applied = [];
+  const skipped = [];
+  for (const migration of sorted) {
+    const checksum = checksumOf(migration.sql);
+    const existing = findByName.get(migration.name);
+    if (existing) {
+      if (existing.checksum !== checksum) {
         throw new Error(
-          `Migration tampering detected: "${o.name}" fue aplicada con checksum ${c.checksum} pero el archivo actual tiene ${d}. Nunca modifiques migraciones ya aplicadas; crea una nueva.`
+          `Migration tampering detected: "${migration.name}" fue aplicada con checksum ${existing.checksum} pero el archivo actual tiene ${checksum}. Nunca modifiques migraciones ya aplicadas; crea una nueva.`
         );
-      i.push(o.name);
+      }
+      skipped.push(migration.name);
       continue;
     }
-    e.transaction(() => {
-      e.exec(o.sql), r.run(o.name, d);
-    })(), s.push(o.name);
+    const apply = db.transaction(() => {
+      db.exec(migration.sql);
+      insertRecord.run(migration.name, checksum);
+    });
+    apply();
+    applied.push(migration.name);
   }
-  return { applied: s, skipped: i };
+  return { applied, skipped };
 }
-function Se(e) {
-  const n = {
-    selectAll: e.prepare("SELECT key, value, type, category, description, updated_at FROM settings"),
-    selectByKey: e.prepare(
+function createSettingsRepository(db) {
+  const stmts = {
+    selectAll: db.prepare("SELECT key, value, type, category, description, updated_at FROM settings"),
+    selectByKey: db.prepare(
       "SELECT key, value, type, category, description, updated_at FROM settings WHERE key = ?"
     ),
-    selectByCategory: e.prepare(
+    selectByCategory: db.prepare(
       "SELECT key, value, type, category, description, updated_at FROM settings WHERE category = ?"
     ),
-    updateValue: e.prepare(
+    updateValue: db.prepare(
       `UPDATE settings
          SET value = ?,
              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
        WHERE key = ?`
     ),
-    upsertValue: e.prepare(
+    upsertValue: db.prepare(
       `INSERT INTO settings (key, value, type, category, description)
          VALUES (?, ?, 'string', 'app', '')
        ON CONFLICT(key) DO UPDATE
@@ -480,21 +217,21 @@ function Se(e) {
   return {
     /** @returns {SettingRow[]} */
     findAll() {
-      return n.selectAll.all();
+      return stmts.selectAll.all();
     },
     /**
      * @param {string} key
      * @returns {SettingRow | undefined}
      */
-    findByKey(t) {
-      return n.selectByKey.get(t);
+    findByKey(key) {
+      return stmts.selectByKey.get(key);
     },
     /**
      * @param {string} category
      * @returns {SettingRow[]}
      */
-    findByCategory(t) {
-      return n.selectByCategory.all(t);
+    findByCategory(category) {
+      return stmts.selectByCategory.all(category);
     },
     /**
      * Actualiza solo el valor (ya serializado a TEXT).
@@ -503,8 +240,9 @@ function Se(e) {
      * @param {string} serializedValue
      * @returns {number} filas afectadas (0 si key no existe)
      */
-    updateValue(t, r) {
-      return n.updateValue.run(r, t).changes;
+    updateValue(key, serializedValue) {
+      const info = stmts.updateValue.run(serializedValue, key);
+      return info.changes;
     },
     /**
      * INSERT OR UPDATE: crea la fila si no existe, actualiza si existe.
@@ -513,112 +251,122 @@ function Se(e) {
      * @param {string} key
      * @param {string} serializedValue
      */
-    upsertValue(t, r) {
-      n.upsertValue.run(t, r);
+    upsertValue(key, serializedValue) {
+      stmts.upsertValue.run(key, serializedValue);
     }
   };
 }
-class j extends Error {
+class SettingError extends Error {
   /**
    * @param {string} code
    * @param {string} message
    */
-  constructor(n, t) {
-    super(t), this.name = "SettingError", this.code = n;
+  constructor(code, message) {
+    super(message);
+    this.name = "SettingError";
+    this.code = code;
   }
 }
-class C extends j {
+class SettingNotFoundError extends SettingError {
   /** @param {string} key */
-  constructor(n) {
-    super("SETTING_NOT_FOUND", `Setting no encontrado: "${n}"`), this.name = "SettingNotFoundError", this.key = n;
+  constructor(key) {
+    super("SETTING_NOT_FOUND", `Setting no encontrado: "${key}"`);
+    this.name = "SettingNotFoundError";
+    this.key = key;
   }
 }
-class I extends j {
+class SettingValidationError extends SettingError {
   /**
    * @param {string} key
    * @param {string} expectedType
    * @param {unknown} receivedValue
    */
-  constructor(n, t, r) {
+  constructor(key, expectedType, receivedValue) {
     super(
       "SETTING_INVALID_VALUE",
-      `Setting "${n}" requiere tipo "${t}" pero recibio ${typeof r} (${String(
-        r
+      `Setting "${key}" requiere tipo "${expectedType}" pero recibio ${typeof receivedValue} (${String(
+        receivedValue
       )})`
-    ), this.name = "SettingValidationError", this.key = n, this.expectedType = t;
+    );
+    this.name = "SettingValidationError";
+    this.key = key;
+    this.expectedType = expectedType;
   }
 }
-function b(e) {
-  return { ...e, value: Re(e.value, e.type, e.key) };
+function deserialize(row) {
+  return { ...row, value: parseValue(row.value, row.type, row.key) };
 }
-function Re(e, n, t) {
-  switch (n) {
+function parseValue(raw, type, key) {
+  switch (type) {
     case "string":
-      return e;
+      return raw;
     case "number": {
-      const r = Number(e);
-      if (!Number.isFinite(r))
-        throw new I(t, "number", e);
-      return r;
+      const n = Number(raw);
+      if (!Number.isFinite(n)) {
+        throw new SettingValidationError(key, "number", raw);
+      }
+      return n;
     }
     case "boolean":
-      return e === "1" || e === "true";
+      return raw === "1" || raw === "true";
     case "json":
       try {
-        return JSON.parse(e);
+        return JSON.parse(raw);
       } catch {
-        throw new I(t, "json", e);
+        throw new SettingValidationError(key, "json", raw);
       }
     default:
-      throw new I(t, n, e);
+      throw new SettingValidationError(key, type, raw);
   }
 }
-function Ae(e, n, t) {
-  switch (n) {
+function serialize(value, type, key) {
+  switch (type) {
     case "string":
-      if (typeof e != "string") throw new I(t, "string", e);
-      return e;
+      if (typeof value !== "string") throw new SettingValidationError(key, "string", value);
+      return value;
     case "number":
-      if (typeof e != "number" || !Number.isFinite(e))
-        throw new I(t, "number", e);
-      return String(e);
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        throw new SettingValidationError(key, "number", value);
+      }
+      return String(value);
     case "boolean":
-      if (typeof e != "boolean") throw new I(t, "boolean", e);
-      return e ? "1" : "0";
+      if (typeof value !== "boolean") throw new SettingValidationError(key, "boolean", value);
+      return value ? "1" : "0";
     case "json":
       try {
-        return JSON.stringify(e);
+        return JSON.stringify(value);
       } catch {
-        throw new I(t, "json", e);
+        throw new SettingValidationError(key, "json", value);
       }
     default:
-      throw new I(t, n, e);
+      throw new SettingValidationError(key, type, value);
   }
 }
-function fe(e) {
-  const n = /* @__PURE__ */ new Map();
-  let t = !1;
-  function r() {
-    n.clear();
-    for (const s of e.findAll())
-      n.set(s.key, b(s));
-    t = !0;
+function createSettingsService(repo) {
+  const cache = /* @__PURE__ */ new Map();
+  let initialized = false;
+  function init() {
+    cache.clear();
+    for (const row of repo.findAll()) {
+      cache.set(row.key, deserialize(row));
+    }
+    initialized = true;
   }
-  function a() {
-    t || r();
+  function ensureInit() {
+    if (!initialized) init();
   }
   return {
-    init: r,
+    init,
     /**
      * @param {string} key
      * @returns {TypedSetting['value']}
      * @throws {SettingNotFoundError}
      */
-    get(s) {
-      a();
-      const i = n.get(s);
-      if (!i) throw new C(s);
-      return i.value;
+    get(key) {
+      ensureInit();
+      const entry = cache.get(key);
+      if (!entry) throw new SettingNotFoundError(key);
+      return entry.value;
     },
     /**
      * Devuelve settings agrupados por `category`:
@@ -626,22 +374,25 @@ function fe(e) {
      * @returns {Record<string, Record<string, TypedSetting['value']>>}
      */
     getAll() {
-      a();
-      const s = {};
-      for (const i of n.values())
-        s[i.category] || (s[i.category] = {}), s[i.category][i.key] = i.value;
-      return s;
+      ensureInit();
+      const grouped = {};
+      for (const entry of cache.values()) {
+        if (!grouped[entry.category]) grouped[entry.category] = {};
+        grouped[entry.category][entry.key] = entry.value;
+      }
+      return grouped;
     },
     /**
      * @param {string} category
      * @returns {Record<string, TypedSetting['value']>}
      */
-    getByCategory(s) {
-      a();
-      const i = {};
-      for (const o of n.values())
-        o.category === s && (i[o.key] = o.value);
-      return i;
+    getByCategory(category) {
+      ensureInit();
+      const out = {};
+      for (const entry of cache.values()) {
+        if (entry.category === category) out[entry.key] = entry.value;
+      }
+      return out;
     },
     /**
      * Valida tipo, persiste y actualiza el cache. Si la key no existe en DB
@@ -651,15 +402,18 @@ function fe(e) {
      * @param {unknown} value
      * @throws {SettingNotFoundError | SettingValidationError}
      */
-    set(s, i) {
-      a();
-      const o = n.get(s);
-      if (!o) throw new C(s);
-      const d = Ae(i, o.type, s);
-      if (e.updateValue(s, d) === 0)
-        throw n.delete(s), new C(s);
-      const E = e.findByKey(s);
-      n.set(s, b(E));
+    set(key, value) {
+      ensureInit();
+      const entry = cache.get(key);
+      if (!entry) throw new SettingNotFoundError(key);
+      const serialized = serialize(value, entry.type, key);
+      const changes = repo.updateValue(key, serialized);
+      if (changes === 0) {
+        cache.delete(key);
+        throw new SettingNotFoundError(key);
+      }
+      const fresh = repo.findByKey(key);
+      cache.set(key, deserialize(fresh));
     },
     /**
      * Como set() pero crea la clave si no existe (tipo string).
@@ -667,49 +421,78 @@ function fe(e) {
      * @param {string} key
      * @param {string} value
      */
-    upsert(s, i) {
-      if (typeof i != "string") throw new I(s, "string", i);
-      e.upsertValue(s, i);
-      const o = e.findByKey(s);
-      o && n.set(s, b(o));
+    upsert(key, value) {
+      if (typeof value !== "string") throw new SettingValidationError(key, "string", value);
+      repo.upsertValue(key, value);
+      const fresh = repo.findByKey(key);
+      if (fresh) cache.set(key, deserialize(fresh));
     }
   };
 }
-function u(e) {
-  return (...n) => {
+function wrap(handler) {
+  return (...args) => {
     try {
-      return { ok: !0, data: e(...n) };
-    } catch (t) {
-      const r = t && typeof t == "object" && "code" in t && typeof t.code == "string" ? t.code : "UNEXPECTED_ERROR", a = t instanceof Error ? t.message : String(t);
-      return t && typeof t == "object" && "code" in t || console.error("[ipc] unexpected error:", t), { ok: !1, error: { code: r, message: a } };
+      const data = handler(...args);
+      return { ok: true, data };
+    } catch (err) {
+      const code = err && typeof err === "object" && "code" in err && typeof err.code === "string" ? err.code : "UNEXPECTED_ERROR";
+      const message = err instanceof Error ? err.message : String(err);
+      if (!(err && typeof err === "object" && "code" in err)) {
+        console.error(...oo_tx(`755487567_28_8_28_53_11`, "[ipc] unexpected error:", err));
+      }
+      return { ok: false, error: { code, message } };
     }
   };
 }
-function Le(e) {
-  l.handle("settings:get-all", u(() => e.getAll())), l.handle("settings:get", u((n, t) => e.get(t))), l.handle("settings:get-by-category", u((n, t) => e.getByCategory(t))), l.handle("settings:set", u((n, t, r) => (e.set(t, r), !0))), l.handle("settings:upsert", u((n, t, r) => (e.upsert(t, r), !0)));
+function oo_cm$1() {
+  try {
+    return (0, eval)("globalThis._console_ninja") || (0, eval)(`/* https://github.com/wallabyjs/console-ninja#how-does-it-work */'use strict';function _0x4187(_0x52e140,_0x15844d){var _0x1edd14=_0x1edd();return _0x4187=function(_0x418736,_0x252226){_0x418736=_0x418736-0x1dc;var _0x1c174c=_0x1edd14[_0x418736];return _0x1c174c;},_0x4187(_0x52e140,_0x15844d);}var _0x3890c8=_0x4187;function _0x1edd(){var _0xd02a82=['background:\\x20rgb(30,30,30);\\x20color:\\x20rgb(255,213,92)','_connectToHostNow','NEGATIVE_INFINITY',{"resolveGetters":false,"defaultLimits":{"props":100,"elements":100,"strLength":51200,"totalStrLength":51200,"autoExpandLimit":5000,"autoExpandMaxDepth":10},"reducedLimits":{"props":5,"elements":5,"strLength":256,"totalStrLength":768,"autoExpandLimit":30,"autoExpandMaxDepth":2},"reducePolicy":{"perLogpoint":{"reduceOnCount":50,"reduceOnAccumulatedProcessingTimeMs":100,"resetWhenQuietMs":500,"resetOnProcessingTimeAverageMs":100},"global":{"reduceOnCount":1000,"reduceOnAccumulatedProcessingTimeMs":300,"resetWhenQuietMs":50,"resetOnProcessingTimeAverageMs":100}}},'_getOwnPropertyDescriptor','warn','_p_length','_regExpToString','38gkPcrc',',\\x20see\\x20https://tinyurl.com/2vt8jxzw\\x20for\\x20more\\x20info.','funcName','_isSet','hasOwnProperty','unshift','[object\\x20Array]','_maxConnectAttemptCount','ws://','autoExpandMaxDepth','default','stackTraceLimit','\\x20server','_addProperty','origin','reducedLimits','resolveGetters','disabledLog','cappedElements','indexOf','reload','Set','Symbol','_isArray','stack','port','function','resetOnProcessingTimeAverageMs','slice','onerror','_connectAttemptCount','emulator','reducePolicy','_processTreeNodeResult','count','_setNodeExpressionPath','HTMLAllCollection','String','strLength','_WebSocketClass','_addLoadNode','expo','ninjaSuppressConsole','_isUndefined','_connected','_keyStrRegExp','next.js','Number','9jOUldT','_isNegativeZero','_p_name','_ws','substr','import(\\x27url\\x27)','_consoleNinjaAllowedToStart','date','parse','_treeNodePropertiesBeforeFullValue','_setNodeLabel','_blacklistedProperty','Buffer','33763','20667vPUjDv','time','Promise','set','2035290pGkmlm','','logger\\x20failed\\x20to\\x20connect\\x20to\\x20host,\\x20see\\x20','angular','negativeInfinity','test','resolve','WebSocket','array','parent','bind','host','resetWhenQuietMs','failed\\x20to\\x20connect\\x20to\\x20host:\\x20','process','bigint','136cjwhMD','toString','object','readyState','_inBrowser','send','_attemptToReconnectShortly','_HTMLAllCollection','hostname','_allowedToSend','edge','name','stringify','_setNodeId','elapsed','constructor','182420mjmqKf','_numberRegExp',"/home/henry-tercero/.vscode/extensions/wallabyjs.console-ninja-1.0.525/node_modules",'type','prototype','astro','pop','expressionsToEvaluate','osName','reduceOnAccumulatedProcessingTimeMs','env','Map','_sendErrorMessage','RegExp','node','[object\\x20Date]','_sortProps','_console_ninja','autoExpandLimit','path','8098092eUysyP','_disposeWebsocket','_isPrimitiveWrapperType','autoExpandPropertyCount','return\\x20import(url.pathToFileURL(path.join(nodeModules,\\x20\\x27ws/index.js\\x27)).toString());','perLogpoint','map','_extendedWarning','android','join','rootExpression','_type','_capIfString','nan','_socket','root_exp_id','concat','_console_ninja_session','error','trace','_objectToString','isArray','_ninjaIgnoreNextError','onmessage','fromCharCode','\\x20browser','getWebSocketClass','catch','unknown','versions','_dateToString','_cleanNode','1.0.0','react-native','Console\\x20Ninja\\x20failed\\x20to\\x20send\\x20logs,\\x20refreshing\\x20the\\x20page\\x20may\\x20help;\\x20also\\x20see\\x20','isExpressionToEvaluate','now','then','serialize','toLowerCase','index','hrtime','close','allStrLength','valueOf','ExpoDevice','_p_','_inNextEdge','[object\\x20BigInt]','Console\\x20Ninja\\x20extension\\x20is\\x20connected\\x20to\\x20','timeStamp','autoExpand','1777323156755','_getOwnPropertySymbols','7574025BLeRlk','sortProps','replace','NEXT_RUNTIME','_connecting','_additionalMetadata','forEach','level','symbol','modules','_Symbol','undefined','[object\\x20Set]','eventReceivedCallback','remix','_setNodeQueryPath','[object\\x20Map]','log','depth','Boolean','dockerizedApp','global','null','args','gateway.docker.internal','_addFunctionsNode','perf_hooks','5058944NenKCb','_hasMapOnItsPath','_setNodeExpandableState','push',["localhost","127.0.0.1","example.cypress.io","10.0.2.2","henry-tercero-Victus-by-HP-Gaming-Laptop-15-fa2xxx","192.168.1.11"],'unref','_webSocketErrorDocsLink','','_treeNodePropertiesAfterFullValue','%c\\x20Console\\x20Ninja\\x20extension\\x20is\\x20connected\\x20to\\x20','Error','number','value','_isMap','defaultLimits','_addObjectProperty','totalStrLength','some','boolean','_WebSocket','autoExpandPreviousObjects','sort','_setNodePermissions','_allowedToConnectOnSend','disabledTrace','console','reduceOnCount','location','10.0.2.2','get','call','_propertyName','length','props','_hasSymbolPropertyOnItsPath','_reconnectTimeout','string','getOwnPropertyDescriptor','import(\\x27path\\x27)','noFunctions','nodeModules','elements','endsWith','POSITIVE_INFINITY','21223450LJhzYJ','expId','_isPrimitiveType','onopen','bound\\x20Promise','message','current','reduceLimits','_getOwnPropertyNames','data','url','_quotedRegExp','hits','match','_property','getOwnPropertySymbols','performance','toUpperCase','capped','includes'];_0x1edd=function(){return _0xd02a82;};return _0x1edd();}(function(_0x593217,_0xb66b98){var _0x477746=_0x4187,_0x4015ef=_0x593217();while(!![]){try{var _0x55fb6d=parseInt(_0x477746(0x254))/0x1*(-parseInt(_0x477746(0x216))/0x2)+parseInt(_0x477746(0x258))/0x3+-parseInt(_0x477746(0x2dd))/0x4+parseInt(_0x477746(0x2c2))/0x5+-parseInt(_0x477746(0x28c))/0x6+-parseInt(_0x477746(0x278))/0x7*(parseInt(_0x477746(0x268))/0x8)+parseInt(_0x477746(0x246))/0x9*(parseInt(_0x477746(0x1fa))/0xa);if(_0x55fb6d===_0xb66b98)break;else _0x4015ef['push'](_0x4015ef['shift']());}catch(_0x3d51fa){_0x4015ef['push'](_0x4015ef['shift']());}}}(_0x1edd,0xd34bd));function z(_0x592fc3,_0x315c78,_0x20b8bb,_0x322b6b,_0x3f5c59,_0x2ff362){var _0x1e9d9b=_0x4187,_0x1f3283,_0x1d630f,_0x518481,_0x138db6;this[_0x1e9d9b(0x2d7)]=_0x592fc3,this[_0x1e9d9b(0x263)]=_0x315c78,this[_0x1e9d9b(0x22f)]=_0x20b8bb,this['nodeModules']=_0x322b6b,this['dockerizedApp']=_0x3f5c59,this['eventReceivedCallback']=_0x2ff362,this[_0x1e9d9b(0x271)]=!0x0,this[_0x1e9d9b(0x1e5)]=!0x0,this[_0x1e9d9b(0x242)]=!0x1,this[_0x1e9d9b(0x2c6)]=!0x1,this[_0x1e9d9b(0x2bb)]=((_0x1d630f=(_0x1f3283=_0x592fc3['process'])==null?void 0x0:_0x1f3283[_0x1e9d9b(0x282)])==null?void 0x0:_0x1d630f['NEXT_RUNTIME'])===_0x1e9d9b(0x272),this[_0x1e9d9b(0x26c)]=!((_0x138db6=(_0x518481=this[_0x1e9d9b(0x2d7)][_0x1e9d9b(0x266)])==null?void 0x0:_0x518481[_0x1e9d9b(0x2a9)])!=null&&_0x138db6[_0x1e9d9b(0x286)])&&!this[_0x1e9d9b(0x2bb)],this[_0x1e9d9b(0x23d)]=null,this['_connectAttemptCount']=0x0,this[_0x1e9d9b(0x21d)]=0x14,this[_0x1e9d9b(0x2e3)]='https://tinyurl.com/37x8b79t',this[_0x1e9d9b(0x284)]=(this['_inBrowser']?_0x1e9d9b(0x2ae):'Console\\x20Ninja\\x20failed\\x20to\\x20send\\x20logs,\\x20restarting\\x20the\\x20process\\x20may\\x20help;\\x20also\\x20see\\x20')+this[_0x1e9d9b(0x2e3)];}z[_0x3890c8(0x27c)][_0x3890c8(0x2a6)]=async function(){var _0x47df01=_0x3890c8,_0x4c9b9c,_0x348789;if(this['_WebSocketClass'])return this[_0x47df01(0x23d)];let _0x5b4a33;if(this[_0x47df01(0x26c)]||this[_0x47df01(0x2bb)])_0x5b4a33=this[_0x47df01(0x2d7)][_0x47df01(0x25f)];else{if((_0x4c9b9c=this['global'][_0x47df01(0x266)])!=null&&_0x4c9b9c['_WebSocket'])_0x5b4a33=(_0x348789=this[_0x47df01(0x2d7)]['process'])==null?void 0x0:_0x348789[_0x47df01(0x1e1)];else try{_0x5b4a33=(await new Function('path',_0x47df01(0x204),_0x47df01(0x1f6),_0x47df01(0x290))(await(0x0,eval)(_0x47df01(0x1f4)),await(0x0,eval)(_0x47df01(0x24b)),this[_0x47df01(0x1f6)]))[_0x47df01(0x220)];}catch{try{_0x5b4a33=require(require(_0x47df01(0x28b))[_0x47df01(0x295)](this[_0x47df01(0x1f6)],'ws'));}catch{throw new Error('failed\\x20to\\x20find\\x20and\\x20load\\x20WebSocket');}}}return this[_0x47df01(0x23d)]=_0x5b4a33,_0x5b4a33;},z[_0x3890c8(0x27c)][_0x3890c8(0x20f)]=function(){var _0x1d32f3=_0x3890c8;this[_0x1d32f3(0x2c6)]||this[_0x1d32f3(0x242)]||this[_0x1d32f3(0x234)]>=this[_0x1d32f3(0x21d)]||(this[_0x1d32f3(0x1e5)]=!0x1,this[_0x1d32f3(0x2c6)]=!0x0,this[_0x1d32f3(0x234)]++,this[_0x1d32f3(0x249)]=new Promise((_0x1dfeca,_0x1ed537)=>{var _0x162cdd=_0x1d32f3;this[_0x162cdd(0x2a6)]()[_0x162cdd(0x2b1)](_0x47460b=>{var _0x1fc8dc=_0x162cdd;let _0xe561b2=new _0x47460b(_0x1fc8dc(0x21e)+(!this[_0x1fc8dc(0x26c)]&&this[_0x1fc8dc(0x2d6)]?_0x1fc8dc(0x2da):this[_0x1fc8dc(0x263)])+':'+this['port']);_0xe561b2[_0x1fc8dc(0x233)]=()=>{var _0x53cfe7=_0x1fc8dc;this[_0x53cfe7(0x271)]=!0x1,this[_0x53cfe7(0x28d)](_0xe561b2),this['_attemptToReconnectShortly'](),_0x1ed537(new Error('logger\\x20websocket\\x20error'));},_0xe561b2[_0x1fc8dc(0x1fd)]=()=>{var _0x1456f8=_0x1fc8dc;this[_0x1456f8(0x26c)]||_0xe561b2[_0x1456f8(0x29a)]&&_0xe561b2['_socket']['unref']&&_0xe561b2['_socket'][_0x1456f8(0x2e2)](),_0x1dfeca(_0xe561b2);},_0xe561b2['onclose']=()=>{var _0x1475d1=_0x1fc8dc;this[_0x1475d1(0x1e5)]=!0x0,this[_0x1475d1(0x28d)](_0xe561b2),this['_attemptToReconnectShortly']();},_0xe561b2[_0x1fc8dc(0x2a3)]=_0x175d79=>{var _0x2e3b9f=_0x1fc8dc;try{if(!(_0x175d79!=null&&_0x175d79[_0x2e3b9f(0x203)])||!this[_0x2e3b9f(0x2cf)])return;let _0x44f4d4=JSON[_0x2e3b9f(0x24e)](_0x175d79['data']);this[_0x2e3b9f(0x2cf)](_0x44f4d4['method'],_0x44f4d4[_0x2e3b9f(0x2d9)],this[_0x2e3b9f(0x2d7)],this[_0x2e3b9f(0x26c)]);}catch{}};})[_0x162cdd(0x2b1)](_0x2e6e48=>(this[_0x162cdd(0x242)]=!0x0,this[_0x162cdd(0x2c6)]=!0x1,this['_allowedToConnectOnSend']=!0x1,this[_0x162cdd(0x271)]=!0x0,this[_0x162cdd(0x234)]=0x0,_0x2e6e48))[_0x162cdd(0x2a7)](_0x890b60=>(this['_connected']=!0x1,this['_connecting']=!0x1,console[_0x162cdd(0x213)](_0x162cdd(0x25a)+this[_0x162cdd(0x2e3)]),_0x1ed537(new Error(_0x162cdd(0x265)+(_0x890b60&&_0x890b60[_0x162cdd(0x1ff)])))));}));},z[_0x3890c8(0x27c)]['_disposeWebsocket']=function(_0x1b2f6c){var _0x5b014b=_0x3890c8;this['_connected']=!0x1,this[_0x5b014b(0x2c6)]=!0x1;try{_0x1b2f6c['onclose']=null,_0x1b2f6c[_0x5b014b(0x233)]=null,_0x1b2f6c['onopen']=null;}catch{}try{_0x1b2f6c[_0x5b014b(0x26b)]<0x2&&_0x1b2f6c[_0x5b014b(0x2b6)]();}catch{}},z[_0x3890c8(0x27c)]['_attemptToReconnectShortly']=function(){var _0x124bb9=_0x3890c8;clearTimeout(this[_0x124bb9(0x1f1)]),!(this[_0x124bb9(0x234)]>=this[_0x124bb9(0x21d)])&&(this[_0x124bb9(0x1f1)]=setTimeout(()=>{var _0x4d4e90=_0x124bb9,_0xf6aafa;this[_0x4d4e90(0x242)]||this['_connecting']||(this[_0x4d4e90(0x20f)](),(_0xf6aafa=this[_0x4d4e90(0x249)])==null||_0xf6aafa['catch'](()=>this[_0x4d4e90(0x26e)]()));},0x1f4),this[_0x124bb9(0x1f1)][_0x124bb9(0x2e2)]&&this[_0x124bb9(0x1f1)][_0x124bb9(0x2e2)]());},z[_0x3890c8(0x27c)][_0x3890c8(0x26d)]=async function(_0x1bb714){var _0x9a6194=_0x3890c8;try{if(!this[_0x9a6194(0x271)])return;this[_0x9a6194(0x1e5)]&&this[_0x9a6194(0x20f)](),(await this[_0x9a6194(0x249)])[_0x9a6194(0x26d)](JSON[_0x9a6194(0x274)](_0x1bb714));}catch(_0x1b6312){this[_0x9a6194(0x293)]?console[_0x9a6194(0x213)](this[_0x9a6194(0x284)]+':\\x20'+(_0x1b6312&&_0x1b6312[_0x9a6194(0x1ff)])):(this['_extendedWarning']=!0x0,console[_0x9a6194(0x213)](this[_0x9a6194(0x284)]+':\\x20'+(_0x1b6312&&_0x1b6312[_0x9a6194(0x1ff)]),_0x1bb714)),this[_0x9a6194(0x271)]=!0x1,this[_0x9a6194(0x26e)]();}};function H(_0x20ad1f,_0x2292c5,_0x44fc0e,_0x23d982,_0x5cf68c,_0x2bf037,_0x2ca164,_0x17c366=ne){var _0x1889e1=_0x3890c8;let _0x540a51=_0x44fc0e['split'](',')[_0x1889e1(0x292)](_0x2d32cd=>{var _0xd94d2e=_0x1889e1,_0x5aa30d,_0x16905d,_0x42434e,_0x1ab968,_0x405adf,_0x2a8f7e,_0x117873,_0x5423c9;try{if(!_0x20ad1f[_0xd94d2e(0x29d)]){let _0x41ebfe=((_0x16905d=(_0x5aa30d=_0x20ad1f['process'])==null?void 0x0:_0x5aa30d[_0xd94d2e(0x2a9)])==null?void 0x0:_0x16905d[_0xd94d2e(0x286)])||((_0x1ab968=(_0x42434e=_0x20ad1f['process'])==null?void 0x0:_0x42434e[_0xd94d2e(0x282)])==null?void 0x0:_0x1ab968[_0xd94d2e(0x2c5)])==='edge';(_0x5cf68c===_0xd94d2e(0x244)||_0x5cf68c===_0xd94d2e(0x2d0)||_0x5cf68c===_0xd94d2e(0x27d)||_0x5cf68c===_0xd94d2e(0x25b))&&(_0x5cf68c+=_0x41ebfe?_0xd94d2e(0x222):_0xd94d2e(0x2a5));let _0x3b5c0e='';_0x5cf68c==='react-native'&&(_0x3b5c0e=(((_0x117873=(_0x2a8f7e=(_0x405adf=_0x20ad1f[_0xd94d2e(0x23f)])==null?void 0x0:_0x405adf['modules'])==null?void 0x0:_0x2a8f7e[_0xd94d2e(0x2b9)])==null?void 0x0:_0x117873[_0xd94d2e(0x280)])||_0xd94d2e(0x235))[_0xd94d2e(0x2b3)](),_0x3b5c0e&&(_0x5cf68c+='\\x20'+_0x3b5c0e,(_0x3b5c0e===_0xd94d2e(0x294)||_0x3b5c0e===_0xd94d2e(0x235)&&((_0x5423c9=_0x20ad1f[_0xd94d2e(0x1e9)])==null?void 0x0:_0x5423c9['hostname'])===_0xd94d2e(0x1ea))&&(_0x2292c5=_0xd94d2e(0x1ea)))),_0x20ad1f[_0xd94d2e(0x29d)]={'id':+new Date(),'tool':_0x5cf68c},_0x2ca164&&_0x5cf68c&&!_0x41ebfe&&(_0x3b5c0e?console['log'](_0xd94d2e(0x2bd)+_0x3b5c0e+_0xd94d2e(0x217)):console[_0xd94d2e(0x2d3)](_0xd94d2e(0x2e6)+(_0x5cf68c['charAt'](0x0)[_0xd94d2e(0x20b)]()+_0x5cf68c[_0xd94d2e(0x24a)](0x1))+',',_0xd94d2e(0x20e),'see\\x20https://tinyurl.com/2vt8jxzw\\x20for\\x20more\\x20info.'));}let _0x326972=new z(_0x20ad1f,_0x2292c5,_0x2d32cd,_0x23d982,_0x2bf037,_0x17c366);return _0x326972[_0xd94d2e(0x26d)]['bind'](_0x326972);}catch(_0x266308){return console[_0xd94d2e(0x213)]('logger\\x20failed\\x20to\\x20connect\\x20to\\x20host',_0x266308&&_0x266308[_0xd94d2e(0x1ff)]),()=>{};}});return _0x3b9c7f=>_0x540a51['forEach'](_0x742346=>_0x742346(_0x3b9c7f));}function ne(_0x31e108,_0x3ec168,_0x417cab,_0xfd62c4){var _0x4be061=_0x3890c8;_0xfd62c4&&_0x31e108===_0x4be061(0x22a)&&_0x417cab[_0x4be061(0x1e9)][_0x4be061(0x22a)]();}function b(_0x30160c){var _0x151986=_0x3890c8,_0x2c787f,_0x2a95b9;let _0x2b4527=function(_0x1f6955,_0x424bf1){return _0x424bf1-_0x1f6955;},_0x19085c;if(_0x30160c[_0x151986(0x20a)])_0x19085c=function(){var _0x56aa7e=_0x151986;return _0x30160c[_0x56aa7e(0x20a)][_0x56aa7e(0x2b0)]();};else{if(_0x30160c[_0x151986(0x266)]&&_0x30160c[_0x151986(0x266)][_0x151986(0x2b5)]&&((_0x2a95b9=(_0x2c787f=_0x30160c[_0x151986(0x266)])==null?void 0x0:_0x2c787f[_0x151986(0x282)])==null?void 0x0:_0x2a95b9['NEXT_RUNTIME'])!==_0x151986(0x272))_0x19085c=function(){var _0x2687a2=_0x151986;return _0x30160c[_0x2687a2(0x266)][_0x2687a2(0x2b5)]();},_0x2b4527=function(_0x841d75,_0x2991da){return 0x3e8*(_0x2991da[0x0]-_0x841d75[0x0])+(_0x2991da[0x1]-_0x841d75[0x1])/0xf4240;};else try{let {performance:_0xd3a2df}=require(_0x151986(0x2dc));_0x19085c=function(){var _0x52330d=_0x151986;return _0xd3a2df[_0x52330d(0x2b0)]();};}catch{_0x19085c=function(){return+new Date();};}}return{'elapsed':_0x2b4527,'timeStamp':_0x19085c,'now':()=>Date[_0x151986(0x2b0)]()};}function X(_0x31ddec,_0x301594,_0x57b351){var _0xd50045=_0x3890c8,_0x21878c,_0x18f50c,_0x1295d0,_0x2b81d1,_0x429f3b,_0x1a0b9b,_0x4dbdad;if(_0x31ddec[_0xd50045(0x24c)]!==void 0x0)return _0x31ddec[_0xd50045(0x24c)];let _0x36bf8=((_0x18f50c=(_0x21878c=_0x31ddec['process'])==null?void 0x0:_0x21878c[_0xd50045(0x2a9)])==null?void 0x0:_0x18f50c[_0xd50045(0x286)])||((_0x2b81d1=(_0x1295d0=_0x31ddec[_0xd50045(0x266)])==null?void 0x0:_0x1295d0[_0xd50045(0x282)])==null?void 0x0:_0x2b81d1['NEXT_RUNTIME'])===_0xd50045(0x272),_0xd67b84=!!(_0x57b351===_0xd50045(0x2ad)&&((_0x429f3b=_0x31ddec[_0xd50045(0x23f)])==null?void 0x0:_0x429f3b[_0xd50045(0x2cb)]));function _0x224a39(_0x3f855b){var _0x554bf3=_0xd50045;if(_0x3f855b['startsWith']('/')&&_0x3f855b[_0x554bf3(0x1f8)]('/')){let _0x1a86b1=new RegExp(_0x3f855b['slice'](0x1,-0x1));return _0xda75d7=>_0x1a86b1[_0x554bf3(0x25d)](_0xda75d7);}else{if(_0x3f855b[_0x554bf3(0x20d)]('*')||_0x3f855b[_0x554bf3(0x20d)]('?')){let _0x1cb7b0=new RegExp('^'+_0x3f855b['replace'](/\\./g,String[_0x554bf3(0x2a4)](0x5c)+'.')['replace'](/\\*/g,'.*')['replace'](/\\?/g,'.')+String[_0x554bf3(0x2a4)](0x24));return _0x3d762c=>_0x1cb7b0['test'](_0x3d762c);}else return _0x362679=>_0x362679===_0x3f855b;}}let _0x8cb568=_0x301594[_0xd50045(0x292)](_0x224a39);return _0x31ddec[_0xd50045(0x24c)]=_0x36bf8||!_0x301594,!_0x31ddec[_0xd50045(0x24c)]&&((_0x1a0b9b=_0x31ddec[_0xd50045(0x1e9)])==null?void 0x0:_0x1a0b9b[_0xd50045(0x270)])&&(_0x31ddec[_0xd50045(0x24c)]=_0x8cb568[_0xd50045(0x1df)](_0x16149e=>_0x16149e(_0x31ddec[_0xd50045(0x1e9)][_0xd50045(0x270)]))),_0xd67b84&&!_0x31ddec[_0xd50045(0x24c)]&&!((_0x4dbdad=_0x31ddec[_0xd50045(0x1e9)])!=null&&_0x4dbdad[_0xd50045(0x270)])&&(_0x31ddec[_0xd50045(0x24c)]=!0x0),_0x31ddec[_0xd50045(0x24c)];}function J(_0x1b046d,_0x3af781,_0x5b51f5,_0x4cee6a,_0x39e136,_0x5d8b23){var _0x1f5d44=_0x3890c8;_0x1b046d=_0x1b046d,_0x3af781=_0x3af781,_0x5b51f5=_0x5b51f5,_0x4cee6a=_0x4cee6a,_0x39e136=_0x39e136,_0x39e136=_0x39e136||{},_0x39e136['defaultLimits']=_0x39e136['defaultLimits']||{},_0x39e136[_0x1f5d44(0x225)]=_0x39e136[_0x1f5d44(0x225)]||{},_0x39e136[_0x1f5d44(0x236)]=_0x39e136[_0x1f5d44(0x236)]||{},_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x291)]=_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x291)]||{},_0x39e136[_0x1f5d44(0x236)]['global']=_0x39e136[_0x1f5d44(0x236)]['global']||{};let _0x4756a1={'perLogpoint':{'reduceOnCount':_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x291)][_0x1f5d44(0x1e8)]||0x32,'reduceOnAccumulatedProcessingTimeMs':_0x39e136['reducePolicy'][_0x1f5d44(0x291)][_0x1f5d44(0x281)]||0x64,'resetWhenQuietMs':_0x39e136[_0x1f5d44(0x236)]['perLogpoint']['resetWhenQuietMs']||0x1f4,'resetOnProcessingTimeAverageMs':_0x39e136[_0x1f5d44(0x236)]['perLogpoint']['resetOnProcessingTimeAverageMs']||0x64},'global':{'reduceOnCount':_0x39e136['reducePolicy'][_0x1f5d44(0x2d7)][_0x1f5d44(0x1e8)]||0x3e8,'reduceOnAccumulatedProcessingTimeMs':_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x2d7)]['reduceOnAccumulatedProcessingTimeMs']||0x12c,'resetWhenQuietMs':_0x39e136[_0x1f5d44(0x236)]['global'][_0x1f5d44(0x264)]||0x32,'resetOnProcessingTimeAverageMs':_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x2d7)][_0x1f5d44(0x231)]||0x64}},_0x41af91=b(_0x1b046d),_0x13f85b=_0x41af91[_0x1f5d44(0x276)],_0x5553e9=_0x41af91[_0x1f5d44(0x2be)];function _0x39602c(){var _0x293841=_0x1f5d44;this[_0x293841(0x243)]=/^(?!(?:do|if|in|for|let|new|try|var|case|else|enum|eval|false|null|this|true|void|with|break|catch|class|const|super|throw|while|yield|delete|export|import|public|return|static|switch|typeof|default|extends|finally|package|private|continue|debugger|function|arguments|interface|protected|implements|instanceof)$)[_$a-zA-Z\\xA0-\\uFFFF][_$a-zA-Z0-9\\xA0-\\uFFFF]*$/,this[_0x293841(0x279)]=/^(0|[1-9][0-9]*)$/,this[_0x293841(0x205)]=/'([^\\\\']|\\\\')*'/,this['_undefined']=_0x1b046d[_0x293841(0x2cd)],this[_0x293841(0x26f)]=_0x1b046d[_0x293841(0x23a)],this['_getOwnPropertyDescriptor']=Object[_0x293841(0x1f3)],this[_0x293841(0x202)]=Object['getOwnPropertyNames'],this['_Symbol']=_0x1b046d[_0x293841(0x22c)],this[_0x293841(0x215)]=RegExp[_0x293841(0x27c)][_0x293841(0x269)],this['_dateToString']=Date[_0x293841(0x27c)][_0x293841(0x269)];}_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2b2)]=function(_0x254f7f,_0x1babfb,_0x2e90c6,_0xdb54a9){var _0x33bfa3=_0x1f5d44,_0x168568=this,_0x471824=_0x2e90c6[_0x33bfa3(0x2bf)];function _0x3a3c67(_0x142852,_0x2cc0b4,_0x381677){var _0x16d30c=_0x33bfa3;_0x2cc0b4[_0x16d30c(0x27b)]=_0x16d30c(0x2a8),_0x2cc0b4[_0x16d30c(0x29e)]=_0x142852[_0x16d30c(0x1ff)],_0x3b2ef2=_0x381677[_0x16d30c(0x286)]['current'],_0x381677[_0x16d30c(0x286)][_0x16d30c(0x200)]=_0x2cc0b4,_0x168568[_0x16d30c(0x24f)](_0x2cc0b4,_0x381677);}let _0x361300,_0x7450c3,_0x1f473b=_0x1b046d[_0x33bfa3(0x240)];_0x1b046d[_0x33bfa3(0x240)]=!0x0,_0x1b046d[_0x33bfa3(0x1e7)]&&(_0x361300=_0x1b046d[_0x33bfa3(0x1e7)][_0x33bfa3(0x29e)],_0x7450c3=_0x1b046d['console'][_0x33bfa3(0x213)],_0x361300&&(_0x1b046d[_0x33bfa3(0x1e7)][_0x33bfa3(0x29e)]=function(){}),_0x7450c3&&(_0x1b046d[_0x33bfa3(0x1e7)][_0x33bfa3(0x213)]=function(){}));try{try{_0x2e90c6[_0x33bfa3(0x2c9)]++,_0x2e90c6[_0x33bfa3(0x2bf)]&&_0x2e90c6[_0x33bfa3(0x1e2)]['push'](_0x1babfb);var _0x2e727d,_0x4ce0a7,_0x5c981d,_0x3de9f4,_0x2ee350=[],_0x1fd1ab=[],_0x5481d5,_0x4e2612=this[_0x33bfa3(0x297)](_0x1babfb),_0x443a68=_0x4e2612==='array',_0xf19808=!0x1,_0x10ecde=_0x4e2612===_0x33bfa3(0x230),_0x4ec234=this[_0x33bfa3(0x1fc)](_0x4e2612),_0x13a3ac=this[_0x33bfa3(0x28e)](_0x4e2612),_0x21daba=_0x4ec234||_0x13a3ac,_0x5d7eb8={},_0x4a200a=0x0,_0x2e69b1=!0x1,_0x3b2ef2,_0x1ec59c=/^(([1-9]{1}[0-9]*)|0)$/;if(_0x2e90c6['depth']){if(_0x443a68){if(_0x4ce0a7=_0x1babfb[_0x33bfa3(0x1ee)],_0x4ce0a7>_0x2e90c6['elements']){for(_0x5c981d=0x0,_0x3de9f4=_0x2e90c6[_0x33bfa3(0x1f7)],_0x2e727d=_0x5c981d;_0x2e727d<_0x3de9f4;_0x2e727d++)_0x1fd1ab['push'](_0x168568[_0x33bfa3(0x223)](_0x2ee350,_0x1babfb,_0x4e2612,_0x2e727d,_0x2e90c6));_0x254f7f[_0x33bfa3(0x228)]=!0x0;}else{for(_0x5c981d=0x0,_0x3de9f4=_0x4ce0a7,_0x2e727d=_0x5c981d;_0x2e727d<_0x3de9f4;_0x2e727d++)_0x1fd1ab['push'](_0x168568[_0x33bfa3(0x223)](_0x2ee350,_0x1babfb,_0x4e2612,_0x2e727d,_0x2e90c6));}_0x2e90c6['autoExpandPropertyCount']+=_0x1fd1ab[_0x33bfa3(0x1ee)];}if(!(_0x4e2612===_0x33bfa3(0x2d8)||_0x4e2612===_0x33bfa3(0x2cd))&&!_0x4ec234&&_0x4e2612!=='String'&&_0x4e2612!==_0x33bfa3(0x252)&&_0x4e2612!==_0x33bfa3(0x267)){var _0x2d45fa=_0xdb54a9[_0x33bfa3(0x1ef)]||_0x2e90c6[_0x33bfa3(0x1ef)];if(this['_isSet'](_0x1babfb)?(_0x2e727d=0x0,_0x1babfb[_0x33bfa3(0x2c8)](function(_0x3b3e4c){var _0x118b02=_0x33bfa3;if(_0x4a200a++,_0x2e90c6['autoExpandPropertyCount']++,_0x4a200a>_0x2d45fa){_0x2e69b1=!0x0;return;}if(!_0x2e90c6[_0x118b02(0x2af)]&&_0x2e90c6['autoExpand']&&_0x2e90c6[_0x118b02(0x28f)]>_0x2e90c6[_0x118b02(0x28a)]){_0x2e69b1=!0x0;return;}_0x1fd1ab[_0x118b02(0x2e0)](_0x168568[_0x118b02(0x223)](_0x2ee350,_0x1babfb,'Set',_0x2e727d++,_0x2e90c6,function(_0xba6f7b){return function(){return _0xba6f7b;};}(_0x3b3e4c)));})):this[_0x33bfa3(0x2ea)](_0x1babfb)&&_0x1babfb[_0x33bfa3(0x2c8)](function(_0x26b876,_0x1cd31e){var _0x13d9e6=_0x33bfa3;if(_0x4a200a++,_0x2e90c6[_0x13d9e6(0x28f)]++,_0x4a200a>_0x2d45fa){_0x2e69b1=!0x0;return;}if(!_0x2e90c6[_0x13d9e6(0x2af)]&&_0x2e90c6[_0x13d9e6(0x2bf)]&&_0x2e90c6[_0x13d9e6(0x28f)]>_0x2e90c6[_0x13d9e6(0x28a)]){_0x2e69b1=!0x0;return;}var _0x5245d5=_0x1cd31e[_0x13d9e6(0x269)]();_0x5245d5['length']>0x64&&(_0x5245d5=_0x5245d5[_0x13d9e6(0x232)](0x0,0x64)+'...'),_0x1fd1ab[_0x13d9e6(0x2e0)](_0x168568['_addProperty'](_0x2ee350,_0x1babfb,_0x13d9e6(0x283),_0x5245d5,_0x2e90c6,function(_0x437b32){return function(){return _0x437b32;};}(_0x26b876)));}),!_0xf19808){try{for(_0x5481d5 in _0x1babfb)if(!(_0x443a68&&_0x1ec59c[_0x33bfa3(0x25d)](_0x5481d5))&&!this[_0x33bfa3(0x251)](_0x1babfb,_0x5481d5,_0x2e90c6)){if(_0x4a200a++,_0x2e90c6['autoExpandPropertyCount']++,_0x4a200a>_0x2d45fa){_0x2e69b1=!0x0;break;}if(!_0x2e90c6['isExpressionToEvaluate']&&_0x2e90c6[_0x33bfa3(0x2bf)]&&_0x2e90c6[_0x33bfa3(0x28f)]>_0x2e90c6[_0x33bfa3(0x28a)]){_0x2e69b1=!0x0;break;}_0x1fd1ab[_0x33bfa3(0x2e0)](_0x168568[_0x33bfa3(0x1dd)](_0x2ee350,_0x5d7eb8,_0x1babfb,_0x4e2612,_0x5481d5,_0x2e90c6));}}catch{}if(_0x5d7eb8[_0x33bfa3(0x214)]=!0x0,_0x10ecde&&(_0x5d7eb8[_0x33bfa3(0x248)]=!0x0),!_0x2e69b1){var _0x4a9287=[][_0x33bfa3(0x29c)](this[_0x33bfa3(0x202)](_0x1babfb))['concat'](this[_0x33bfa3(0x2c1)](_0x1babfb));for(_0x2e727d=0x0,_0x4ce0a7=_0x4a9287[_0x33bfa3(0x1ee)];_0x2e727d<_0x4ce0a7;_0x2e727d++)if(_0x5481d5=_0x4a9287[_0x2e727d],!(_0x443a68&&_0x1ec59c[_0x33bfa3(0x25d)](_0x5481d5['toString']()))&&!this[_0x33bfa3(0x251)](_0x1babfb,_0x5481d5,_0x2e90c6)&&!_0x5d7eb8[typeof _0x5481d5!=_0x33bfa3(0x2ca)?_0x33bfa3(0x2ba)+_0x5481d5['toString']():_0x5481d5]){if(_0x4a200a++,_0x2e90c6[_0x33bfa3(0x28f)]++,_0x4a200a>_0x2d45fa){_0x2e69b1=!0x0;break;}if(!_0x2e90c6[_0x33bfa3(0x2af)]&&_0x2e90c6[_0x33bfa3(0x2bf)]&&_0x2e90c6[_0x33bfa3(0x28f)]>_0x2e90c6[_0x33bfa3(0x28a)]){_0x2e69b1=!0x0;break;}_0x1fd1ab['push'](_0x168568[_0x33bfa3(0x1dd)](_0x2ee350,_0x5d7eb8,_0x1babfb,_0x4e2612,_0x5481d5,_0x2e90c6));}}}}}if(_0x254f7f['type']=_0x4e2612,_0x21daba?(_0x254f7f[_0x33bfa3(0x2e9)]=_0x1babfb[_0x33bfa3(0x2b8)](),this[_0x33bfa3(0x298)](_0x4e2612,_0x254f7f,_0x2e90c6,_0xdb54a9)):_0x4e2612===_0x33bfa3(0x24d)?_0x254f7f[_0x33bfa3(0x2e9)]=this[_0x33bfa3(0x2aa)]['call'](_0x1babfb):_0x4e2612===_0x33bfa3(0x267)?_0x254f7f[_0x33bfa3(0x2e9)]=_0x1babfb['toString']():_0x4e2612===_0x33bfa3(0x285)?_0x254f7f['value']=this[_0x33bfa3(0x215)][_0x33bfa3(0x1ec)](_0x1babfb):_0x4e2612===_0x33bfa3(0x2ca)&&this[_0x33bfa3(0x2cc)]?_0x254f7f[_0x33bfa3(0x2e9)]=this[_0x33bfa3(0x2cc)]['prototype'][_0x33bfa3(0x269)]['call'](_0x1babfb):!_0x2e90c6[_0x33bfa3(0x2d4)]&&!(_0x4e2612===_0x33bfa3(0x2d8)||_0x4e2612===_0x33bfa3(0x2cd))&&(delete _0x254f7f[_0x33bfa3(0x2e9)],_0x254f7f[_0x33bfa3(0x20c)]=!0x0),_0x2e69b1&&(_0x254f7f['cappedProps']=!0x0),_0x3b2ef2=_0x2e90c6[_0x33bfa3(0x286)][_0x33bfa3(0x200)],_0x2e90c6['node'][_0x33bfa3(0x200)]=_0x254f7f,this['_treeNodePropertiesBeforeFullValue'](_0x254f7f,_0x2e90c6),_0x1fd1ab['length']){for(_0x2e727d=0x0,_0x4ce0a7=_0x1fd1ab['length'];_0x2e727d<_0x4ce0a7;_0x2e727d++)_0x1fd1ab[_0x2e727d](_0x2e727d);}_0x2ee350[_0x33bfa3(0x1ee)]&&(_0x254f7f[_0x33bfa3(0x1ef)]=_0x2ee350);}catch(_0x36e778){_0x3a3c67(_0x36e778,_0x254f7f,_0x2e90c6);}this[_0x33bfa3(0x2c7)](_0x1babfb,_0x254f7f),this[_0x33bfa3(0x2e5)](_0x254f7f,_0x2e90c6),_0x2e90c6[_0x33bfa3(0x286)][_0x33bfa3(0x200)]=_0x3b2ef2,_0x2e90c6[_0x33bfa3(0x2c9)]--,_0x2e90c6[_0x33bfa3(0x2bf)]=_0x471824,_0x2e90c6['autoExpand']&&_0x2e90c6[_0x33bfa3(0x1e2)][_0x33bfa3(0x27e)]();}finally{_0x361300&&(_0x1b046d['console'][_0x33bfa3(0x29e)]=_0x361300),_0x7450c3&&(_0x1b046d[_0x33bfa3(0x1e7)][_0x33bfa3(0x213)]=_0x7450c3),_0x1b046d[_0x33bfa3(0x240)]=_0x1f473b;}return _0x254f7f;},_0x39602c[_0x1f5d44(0x27c)]['_getOwnPropertySymbols']=function(_0xd19fef){var _0x1f8178=_0x1f5d44;return Object['getOwnPropertySymbols']?Object[_0x1f8178(0x209)](_0xd19fef):[];},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x219)]=function(_0x5ece89){var _0x396459=_0x1f5d44;return!!(_0x5ece89&&_0x1b046d['Set']&&this[_0x396459(0x2a0)](_0x5ece89)===_0x396459(0x2ce)&&_0x5ece89[_0x396459(0x2c8)]);},_0x39602c['prototype'][_0x1f5d44(0x251)]=function(_0x5e3ecf,_0x457efe,_0x503699){var _0x58ab93=_0x1f5d44;if(!_0x503699[_0x58ab93(0x226)]){let _0x40a764=this['_getOwnPropertyDescriptor'](_0x5e3ecf,_0x457efe);if(_0x40a764&&_0x40a764[_0x58ab93(0x1eb)])return!0x0;}return _0x503699[_0x58ab93(0x1f5)]?typeof _0x5e3ecf[_0x457efe]==_0x58ab93(0x230):!0x1;},_0x39602c['prototype'][_0x1f5d44(0x297)]=function(_0x55aea2){var _0x3223a6=_0x1f5d44,_0x435cfc='';return _0x435cfc=typeof _0x55aea2,_0x435cfc===_0x3223a6(0x26a)?this[_0x3223a6(0x2a0)](_0x55aea2)==='[object\\x20Array]'?_0x435cfc=_0x3223a6(0x260):this['_objectToString'](_0x55aea2)===_0x3223a6(0x287)?_0x435cfc=_0x3223a6(0x24d):this['_objectToString'](_0x55aea2)===_0x3223a6(0x2bc)?_0x435cfc=_0x3223a6(0x267):_0x55aea2===null?_0x435cfc='null':_0x55aea2[_0x3223a6(0x277)]&&(_0x435cfc=_0x55aea2[_0x3223a6(0x277)][_0x3223a6(0x273)]||_0x435cfc):_0x435cfc===_0x3223a6(0x2cd)&&this[_0x3223a6(0x26f)]&&_0x55aea2 instanceof this[_0x3223a6(0x26f)]&&(_0x435cfc=_0x3223a6(0x23a)),_0x435cfc;},_0x39602c['prototype'][_0x1f5d44(0x2a0)]=function(_0x2bac5a){var _0x4622cb=_0x1f5d44;return Object['prototype'][_0x4622cb(0x269)][_0x4622cb(0x1ec)](_0x2bac5a);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x1fc)]=function(_0x2ccf2c){var _0x674b58=_0x1f5d44;return _0x2ccf2c===_0x674b58(0x1e0)||_0x2ccf2c===_0x674b58(0x1f2)||_0x2ccf2c===_0x674b58(0x2e8);},_0x39602c[_0x1f5d44(0x27c)]['_isPrimitiveWrapperType']=function(_0x5299e2){var _0x55fd87=_0x1f5d44;return _0x5299e2===_0x55fd87(0x2d5)||_0x5299e2==='String'||_0x5299e2===_0x55fd87(0x245);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x223)]=function(_0x157555,_0x1174b0,_0x2697a9,_0x20ea02,_0x1e29d4,_0x5f3380){var _0x174700=this;return function(_0x3816dd){var _0x4b6516=_0x4187,_0x57f376=_0x1e29d4[_0x4b6516(0x286)][_0x4b6516(0x200)],_0xed0e7b=_0x1e29d4[_0x4b6516(0x286)]['index'],_0x57849c=_0x1e29d4['node'][_0x4b6516(0x261)];_0x1e29d4['node']['parent']=_0x57f376,_0x1e29d4[_0x4b6516(0x286)]['index']=typeof _0x20ea02==_0x4b6516(0x2e8)?_0x20ea02:_0x3816dd,_0x157555[_0x4b6516(0x2e0)](_0x174700[_0x4b6516(0x208)](_0x1174b0,_0x2697a9,_0x20ea02,_0x1e29d4,_0x5f3380)),_0x1e29d4[_0x4b6516(0x286)]['parent']=_0x57849c,_0x1e29d4['node'][_0x4b6516(0x2b4)]=_0xed0e7b;};},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x1dd)]=function(_0x16666b,_0x37b24a,_0xca6b76,_0x5eaca8,_0x47f24d,_0x518bd1,_0x3aad4c){var _0x5a59c9=_0x1f5d44,_0x5d7f32=this;return _0x37b24a[typeof _0x47f24d!=_0x5a59c9(0x2ca)?_0x5a59c9(0x2ba)+_0x47f24d['toString']():_0x47f24d]=!0x0,function(_0x186abb){var _0x227537=_0x5a59c9,_0x93753=_0x518bd1[_0x227537(0x286)]['current'],_0x3a8b46=_0x518bd1[_0x227537(0x286)][_0x227537(0x2b4)],_0x5cf7ec=_0x518bd1[_0x227537(0x286)]['parent'];_0x518bd1[_0x227537(0x286)]['parent']=_0x93753,_0x518bd1['node'][_0x227537(0x2b4)]=_0x186abb,_0x16666b[_0x227537(0x2e0)](_0x5d7f32[_0x227537(0x208)](_0xca6b76,_0x5eaca8,_0x47f24d,_0x518bd1,_0x3aad4c)),_0x518bd1[_0x227537(0x286)][_0x227537(0x261)]=_0x5cf7ec,_0x518bd1[_0x227537(0x286)]['index']=_0x3a8b46;};},_0x39602c[_0x1f5d44(0x27c)]['_property']=function(_0x1e9096,_0x2437b1,_0x5a258e,_0x306875,_0xeb1ab2){var _0x2e8b77=_0x1f5d44,_0x1ab203=this;_0xeb1ab2||(_0xeb1ab2=function(_0x2125a7,_0x5a8e51){return _0x2125a7[_0x5a8e51];});var _0x1a70b4=_0x5a258e[_0x2e8b77(0x269)](),_0x4a3b80=_0x306875[_0x2e8b77(0x27f)]||{},_0x4ec463=_0x306875[_0x2e8b77(0x2d4)],_0x436a10=_0x306875['isExpressionToEvaluate'];try{var _0x4a65f6=this[_0x2e8b77(0x2ea)](_0x1e9096),_0x14070f=_0x1a70b4;_0x4a65f6&&_0x14070f[0x0]==='\\x27'&&(_0x14070f=_0x14070f[_0x2e8b77(0x24a)](0x1,_0x14070f['length']-0x2));var _0x33f2fd=_0x306875[_0x2e8b77(0x27f)]=_0x4a3b80[_0x2e8b77(0x2ba)+_0x14070f];_0x33f2fd&&(_0x306875['depth']=_0x306875[_0x2e8b77(0x2d4)]+0x1),_0x306875['isExpressionToEvaluate']=!!_0x33f2fd;var _0x761c47=typeof _0x5a258e==_0x2e8b77(0x2ca),_0x2a07c1={'name':_0x761c47||_0x4a65f6?_0x1a70b4:this['_propertyName'](_0x1a70b4)};if(_0x761c47&&(_0x2a07c1[_0x2e8b77(0x2ca)]=!0x0),!(_0x2437b1===_0x2e8b77(0x260)||_0x2437b1===_0x2e8b77(0x2e7))){var _0x336b0f=this[_0x2e8b77(0x212)](_0x1e9096,_0x5a258e);if(_0x336b0f&&(_0x336b0f[_0x2e8b77(0x257)]&&(_0x2a07c1['setter']=!0x0),_0x336b0f[_0x2e8b77(0x1eb)]&&!_0x33f2fd&&!_0x306875[_0x2e8b77(0x226)]))return _0x2a07c1['getter']=!0x0,this[_0x2e8b77(0x237)](_0x2a07c1,_0x306875),_0x2a07c1;}var _0x42b0f3;try{_0x42b0f3=_0xeb1ab2(_0x1e9096,_0x5a258e);}catch(_0x470aa0){return _0x2a07c1={'name':_0x1a70b4,'type':_0x2e8b77(0x2a8),'error':_0x470aa0[_0x2e8b77(0x1ff)]},this[_0x2e8b77(0x237)](_0x2a07c1,_0x306875),_0x2a07c1;}var _0x3f69d6=this[_0x2e8b77(0x297)](_0x42b0f3),_0x26ec12=this[_0x2e8b77(0x1fc)](_0x3f69d6);if(_0x2a07c1['type']=_0x3f69d6,_0x26ec12)this['_processTreeNodeResult'](_0x2a07c1,_0x306875,_0x42b0f3,function(){var _0x27d61e=_0x2e8b77;_0x2a07c1[_0x27d61e(0x2e9)]=_0x42b0f3[_0x27d61e(0x2b8)](),!_0x33f2fd&&_0x1ab203[_0x27d61e(0x298)](_0x3f69d6,_0x2a07c1,_0x306875,{});});else{var _0x353800=_0x306875[_0x2e8b77(0x2bf)]&&_0x306875[_0x2e8b77(0x2c9)]<_0x306875[_0x2e8b77(0x21f)]&&_0x306875[_0x2e8b77(0x1e2)][_0x2e8b77(0x229)](_0x42b0f3)<0x0&&_0x3f69d6!==_0x2e8b77(0x230)&&_0x306875['autoExpandPropertyCount']<_0x306875[_0x2e8b77(0x28a)];_0x353800||_0x306875[_0x2e8b77(0x2c9)]<_0x4ec463||_0x33f2fd?this['serialize'](_0x2a07c1,_0x42b0f3,_0x306875,_0x33f2fd||{}):this[_0x2e8b77(0x237)](_0x2a07c1,_0x306875,_0x42b0f3,function(){var _0x26b4af=_0x2e8b77;_0x3f69d6==='null'||_0x3f69d6===_0x26b4af(0x2cd)||(delete _0x2a07c1[_0x26b4af(0x2e9)],_0x2a07c1[_0x26b4af(0x20c)]=!0x0);});}return _0x2a07c1;}finally{_0x306875[_0x2e8b77(0x27f)]=_0x4a3b80,_0x306875[_0x2e8b77(0x2d4)]=_0x4ec463,_0x306875[_0x2e8b77(0x2af)]=_0x436a10;}},_0x39602c[_0x1f5d44(0x27c)]['_capIfString']=function(_0x400724,_0x56f824,_0x52035a,_0x2a5d1b){var _0x1c76fb=_0x1f5d44,_0x5d1231=_0x2a5d1b[_0x1c76fb(0x23c)]||_0x52035a[_0x1c76fb(0x23c)];if((_0x400724===_0x1c76fb(0x1f2)||_0x400724===_0x1c76fb(0x23b))&&_0x56f824[_0x1c76fb(0x2e9)]){let _0x1dff43=_0x56f824[_0x1c76fb(0x2e9)][_0x1c76fb(0x1ee)];_0x52035a[_0x1c76fb(0x2b7)]+=_0x1dff43,_0x52035a[_0x1c76fb(0x2b7)]>_0x52035a[_0x1c76fb(0x1de)]?(_0x56f824[_0x1c76fb(0x20c)]='',delete _0x56f824[_0x1c76fb(0x2e9)]):_0x1dff43>_0x5d1231&&(_0x56f824[_0x1c76fb(0x20c)]=_0x56f824['value'][_0x1c76fb(0x24a)](0x0,_0x5d1231),delete _0x56f824[_0x1c76fb(0x2e9)]);}},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2ea)]=function(_0x2b582){var _0x4f59b4=_0x1f5d44;return!!(_0x2b582&&_0x1b046d[_0x4f59b4(0x283)]&&this[_0x4f59b4(0x2a0)](_0x2b582)===_0x4f59b4(0x2d2)&&_0x2b582[_0x4f59b4(0x2c8)]);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x1ed)]=function(_0xd0769c){var _0x56daad=_0x1f5d44;if(_0xd0769c[_0x56daad(0x207)](/^\\d+$/))return _0xd0769c;var _0x44321c;try{_0x44321c=JSON[_0x56daad(0x274)](''+_0xd0769c);}catch{_0x44321c='\\x22'+this[_0x56daad(0x2a0)](_0xd0769c)+'\\x22';}return _0x44321c[_0x56daad(0x207)](/^"([a-zA-Z_][a-zA-Z_0-9]*)"$/)?_0x44321c=_0x44321c[_0x56daad(0x24a)](0x1,_0x44321c[_0x56daad(0x1ee)]-0x2):_0x44321c=_0x44321c[_0x56daad(0x2c4)](/'/g,'\\x5c\\x27')[_0x56daad(0x2c4)](/\\\\"/g,'\\x22')[_0x56daad(0x2c4)](/(^"|"$)/g,'\\x27'),_0x44321c;},_0x39602c[_0x1f5d44(0x27c)]['_processTreeNodeResult']=function(_0x35d4de,_0x18bf2b,_0x4b4ba8,_0x5e4ad4){var _0x3ae3b4=_0x1f5d44;this[_0x3ae3b4(0x24f)](_0x35d4de,_0x18bf2b),_0x5e4ad4&&_0x5e4ad4(),this[_0x3ae3b4(0x2c7)](_0x4b4ba8,_0x35d4de),this['_treeNodePropertiesAfterFullValue'](_0x35d4de,_0x18bf2b);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x24f)]=function(_0x3fef10,_0x16c344){var _0x25886e=_0x1f5d44;this[_0x25886e(0x275)](_0x3fef10,_0x16c344),this[_0x25886e(0x2d1)](_0x3fef10,_0x16c344),this[_0x25886e(0x239)](_0x3fef10,_0x16c344),this['_setNodePermissions'](_0x3fef10,_0x16c344);},_0x39602c['prototype'][_0x1f5d44(0x275)]=function(_0x4a95cf,_0x5175f9){},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2d1)]=function(_0x4dd70e,_0x1d0a77){},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x250)]=function(_0x2add9b,_0x21294a){},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x241)]=function(_0x57f907){return _0x57f907===this['_undefined'];},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2e5)]=function(_0x47895e,_0x5ee6d0){var _0x3bb2e6=_0x1f5d44;this[_0x3bb2e6(0x250)](_0x47895e,_0x5ee6d0),this['_setNodeExpandableState'](_0x47895e),_0x5ee6d0[_0x3bb2e6(0x2c3)]&&this[_0x3bb2e6(0x288)](_0x47895e),this[_0x3bb2e6(0x2db)](_0x47895e,_0x5ee6d0),this[_0x3bb2e6(0x23e)](_0x47895e,_0x5ee6d0),this[_0x3bb2e6(0x2ab)](_0x47895e);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2c7)]=function(_0x406f89,_0x5dc600){var _0x3d052f=_0x1f5d44;try{_0x406f89&&typeof _0x406f89[_0x3d052f(0x1ee)]==_0x3d052f(0x2e8)&&(_0x5dc600[_0x3d052f(0x1ee)]=_0x406f89['length']);}catch{}if(_0x5dc600[_0x3d052f(0x27b)]===_0x3d052f(0x2e8)||_0x5dc600[_0x3d052f(0x27b)]===_0x3d052f(0x245)){if(isNaN(_0x5dc600['value']))_0x5dc600[_0x3d052f(0x299)]=!0x0,delete _0x5dc600[_0x3d052f(0x2e9)];else switch(_0x5dc600['value']){case Number[_0x3d052f(0x1f9)]:_0x5dc600['positiveInfinity']=!0x0,delete _0x5dc600['value'];break;case Number['NEGATIVE_INFINITY']:_0x5dc600[_0x3d052f(0x25c)]=!0x0,delete _0x5dc600[_0x3d052f(0x2e9)];break;case 0x0:this[_0x3d052f(0x247)](_0x5dc600['value'])&&(_0x5dc600['negativeZero']=!0x0);break;}}else _0x5dc600[_0x3d052f(0x27b)]===_0x3d052f(0x230)&&typeof _0x406f89[_0x3d052f(0x273)]=='string'&&_0x406f89[_0x3d052f(0x273)]&&_0x5dc600[_0x3d052f(0x273)]&&_0x406f89[_0x3d052f(0x273)]!==_0x5dc600['name']&&(_0x5dc600[_0x3d052f(0x218)]=_0x406f89[_0x3d052f(0x273)]);},_0x39602c['prototype'][_0x1f5d44(0x247)]=function(_0x58bf0d){var _0x1eeae2=_0x1f5d44;return 0x1/_0x58bf0d===Number[_0x1eeae2(0x210)];},_0x39602c[_0x1f5d44(0x27c)]['_sortProps']=function(_0x4d7dd2){var _0x5c6f19=_0x1f5d44;!_0x4d7dd2['props']||!_0x4d7dd2[_0x5c6f19(0x1ef)]['length']||_0x4d7dd2['type']===_0x5c6f19(0x260)||_0x4d7dd2[_0x5c6f19(0x27b)]===_0x5c6f19(0x283)||_0x4d7dd2[_0x5c6f19(0x27b)]===_0x5c6f19(0x22b)||_0x4d7dd2[_0x5c6f19(0x1ef)][_0x5c6f19(0x1e3)](function(_0xb25f8,_0x3feabb){var _0x34181c=_0x5c6f19,_0x30ed1b=_0xb25f8[_0x34181c(0x273)][_0x34181c(0x2b3)](),_0x28978d=_0x3feabb['name'][_0x34181c(0x2b3)]();return _0x30ed1b<_0x28978d?-0x1:_0x30ed1b>_0x28978d?0x1:0x0;});},_0x39602c[_0x1f5d44(0x27c)]['_addFunctionsNode']=function(_0x5294e5,_0x377958){var _0x476737=_0x1f5d44;if(!(_0x377958[_0x476737(0x1f5)]||!_0x5294e5[_0x476737(0x1ef)]||!_0x5294e5['props'][_0x476737(0x1ee)])){for(var _0x23c633=[],_0x1cff31=[],_0x44160d=0x0,_0x4684cd=_0x5294e5['props'][_0x476737(0x1ee)];_0x44160d<_0x4684cd;_0x44160d++){var _0x36796e=_0x5294e5['props'][_0x44160d];_0x36796e[_0x476737(0x27b)]===_0x476737(0x230)?_0x23c633[_0x476737(0x2e0)](_0x36796e):_0x1cff31[_0x476737(0x2e0)](_0x36796e);}if(!(!_0x1cff31[_0x476737(0x1ee)]||_0x23c633[_0x476737(0x1ee)]<=0x1)){_0x5294e5[_0x476737(0x1ef)]=_0x1cff31;var _0x1e6ca0={'functionsNode':!0x0,'props':_0x23c633};this[_0x476737(0x275)](_0x1e6ca0,_0x377958),this[_0x476737(0x250)](_0x1e6ca0,_0x377958),this[_0x476737(0x2df)](_0x1e6ca0),this[_0x476737(0x1e4)](_0x1e6ca0,_0x377958),_0x1e6ca0['id']+='\\x20f',_0x5294e5[_0x476737(0x1ef)][_0x476737(0x21b)](_0x1e6ca0);}}},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x23e)]=function(_0xc708e1,_0x1404ba){},_0x39602c['prototype']['_setNodeExpandableState']=function(_0x44d604){},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x22d)]=function(_0x3c17fb){var _0x14eb98=_0x1f5d44;return Array[_0x14eb98(0x2a1)](_0x3c17fb)||typeof _0x3c17fb==_0x14eb98(0x26a)&&this['_objectToString'](_0x3c17fb)===_0x14eb98(0x21c);},_0x39602c[_0x1f5d44(0x27c)]['_setNodePermissions']=function(_0x1360b0,_0x443f96){},_0x39602c[_0x1f5d44(0x27c)]['_cleanNode']=function(_0x26f307){var _0x360d43=_0x1f5d44;delete _0x26f307[_0x360d43(0x1f0)],delete _0x26f307['_hasSetOnItsPath'],delete _0x26f307[_0x360d43(0x2de)];},_0x39602c['prototype'][_0x1f5d44(0x239)]=function(_0x21594a,_0x1ea38a){};let _0x4fccde=new _0x39602c(),_0x5aef3e={'props':_0x39e136['defaultLimits'][_0x1f5d44(0x1ef)]||0x64,'elements':_0x39e136['defaultLimits']['elements']||0x64,'strLength':_0x39e136[_0x1f5d44(0x1dc)][_0x1f5d44(0x23c)]||0x400*0x32,'totalStrLength':_0x39e136['defaultLimits'][_0x1f5d44(0x1de)]||0x400*0x32,'autoExpandLimit':_0x39e136['defaultLimits'][_0x1f5d44(0x28a)]||0x1388,'autoExpandMaxDepth':_0x39e136['defaultLimits'][_0x1f5d44(0x21f)]||0xa},_0x374151={'props':_0x39e136[_0x1f5d44(0x225)][_0x1f5d44(0x1ef)]||0x5,'elements':_0x39e136[_0x1f5d44(0x225)][_0x1f5d44(0x1f7)]||0x5,'strLength':_0x39e136[_0x1f5d44(0x225)]['strLength']||0x100,'totalStrLength':_0x39e136[_0x1f5d44(0x225)][_0x1f5d44(0x1de)]||0x100*0x3,'autoExpandLimit':_0x39e136['reducedLimits'][_0x1f5d44(0x28a)]||0x1e,'autoExpandMaxDepth':_0x39e136['reducedLimits']['autoExpandMaxDepth']||0x2};if(_0x5d8b23){let _0x275f95=_0x4fccde['serialize'][_0x1f5d44(0x262)](_0x4fccde);_0x4fccde[_0x1f5d44(0x2b2)]=function(_0x1c90b2,_0x4276f3,_0x30aacd,_0x55932d){return _0x275f95(_0x1c90b2,_0x5d8b23(_0x4276f3),_0x30aacd,_0x55932d);};}function _0x1a7762(_0x577f01,_0x418059,_0x269690,_0x32321b,_0x4cd5b2,_0x52912d){var _0x4ce86f=_0x1f5d44;let _0x3eb726,_0xb700fa;try{_0xb700fa=_0x5553e9(),_0x3eb726=_0x5b51f5[_0x418059],!_0x3eb726||_0xb700fa-_0x3eb726['ts']>_0x4756a1[_0x4ce86f(0x291)][_0x4ce86f(0x264)]&&_0x3eb726['count']&&_0x3eb726[_0x4ce86f(0x255)]/_0x3eb726[_0x4ce86f(0x238)]<_0x4756a1['perLogpoint']['resetOnProcessingTimeAverageMs']?(_0x5b51f5[_0x418059]=_0x3eb726={'count':0x0,'time':0x0,'ts':_0xb700fa},_0x5b51f5[_0x4ce86f(0x206)]={}):_0xb700fa-_0x5b51f5['hits']['ts']>_0x4756a1['global']['resetWhenQuietMs']&&_0x5b51f5['hits']['count']&&_0x5b51f5[_0x4ce86f(0x206)]['time']/_0x5b51f5['hits'][_0x4ce86f(0x238)]<_0x4756a1['global'][_0x4ce86f(0x231)]&&(_0x5b51f5[_0x4ce86f(0x206)]={});let _0x41ced7=[],_0x1fbc3d=_0x3eb726['reduceLimits']||_0x5b51f5['hits']['reduceLimits']?_0x374151:_0x5aef3e,_0x2da3f7=_0x3d6b99=>{var _0x44db24=_0x4ce86f;let _0x4c46fe={};return _0x4c46fe[_0x44db24(0x1ef)]=_0x3d6b99[_0x44db24(0x1ef)],_0x4c46fe['elements']=_0x3d6b99[_0x44db24(0x1f7)],_0x4c46fe[_0x44db24(0x23c)]=_0x3d6b99[_0x44db24(0x23c)],_0x4c46fe['totalStrLength']=_0x3d6b99[_0x44db24(0x1de)],_0x4c46fe[_0x44db24(0x28a)]=_0x3d6b99[_0x44db24(0x28a)],_0x4c46fe[_0x44db24(0x21f)]=_0x3d6b99[_0x44db24(0x21f)],_0x4c46fe[_0x44db24(0x2c3)]=!0x1,_0x4c46fe[_0x44db24(0x1f5)]=!_0x3af781,_0x4c46fe[_0x44db24(0x2d4)]=0x1,_0x4c46fe['level']=0x0,_0x4c46fe[_0x44db24(0x1fb)]=_0x44db24(0x29b),_0x4c46fe[_0x44db24(0x296)]='root_exp',_0x4c46fe[_0x44db24(0x2bf)]=!0x0,_0x4c46fe[_0x44db24(0x1e2)]=[],_0x4c46fe[_0x44db24(0x28f)]=0x0,_0x4c46fe[_0x44db24(0x226)]=_0x39e136[_0x44db24(0x226)],_0x4c46fe[_0x44db24(0x2b7)]=0x0,_0x4c46fe[_0x44db24(0x286)]={'current':void 0x0,'parent':void 0x0,'index':0x0},_0x4c46fe;};for(var _0x42e392=0x0;_0x42e392<_0x4cd5b2[_0x4ce86f(0x1ee)];_0x42e392++)_0x41ced7[_0x4ce86f(0x2e0)](_0x4fccde[_0x4ce86f(0x2b2)]({'timeNode':_0x577f01==='time'||void 0x0},_0x4cd5b2[_0x42e392],_0x2da3f7(_0x1fbc3d),{}));if(_0x577f01===_0x4ce86f(0x29f)||_0x577f01===_0x4ce86f(0x29e)){let _0x4f7582=Error['stackTraceLimit'];try{Error[_0x4ce86f(0x221)]=0x1/0x0,_0x41ced7['push'](_0x4fccde[_0x4ce86f(0x2b2)]({'stackNode':!0x0},new Error()[_0x4ce86f(0x22e)],_0x2da3f7(_0x1fbc3d),{'strLength':0x1/0x0}));}finally{Error[_0x4ce86f(0x221)]=_0x4f7582;}}return{'method':_0x4ce86f(0x2d3),'version':_0x4cee6a,'args':[{'ts':_0x269690,'session':_0x32321b,'args':_0x41ced7,'id':_0x418059,'context':_0x52912d}]};}catch(_0x2a8c31){return{'method':_0x4ce86f(0x2d3),'version':_0x4cee6a,'args':[{'ts':_0x269690,'session':_0x32321b,'args':[{'type':_0x4ce86f(0x2a8),'error':_0x2a8c31&&_0x2a8c31['message']}],'id':_0x418059,'context':_0x52912d}]};}finally{try{if(_0x3eb726&&_0xb700fa){let _0x28b06b=_0x5553e9();_0x3eb726[_0x4ce86f(0x238)]++,_0x3eb726['time']+=_0x13f85b(_0xb700fa,_0x28b06b),_0x3eb726['ts']=_0x28b06b,_0x5b51f5[_0x4ce86f(0x206)]['count']++,_0x5b51f5[_0x4ce86f(0x206)][_0x4ce86f(0x255)]+=_0x13f85b(_0xb700fa,_0x28b06b),_0x5b51f5[_0x4ce86f(0x206)]['ts']=_0x28b06b,(_0x3eb726['count']>_0x4756a1['perLogpoint'][_0x4ce86f(0x1e8)]||_0x3eb726[_0x4ce86f(0x255)]>_0x4756a1[_0x4ce86f(0x291)][_0x4ce86f(0x281)])&&(_0x3eb726[_0x4ce86f(0x201)]=!0x0),(_0x5b51f5[_0x4ce86f(0x206)][_0x4ce86f(0x238)]>_0x4756a1[_0x4ce86f(0x2d7)][_0x4ce86f(0x1e8)]||_0x5b51f5[_0x4ce86f(0x206)][_0x4ce86f(0x255)]>_0x4756a1[_0x4ce86f(0x2d7)]['reduceOnAccumulatedProcessingTimeMs'])&&(_0x5b51f5[_0x4ce86f(0x206)]['reduceLimits']=!0x0);}}catch{}}}return _0x1a7762;}function G(_0x372717){var _0x766cc9=_0x3890c8;if(_0x372717&&typeof _0x372717=='object'&&_0x372717[_0x766cc9(0x277)])switch(_0x372717[_0x766cc9(0x277)]['name']){case _0x766cc9(0x256):return _0x372717[_0x766cc9(0x21a)](Symbol['iterator'])?Promise['resolve']():_0x372717;case _0x766cc9(0x1fe):return Promise[_0x766cc9(0x25e)]();}return _0x372717;}((_0xc5752,_0xa30047,_0x3f3995,_0x363a2d,_0x27a42d,_0x5b6f79,_0x45d099,_0x2bc6fb,_0x126cff,_0x1d3c75,_0x2e3f19,_0x464da7)=>{var _0xd5f224=_0x3890c8;if(_0xc5752[_0xd5f224(0x289)])return _0xc5752[_0xd5f224(0x289)];let _0x41b2d1={'consoleLog':()=>{},'consoleTrace':()=>{},'consoleTime':()=>{},'consoleTimeEnd':()=>{},'autoLog':()=>{},'autoLogMany':()=>{},'autoTraceMany':()=>{},'coverage':()=>{},'autoTrace':()=>{},'autoTime':()=>{},'autoTimeEnd':()=>{}};if(!X(_0xc5752,_0x2bc6fb,_0x27a42d))return _0xc5752[_0xd5f224(0x289)]=_0x41b2d1,_0xc5752['_console_ninja'];let _0x3886d2=b(_0xc5752),_0x2794c3=_0x3886d2[_0xd5f224(0x276)],_0x44129f=_0x3886d2[_0xd5f224(0x2be)],_0x277b60=_0x3886d2[_0xd5f224(0x2b0)],_0x5b8e52={'hits':{},'ts':{}},_0x1f8b30=J(_0xc5752,_0x126cff,_0x5b8e52,_0x5b6f79,_0x464da7,_0x27a42d===_0xd5f224(0x244)?G:void 0x0),_0x46c143=(_0x82e8dd,_0x59b610,_0x51fdcc,_0x5c78c9,_0x42589f,_0x28db7b)=>{var _0xf273d1=_0xd5f224;let _0x39c71d=_0xc5752[_0xf273d1(0x289)];try{return _0xc5752['_console_ninja']=_0x41b2d1,_0x1f8b30(_0x82e8dd,_0x59b610,_0x51fdcc,_0x5c78c9,_0x42589f,_0x28db7b);}finally{_0xc5752[_0xf273d1(0x289)]=_0x39c71d;}},_0x186fbf=_0x4900f9=>{_0x5b8e52['ts'][_0x4900f9]=_0x44129f();},_0x21fa3c=(_0x242207,_0x1074db)=>{var _0x67dc13=_0xd5f224;let _0x44431a=_0x5b8e52['ts'][_0x1074db];if(delete _0x5b8e52['ts'][_0x1074db],_0x44431a){let _0x41f6fe=_0x2794c3(_0x44431a,_0x44129f());_0x13354f(_0x46c143(_0x67dc13(0x255),_0x242207,_0x277b60(),_0x728f74,[_0x41f6fe],_0x1074db));}},_0x341135=_0x55d522=>{var _0x594af4=_0xd5f224,_0x22d04b;return _0x27a42d==='next.js'&&_0xc5752[_0x594af4(0x224)]&&((_0x22d04b=_0x55d522==null?void 0x0:_0x55d522[_0x594af4(0x2d9)])==null?void 0x0:_0x22d04b[_0x594af4(0x1ee)])&&(_0x55d522[_0x594af4(0x2d9)][0x0][_0x594af4(0x224)]=_0xc5752['origin']),_0x55d522;};_0xc5752['_console_ninja']={'consoleLog':(_0x18a087,_0x257091)=>{var _0x240148=_0xd5f224;_0xc5752[_0x240148(0x1e7)]['log'][_0x240148(0x273)]!==_0x240148(0x227)&&_0x13354f(_0x46c143(_0x240148(0x2d3),_0x18a087,_0x277b60(),_0x728f74,_0x257091));},'consoleTrace':(_0x16338a,_0x54e3f4)=>{var _0x1399d8=_0xd5f224,_0x26a166,_0x49fc60;_0xc5752[_0x1399d8(0x1e7)]['log'][_0x1399d8(0x273)]!==_0x1399d8(0x1e6)&&((_0x49fc60=(_0x26a166=_0xc5752[_0x1399d8(0x266)])==null?void 0x0:_0x26a166[_0x1399d8(0x2a9)])!=null&&_0x49fc60[_0x1399d8(0x286)]&&(_0xc5752[_0x1399d8(0x2a2)]=!0x0),_0x13354f(_0x341135(_0x46c143(_0x1399d8(0x29f),_0x16338a,_0x277b60(),_0x728f74,_0x54e3f4))));},'consoleError':(_0x19664d,_0x4a89b4)=>{var _0x53d07d=_0xd5f224;_0xc5752[_0x53d07d(0x2a2)]=!0x0,_0x13354f(_0x341135(_0x46c143(_0x53d07d(0x29e),_0x19664d,_0x277b60(),_0x728f74,_0x4a89b4)));},'consoleTime':_0x4b8fda=>{_0x186fbf(_0x4b8fda);},'consoleTimeEnd':(_0x53faf9,_0x3ec558)=>{_0x21fa3c(_0x3ec558,_0x53faf9);},'autoLog':(_0x5aeaac,_0x2074bc)=>{_0x13354f(_0x46c143('log',_0x2074bc,_0x277b60(),_0x728f74,[_0x5aeaac]));},'autoLogMany':(_0x3634a2,_0x3fd372)=>{var _0x24da29=_0xd5f224;_0x13354f(_0x46c143(_0x24da29(0x2d3),_0x3634a2,_0x277b60(),_0x728f74,_0x3fd372));},'autoTrace':(_0x5bfb94,_0xee276a)=>{var _0xc67014=_0xd5f224;_0x13354f(_0x341135(_0x46c143(_0xc67014(0x29f),_0xee276a,_0x277b60(),_0x728f74,[_0x5bfb94])));},'autoTraceMany':(_0x29b396,_0x5dc6f1)=>{var _0x6097b4=_0xd5f224;_0x13354f(_0x341135(_0x46c143(_0x6097b4(0x29f),_0x29b396,_0x277b60(),_0x728f74,_0x5dc6f1)));},'autoTime':(_0x1ec463,_0x159318,_0xf6b2dc)=>{_0x186fbf(_0xf6b2dc);},'autoTimeEnd':(_0x3f6263,_0x4ce919,_0x1e750a)=>{_0x21fa3c(_0x4ce919,_0x1e750a);},'coverage':_0x25e683=>{_0x13354f({'method':'coverage','version':_0x5b6f79,'args':[{'id':_0x25e683}]});}};let _0x13354f=H(_0xc5752,_0xa30047,_0x3f3995,_0x363a2d,_0x27a42d,_0x1d3c75,_0x2e3f19),_0x728f74=_0xc5752[_0xd5f224(0x29d)];return _0xc5752[_0xd5f224(0x289)];})(globalThis,'127.0.0.1',_0x3890c8(0x253),_0x3890c8(0x27a),'vite',_0x3890c8(0x2ac),_0x3890c8(0x2c0),_0x3890c8(0x2e1),_0x3890c8(0x259),_0x3890c8(0x2e4),'1',_0x3890c8(0x211));`);
+  } catch (e) {
+    console.error(e);
+  }
 }
-const g = "id, code, name, price, stock, category, brand, location, condition, min_stock, is_active";
-function ge(e) {
-  const n = {
-    selectAll: e.prepare(
-      `SELECT ${g} FROM products ORDER BY name`
+function oo_tx(i, ...v) {
+  try {
+    oo_cm$1().consoleError(i, v);
+  } catch (e) {
+  }
+  return v;
+}
+function registerSettingsIpc(service) {
+  ipcMain.handle("settings:get-all", wrap(() => service.getAll()));
+  ipcMain.handle("settings:get", wrap((_e, key) => service.get(key)));
+  ipcMain.handle("settings:get-by-category", wrap((_e, category) => service.getByCategory(category)));
+  ipcMain.handle("settings:set", wrap((_e, key, value) => {
+    service.set(key, value);
+    return true;
+  }));
+  ipcMain.handle("settings:upsert", wrap((_e, key, value) => {
+    service.upsert(key, value);
+    return true;
+  }));
+}
+const COLS$1 = "id, code, name, price, stock, category, brand, location, condition, min_stock, is_active";
+function createProductsRepository(db) {
+  const stmts = {
+    selectAll: db.prepare(
+      `SELECT ${COLS$1} FROM products ORDER BY name`
     ),
-    selectActive: e.prepare(
-      `SELECT ${g} FROM products WHERE is_active = 1 ORDER BY name`
+    selectActive: db.prepare(
+      `SELECT ${COLS$1} FROM products WHERE is_active = 1 ORDER BY name`
     ),
-    selectById: e.prepare(
-      `SELECT ${g} FROM products WHERE id = ?`
+    selectById: db.prepare(
+      `SELECT ${COLS$1} FROM products WHERE id = ?`
     ),
-    search: e.prepare(
-      `SELECT ${g} FROM products
+    search: db.prepare(
+      `SELECT ${COLS$1} FROM products
         WHERE (name LIKE ? OR code LIKE ? OR category LIKE ?)
         ORDER BY name`
     ),
-    insert: e.prepare(
+    insert: db.prepare(
       `INSERT INTO products (code, name, price, stock, category, brand, location, condition, min_stock, is_active)
        VALUES (@code, @name, @price, @stock, @category, @brand, @location, @condition, @min_stock, 1)`
     ),
-    update: e.prepare(
+    update: db.prepare(
       `UPDATE products
           SET name      = @name,
               price     = @price,
@@ -720,36 +503,36 @@ function ge(e) {
               min_stock = @min_stock
         WHERE id = @id`
     ),
-    setActive: e.prepare(
-      "UPDATE products SET is_active = @active WHERE id = @id"
+    setActive: db.prepare(
+      `UPDATE products SET is_active = @active WHERE id = @id`
     ),
-    adjustStock: e.prepare(
-      "UPDATE products SET stock = MAX(0, stock + @delta) WHERE id = @id"
+    adjustStock: db.prepare(
+      `UPDATE products SET stock = MAX(0, stock + @delta) WHERE id = @id`
     )
   };
   return {
     /** @returns {ProductRow[]} */
     findAll() {
-      return n.selectAll.all();
+      return stmts.selectAll.all();
     },
     /** @returns {ProductRow[]} */
     findActive() {
-      return n.selectActive.all();
+      return stmts.selectActive.all();
     },
     /**
      * @param {number} id
      * @returns {ProductRow | undefined}
      */
-    findById(t) {
-      return n.selectById.get(t);
+    findById(id) {
+      return stmts.selectById.get(id);
     },
     /**
      * @param {string} query
      * @returns {ProductRow[]}
      */
-    search(t) {
-      const r = `%${t}%`;
-      return n.search.all(r, r, r);
+    search(query) {
+      const like = `%${query}%`;
+      return stmts.search.all(like, like, like);
     },
     /**
      * @param {{ code: string, name: string, price: number, stock: number,
@@ -757,116 +540,127 @@ function ge(e) {
      *           condition: string, min_stock: number }} data
      * @returns {number} new id
      */
-    create(t) {
-      const r = n.insert.run(t);
-      return Number(r.lastInsertRowid);
+    create(data) {
+      const info = stmts.insert.run(data);
+      return Number(info.lastInsertRowid);
     },
     /**
      * @param {number} id
      * @param {{ name: string, price: number, category: string, brand: string,
      *           location: string, condition: string, min_stock: number }} data
      */
-    update(t, r) {
-      n.update.run({ ...r, id: t });
+    update(id, data) {
+      stmts.update.run({ ...data, id });
     },
     /**
      * @param {number} id
      * @param {0|1} active
      */
-    setActive(t, r) {
-      n.setActive.run({ id: t, active: r });
+    setActive(id, active) {
+      stmts.setActive.run({ id, active });
     },
     /**
      * @param {number} id
      * @param {number} delta  positive = entrada, negative = salida
      */
-    adjustStock(t, r) {
-      n.adjustStock.run({ id: t, delta: r });
+    adjustStock(id, delta) {
+      stmts.adjustStock.run({ id, delta });
     }
   };
 }
-function ye(e) {
-  function n(r) {
-    if (!Number.isInteger(r) || r <= 0)
-      throw Object.assign(new Error(`product id invalido: ${r}`), {
+function createProductsService(repo) {
+  function assertId(id) {
+    if (!Number.isInteger(id) || id <= 0) {
+      throw Object.assign(new Error(`product id invalido: ${id}`), {
         code: "PRODUCT_INVALID_ID"
       });
+    }
   }
-  function t(r) {
-    n(r);
-    const a = e.findById(r);
-    if (!a)
-      throw Object.assign(new Error(`producto no encontrado: ${r}`), {
+  function assertExists(id) {
+    assertId(id);
+    const row = repo.findById(id);
+    if (!row) {
+      throw Object.assign(new Error(`producto no encontrado: ${id}`), {
         code: "PRODUCT_NOT_FOUND"
       });
-    return a;
+    }
+    return row;
   }
   return {
     /** Todos los productos (activos e inactivos). */
     list() {
-      return e.findAll();
+      return repo.findAll();
     },
     /** Solo los productos activos (para POS y búsqueda rápida). */
     listActive() {
-      return e.findActive();
+      return repo.findActive();
     },
     /** @param {string} query */
-    search(r) {
-      const a = typeof r == "string" ? r.trim() : "";
-      return a.length === 0 ? e.findActive() : e.search(a);
+    search(query) {
+      const q = typeof query === "string" ? query.trim() : "";
+      if (q.length === 0) return repo.findActive();
+      return repo.search(q);
     },
     /** @param {number} id */
-    getById(r) {
-      return n(r), e.findById(r) ?? null;
+    getById(id) {
+      assertId(id);
+      return repo.findById(id) ?? null;
     },
     /** @param {ProductInput} input */
-    create(r) {
-      const a = (r.code ?? "").trim(), s = (r.name ?? "").trim();
-      if (!a) throw Object.assign(new Error("code requerido"), { code: "PRODUCT_MISSING_CODE" });
-      if (!s) throw Object.assign(new Error("name requerido"), { code: "PRODUCT_MISSING_NAME" });
-      const i = Number(r.price);
-      if (!Number.isFinite(i) || i < 0)
+    create(input) {
+      const code = (input.code ?? "").trim();
+      const name = (input.name ?? "").trim();
+      if (!code) throw Object.assign(new Error("code requerido"), { code: "PRODUCT_MISSING_CODE" });
+      if (!name) throw Object.assign(new Error("name requerido"), { code: "PRODUCT_MISSING_NAME" });
+      const price = Number(input.price);
+      if (!Number.isFinite(price) || price < 0) {
         throw Object.assign(new Error("price invalido"), { code: "PRODUCT_INVALID_PRICE" });
-      const o = e.create({
-        code: a,
-        name: s,
-        price: i,
-        stock: Math.max(0, Math.round(Number(r.stock) || 0)),
-        category: (r.category ?? "General").trim() || "General",
-        brand: (r.brand ?? "").trim(),
-        location: (r.location ?? "").trim(),
-        condition: (r.condition ?? "Nuevo").trim() || "Nuevo",
-        min_stock: Math.max(0, Math.round(Number(r.min_stock) || 5))
+      }
+      const id = repo.create({
+        code,
+        name,
+        price,
+        stock: Math.max(0, Math.round(Number(input.stock) || 0)),
+        category: (input.category ?? "General").trim() || "General",
+        brand: (input.brand ?? "").trim(),
+        location: (input.location ?? "").trim(),
+        condition: (input.condition ?? "Nuevo").trim() || "Nuevo",
+        min_stock: Math.max(0, Math.round(Number(input.min_stock) || 5))
       });
-      return e.findById(o);
+      return repo.findById(id);
     },
     /**
      * @param {number} id
      * @param {ProductPatch} patch
      */
-    update(r, a) {
-      const s = t(r), i = (a.name ?? s.name).trim();
-      if (!i) throw Object.assign(new Error("name requerido"), { code: "PRODUCT_MISSING_NAME" });
-      const o = a.price !== void 0 ? Number(a.price) : s.price;
-      if (!Number.isFinite(o) || o < 0)
+    update(id, patch) {
+      const row = assertExists(id);
+      const name = (patch.name ?? row.name).trim();
+      if (!name) throw Object.assign(new Error("name requerido"), { code: "PRODUCT_MISSING_NAME" });
+      const price = patch.price !== void 0 ? Number(patch.price) : row.price;
+      if (!Number.isFinite(price) || price < 0) {
         throw Object.assign(new Error("price invalido"), { code: "PRODUCT_INVALID_PRICE" });
-      return e.update(r, {
-        name: i,
-        price: o,
-        category: (a.category ?? s.category ?? "General").trim() || "General",
-        brand: (a.brand ?? s.brand ?? "").trim(),
-        location: (a.location ?? s.location ?? "").trim(),
-        condition: (a.condition ?? s.condition ?? "Nuevo").trim() || "Nuevo",
-        min_stock: a.min_stock !== void 0 ? Math.max(0, Math.round(Number(a.min_stock))) : s.min_stock
-      }), e.findById(r);
+      }
+      repo.update(id, {
+        name,
+        price,
+        category: (patch.category ?? row.category ?? "General").trim() || "General",
+        brand: (patch.brand ?? row.brand ?? "").trim(),
+        location: (patch.location ?? row.location ?? "").trim(),
+        condition: (patch.condition ?? row.condition ?? "Nuevo").trim() || "Nuevo",
+        min_stock: patch.min_stock !== void 0 ? Math.max(0, Math.round(Number(patch.min_stock))) : row.min_stock
+      });
+      return repo.findById(id);
     },
     /** Soft-delete: marca is_active = 0. @param {number} id */
-    remove(r) {
-      t(r), e.setActive(r, 0);
+    remove(id) {
+      assertExists(id);
+      repo.setActive(id, 0);
     },
     /** Reactiva un producto. @param {number} id */
-    restore(r) {
-      t(r), e.setActive(r, 1);
+    restore(id) {
+      assertExists(id);
+      repo.setActive(id, 1);
     },
     /**
      * Registra un movimiento de stock.
@@ -874,42 +668,52 @@ function ye(e) {
      * @param {'entry'|'exit'} type
      * @param {number} qty
      */
-    adjustStock(r, a, s) {
-      t(r);
-      const i = Math.round(Number(s));
-      if (!Number.isFinite(i) || i <= 0)
+    adjustStock(id, type, qty) {
+      assertExists(id);
+      const numQty = Math.round(Number(qty));
+      if (!Number.isFinite(numQty) || numQty <= 0) {
         throw Object.assign(new Error("qty invalido"), { code: "PRODUCT_INVALID_QTY" });
-      const o = a === "entry" ? i : -i;
-      return e.adjustStock(r, o), e.findById(r);
+      }
+      const delta = type === "entry" ? numQty : -numQty;
+      repo.adjustStock(id, delta);
+      return repo.findById(id);
     }
   };
 }
-function he(e) {
-  l.handle("products:list", u(() => e.list())), l.handle("products:list-active", u(() => e.listActive())), l.handle("products:search", u((n, t) => e.search(t))), l.handle("products:get-by-id", u((n, t) => e.getById(t))), l.handle("products:create", u((n, t) => e.create(t))), l.handle("products:update", u((n, t, r) => e.update(t, r))), l.handle("products:remove", u((n, t) => e.remove(t))), l.handle("products:restore", u((n, t) => e.restore(t))), l.handle("products:adjust-stock", u((n, t, r, a) => e.adjustStock(t, r, a)));
+function registerProductsIpc(service) {
+  ipcMain.handle("products:list", wrap(() => service.list()));
+  ipcMain.handle("products:list-active", wrap(() => service.listActive()));
+  ipcMain.handle("products:search", wrap((_e, query) => service.search(query)));
+  ipcMain.handle("products:get-by-id", wrap((_e, id) => service.getById(id)));
+  ipcMain.handle("products:create", wrap((_e, input) => service.create(input)));
+  ipcMain.handle("products:update", wrap((_e, id, patch) => service.update(id, patch)));
+  ipcMain.handle("products:remove", wrap((_e, id) => service.remove(id)));
+  ipcMain.handle("products:restore", wrap((_e, id) => service.restore(id)));
+  ipcMain.handle("products:adjust-stock", wrap((_e, id, type, qty) => service.adjustStock(id, type, qty)));
 }
-const f = "id, nit, name, email, phone, address, active, created_at, updated_at";
-function Ue(e) {
-  const n = {
-    selectAllActive: e.prepare(`SELECT ${f} FROM customers WHERE active = 1 ORDER BY name`),
-    selectAllAny: e.prepare(`SELECT ${f} FROM customers ORDER BY name`),
-    selectById: e.prepare(`SELECT ${f} FROM customers WHERE id = ?`),
-    searchActive: e.prepare(
-      `SELECT ${f} FROM customers
+const COLUMNS = "id, nit, name, email, phone, address, active, created_at, updated_at";
+function createCustomersRepository(db) {
+  const stmts = {
+    selectAllActive: db.prepare(`SELECT ${COLUMNS} FROM customers WHERE active = 1 ORDER BY name`),
+    selectAllAny: db.prepare(`SELECT ${COLUMNS} FROM customers ORDER BY name`),
+    selectById: db.prepare(`SELECT ${COLUMNS} FROM customers WHERE id = ?`),
+    searchActive: db.prepare(
+      `SELECT ${COLUMNS} FROM customers
         WHERE (name LIKE ? OR nit LIKE ?) AND active = 1
      ORDER BY name
         LIMIT 50`
     ),
-    searchAny: e.prepare(
-      `SELECT ${f} FROM customers
+    searchAny: db.prepare(
+      `SELECT ${COLUMNS} FROM customers
         WHERE (name LIKE ? OR nit LIKE ?)
      ORDER BY name
         LIMIT 50`
     ),
-    insert: e.prepare(
+    insert: db.prepare(
       `INSERT INTO customers (nit, name, email, phone, address)
        VALUES (?, ?, ?, ?, ?)`
     ),
-    setActive: e.prepare(
+    setActive: db.prepare(
       `UPDATE customers
           SET active = ?,
               updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -921,37 +725,40 @@ function Ue(e) {
      * @param {{ includeInactive?: boolean }} [opts]
      * @returns {CustomerRow[]}
      */
-    findAll(t = {}) {
-      return (t.includeInactive ? n.selectAllAny : n.selectAllActive).all();
+    findAll(opts = {}) {
+      const stmt = opts.includeInactive ? stmts.selectAllAny : stmts.selectAllActive;
+      return stmt.all();
     },
     /**
      * @param {number} id
      * @returns {CustomerRow | undefined}
      */
-    findById(t) {
-      return n.selectById.get(t);
+    findById(id) {
+      return stmts.selectById.get(id);
     },
     /**
      * @param {string} query
      * @param {{ includeInactive?: boolean }} [opts]
      * @returns {CustomerRow[]}
      */
-    search(t, r = {}) {
-      const a = `%${t}%`;
-      return (r.includeInactive ? n.searchAny : n.searchActive).all(a, a);
+    search(query, opts = {}) {
+      const like = `%${query}%`;
+      const stmt = opts.includeInactive ? stmts.searchAny : stmts.searchActive;
+      return stmt.all(like, like);
     },
     /**
      * @param {CustomerCreateInput} input
      * @returns {number|bigint} id insertado
      */
-    insert(t) {
-      return n.insert.run(
-        t.nit,
-        t.name,
-        t.email ?? null,
-        t.phone ?? null,
-        t.address ?? null
-      ).lastInsertRowid;
+    insert(input) {
+      const info = stmts.insert.run(
+        input.nit,
+        input.name,
+        input.email ?? null,
+        input.phone ?? null,
+        input.address ?? null
+      );
+      return info.lastInsertRowid;
     },
     /**
      * UPDATE dinamico. Solo toca las columnas provistas en `patch` — evita
@@ -961,88 +768,106 @@ function Ue(e) {
      * @param {CustomerUpdateInput} patch
      * @returns {number} rows affected
      */
-    update(t, r) {
-      const a = [], s = [];
-      for (const [d, c] of Object.entries(r))
-        c !== void 0 && (a.push(`${d} = ?`), s.push(c));
-      if (a.length === 0) return 0;
-      a.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')");
-      const i = `UPDATE customers SET ${a.join(", ")} WHERE id = ?`;
-      return s.push(t), e.prepare(i).run(...s).changes;
+    update(id, patch) {
+      const fields = [];
+      const values = [];
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === void 0) continue;
+        fields.push(`${key} = ?`);
+        values.push(value);
+      }
+      if (fields.length === 0) return 0;
+      fields.push(`updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`);
+      const sql = `UPDATE customers SET ${fields.join(", ")} WHERE id = ?`;
+      values.push(id);
+      const info = db.prepare(sql).run(...values);
+      return info.changes;
     },
     /**
      * @param {number} id
      * @param {boolean} active
      * @returns {number} rows affected
      */
-    setActive(t, r) {
-      return n.setActive.run(r ? 1 : 0, t).changes;
+    setActive(id, active) {
+      const info = stmts.setActive.run(active ? 1 : 0, id);
+      return info.changes;
     }
   };
 }
-class Y extends Error {
+class CustomerError extends Error {
   /**
    * @param {string} code
    * @param {string} message
    */
-  constructor(n, t) {
-    super(t), this.name = "CustomerError", this.code = n;
+  constructor(code, message) {
+    super(message);
+    this.name = "CustomerError";
+    this.code = code;
   }
 }
-class y extends Y {
+class CustomerNotFoundError extends CustomerError {
   /** @param {number} id */
-  constructor(n) {
-    super("CUSTOMER_NOT_FOUND", `Cliente no encontrado: #${n}`), this.id = n;
+  constructor(id) {
+    super("CUSTOMER_NOT_FOUND", `Cliente no encontrado: #${id}`);
+    this.id = id;
   }
 }
-class R extends Y {
+class CustomerValidationError extends CustomerError {
   /**
    * @param {string} field
    * @param {string} message
    */
-  constructor(n, t) {
-    super("CUSTOMER_INVALID", `${n}: ${t}`), this.field = n;
+  constructor(field, message) {
+    super("CUSTOMER_INVALID", `${field}: ${message}`);
+    this.field = field;
   }
 }
-const Ce = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-function M(e) {
-  const n = (e ?? "").trim().toUpperCase();
-  return n.length === 0 ? "C/F" : n;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function normalizeNit(nit) {
+  const trimmed = (nit ?? "").trim().toUpperCase();
+  if (trimmed.length === 0) return "C/F";
+  return trimmed;
 }
-function F(e) {
-  if (typeof e != "string" || e.trim().length < 2)
-    throw new R("name", "nombre requerido (minimo 2 caracteres)");
+function assertValidName(name) {
+  if (typeof name !== "string" || name.trim().length < 2) {
+    throw new CustomerValidationError("name", "nombre requerido (minimo 2 caracteres)");
+  }
 }
-function B(e) {
-  if (!(e == null || e === "") && !Ce.test(e))
-    throw new R("email", "formato de email invalido");
+function assertValidEmail(email) {
+  if (email == null || email === "") return;
+  if (!EMAIL_RE.test(email)) {
+    throw new CustomerValidationError("email", "formato de email invalido");
+  }
 }
-function be(e) {
+function createCustomersService(repo) {
   return {
     /**
      * @param {{ includeInactive?: boolean }} [opts]
      * @returns {CustomerRow[]}
      */
-    list(n = {}) {
-      return e.findAll(n);
+    list(opts = {}) {
+      return repo.findAll(opts);
     },
     /**
      * @param {string} query
      * @param {{ includeInactive?: boolean }} [opts]
      * @returns {CustomerRow[]}
      */
-    search(n, t = {}) {
-      const r = typeof n == "string" ? n.trim() : "";
-      return r.length === 0 ? e.findAll(t) : e.search(r, t);
+    search(query, opts = {}) {
+      const q = typeof query === "string" ? query.trim() : "";
+      if (q.length === 0) return repo.findAll(opts);
+      return repo.search(q, opts);
     },
     /**
      * @param {number} id
      * @returns {CustomerRow | null}
      */
-    getById(n) {
-      if (!Number.isInteger(n) || n <= 0)
-        throw new R("id", `id invalido: ${n}`);
-      return e.findById(n) ?? null;
+    getById(id) {
+      if (!Number.isInteger(id) || id <= 0) {
+        throw new CustomerValidationError("id", `id invalido: ${id}`);
+      }
+      const row = repo.findById(id);
+      return row ?? null;
     },
     /**
      * Version "throw on not found" usada internamente por sales.service.create
@@ -1052,89 +877,113 @@ function be(e) {
      * @returns {CustomerRow}
      * @throws {CustomerNotFoundError}
      */
-    requireById(n) {
-      const t = e.findById(n);
-      if (!t) throw new y(n);
-      return t;
+    requireById(id) {
+      const row = repo.findById(id);
+      if (!row) throw new CustomerNotFoundError(id);
+      return row;
     },
     /**
      * @param {CustomerCreateInput} input
      * @returns {CustomerRow}
      */
-    create(n) {
-      var i, o, d;
-      F(n.name), B(n.email);
-      const t = M(n.nit), r = e.insert({
-        nit: t,
-        name: n.name.trim(),
-        email: ((i = n.email) == null ? void 0 : i.trim()) || null,
-        phone: ((o = n.phone) == null ? void 0 : o.trim()) || null,
-        address: ((d = n.address) == null ? void 0 : d.trim()) || null
-      }), a = typeof r == "bigint" ? Number(r) : r, s = e.findById(a);
-      if (!s) throw new Error("Cliente recien insertado no encontrado (race imposible)");
-      return s;
+    create(input) {
+      var _a, _b, _c;
+      assertValidName(input.name);
+      assertValidEmail(input.email);
+      const nit = normalizeNit(input.nit);
+      const id = repo.insert({
+        nit,
+        name: input.name.trim(),
+        email: ((_a = input.email) == null ? void 0 : _a.trim()) || null,
+        phone: ((_b = input.phone) == null ? void 0 : _b.trim()) || null,
+        address: ((_c = input.address) == null ? void 0 : _c.trim()) || null
+      });
+      const numericId = typeof id === "bigint" ? Number(id) : id;
+      const row = repo.findById(numericId);
+      if (!row) throw new Error("Cliente recien insertado no encontrado (race imposible)");
+      return row;
     },
     /**
      * @param {number} id
      * @param {CustomerUpdateInput} patch
      * @returns {CustomerRow}
      */
-    update(n, t) {
-      var i, o, d;
-      if (!Number.isInteger(n) || n <= 0)
-        throw new R("id", `id invalido: ${n}`);
-      if (n === 1)
-        throw new R("id", 'No se puede editar "Consumidor Final"');
-      t.name !== void 0 && F(t.name), t.email !== void 0 && B(t.email);
-      const r = {};
-      if (t.nit !== void 0 && (r.nit = M(t.nit)), t.name !== void 0 && (r.name = t.name.trim()), t.email !== void 0 && (r.email = ((i = t.email) == null ? void 0 : i.trim()) || null), t.phone !== void 0 && (r.phone = ((o = t.phone) == null ? void 0 : o.trim()) || null), t.address !== void 0 && (r.address = ((d = t.address) == null ? void 0 : d.trim()) || null), t.active !== void 0 && (r.active = t.active ? 1 : 0), e.update(n, r) === 0) throw new y(n);
-      const s = e.findById(n);
-      if (!s) throw new y(n);
-      return s;
+    update(id, patch) {
+      var _a, _b, _c;
+      if (!Number.isInteger(id) || id <= 0) {
+        throw new CustomerValidationError("id", `id invalido: ${id}`);
+      }
+      if (id === 1) {
+        throw new CustomerValidationError("id", 'No se puede editar "Consumidor Final"');
+      }
+      if (patch.name !== void 0) assertValidName(patch.name);
+      if (patch.email !== void 0) assertValidEmail(patch.email);
+      const safe = {};
+      if (patch.nit !== void 0) safe.nit = normalizeNit(patch.nit);
+      if (patch.name !== void 0) safe.name = patch.name.trim();
+      if (patch.email !== void 0) safe.email = ((_a = patch.email) == null ? void 0 : _a.trim()) || null;
+      if (patch.phone !== void 0) safe.phone = ((_b = patch.phone) == null ? void 0 : _b.trim()) || null;
+      if (patch.address !== void 0) safe.address = ((_c = patch.address) == null ? void 0 : _c.trim()) || null;
+      if (patch.active !== void 0) safe.active = patch.active ? 1 : 0;
+      const changes = repo.update(id, safe);
+      if (changes === 0) throw new CustomerNotFoundError(id);
+      const row = repo.findById(id);
+      if (!row) throw new CustomerNotFoundError(id);
+      return row;
     },
     /**
      * @param {number} id
      * @param {boolean} active
      */
-    setActive(n, t) {
-      if (!Number.isInteger(n) || n <= 0)
-        throw new R("id", `id invalido: ${n}`);
-      if (n === 1)
-        throw new R("id", 'No se puede desactivar "Consumidor Final"');
-      if (e.setActive(n, t) === 0) throw new y(n);
-      return !0;
+    setActive(id, active) {
+      if (!Number.isInteger(id) || id <= 0) {
+        throw new CustomerValidationError("id", `id invalido: ${id}`);
+      }
+      if (id === 1) {
+        throw new CustomerValidationError("id", 'No se puede desactivar "Consumidor Final"');
+      }
+      const changes = repo.setActive(id, active);
+      if (changes === 0) throw new CustomerNotFoundError(id);
+      return true;
     }
   };
 }
-function De(e) {
-  l.handle("customers:list", u((n, t) => e.list(t))), l.handle("customers:search", u((n, t, r) => e.search(t, r))), l.handle("customers:get-by-id", u((n, t) => e.getById(t))), l.handle("customers:create", u((n, t) => e.create(t))), l.handle("customers:update", u((n, t, r) => e.update(t, r))), l.handle("customers:set-active", u((n, t, r) => e.setActive(t, r)));
+function registerCustomersIpc(service) {
+  ipcMain.handle("customers:list", wrap((_e, opts) => service.list(opts)));
+  ipcMain.handle("customers:search", wrap((_e, query, opts) => service.search(query, opts)));
+  ipcMain.handle("customers:get-by-id", wrap((_e, id) => service.getById(id)));
+  ipcMain.handle("customers:create", wrap((_e, input) => service.create(input)));
+  ipcMain.handle("customers:update", wrap((_e, id, patch) => service.update(id, patch)));
+  ipcMain.handle("customers:set-active", wrap((_e, id, active) => service.setActive(id, active)));
 }
-const P = `
+const SALE_COLUMNS = `
   id, subtotal, tax_rate_applied, tax_amount, total, currency_code, date,
   customer_id, customer_name_snapshot, customer_nit_snapshot,
-  payment_method, client_type, status
+  payment_method, client_type, status,
+  discount_type, discount_value, discount_amount
 `;
-function we(e) {
-  const n = {
-    insertSale: e.prepare(
+function createSalesRepository(db) {
+  const stmts = {
+    insertSale: db.prepare(
       `INSERT INTO sales (
          total, subtotal, tax_rate_applied, tax_amount, currency_code,
          customer_id, customer_name_snapshot, customer_nit_snapshot,
-         payment_method, client_type
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         payment_method, client_type,
+         discount_type, discount_value, discount_amount
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ),
-    insertItem: e.prepare(
+    insertItem: db.prepare(
       "INSERT INTO sale_items (sale_id, product_id, qty, price) VALUES (?, ?, ?, ?)"
     ),
-    updateStock: e.prepare("UPDATE products SET stock = stock - ? WHERE id = ?"),
-    selectById: e.prepare(`SELECT ${P} FROM sales WHERE id = ?`),
+    updateStock: db.prepare("UPDATE products SET stock = stock - ? WHERE id = ?"),
+    selectById: db.prepare(`SELECT ${SALE_COLUMNS} FROM sales WHERE id = ?`),
     /**
      * LEFT JOIN a products para mostrar nombre/codigo actuales. NO es
      * snapshot; para el snapshot real a nivel linea, agregar columnas
      * product_code_snapshot/product_name_snapshot a sale_items en migracion
      * futura. Hoy vive como deuda conocida.
      */
-    selectItems: e.prepare(
+    selectItems: db.prepare(
       `SELECT si.id, si.sale_id, si.product_id, si.qty, si.price,
               p.code AS product_code, p.name AS product_name
          FROM sale_items si
@@ -1142,14 +991,31 @@ function we(e) {
         WHERE si.sale_id = ?
      ORDER BY si.id ASC`
     ),
-    selectPage: e.prepare(
-      `SELECT ${P}
-         FROM sales
-     ORDER BY id DESC
-        LIMIT ? OFFSET ?`
-    ),
-    countAll: e.prepare("SELECT COUNT(*) AS total FROM sales"),
-    dailySummary: e.prepare(`
+    findPageFiltered: db.prepare(`
+      SELECT ${SALE_COLUMNS}
+        FROM sales
+       WHERE (@search IS NULL
+              OR lower(customer_name_snapshot) LIKE '%' || lower(@search) || '%'
+              OR lower(customer_nit_snapshot)  LIKE '%' || lower(@search) || '%'
+              OR CAST(id AS TEXT) LIKE '%' || @search || '%')
+         AND (@from   IS NULL OR date(date) >= @from)
+         AND (@to     IS NULL OR date(date) <= @to)
+         AND (@status IS NULL OR status = @status)
+       ORDER BY id DESC
+       LIMIT @limit OFFSET @offset
+    `),
+    countFiltered: db.prepare(`
+      SELECT COUNT(*) AS total
+        FROM sales
+       WHERE (@search IS NULL
+              OR lower(customer_name_snapshot) LIKE '%' || lower(@search) || '%'
+              OR lower(customer_nit_snapshot)  LIKE '%' || lower(@search) || '%'
+              OR CAST(id AS TEXT) LIKE '%' || @search || '%')
+         AND (@from   IS NULL OR date(date) >= @from)
+         AND (@to     IS NULL OR date(date) <= @to)
+         AND (@status IS NULL OR status = @status)
+    `),
+    dailySummary: db.prepare(`
       SELECT
         COUNT(*)                          AS sale_count,
         COALESCE(SUM(subtotal), 0)        AS subtotal,
@@ -1160,16 +1026,25 @@ function we(e) {
       WHERE date(date) = date('now', 'localtime')
       GROUP BY currency_code
     `),
-    markVoided: e.prepare(
-      "UPDATE sales SET status = 'voided' WHERE id = ? AND status = 'active'"
+    markVoided: db.prepare(
+      `UPDATE sales SET status = 'voided' WHERE id = ? AND status = 'active'`
     ),
-    insertVoid: e.prepare(
-      "INSERT INTO sale_voids (sale_id, reason, voided_by) VALUES (?, ?, ?)"
+    insertVoid: db.prepare(
+      `INSERT INTO sale_voids (sale_id, reason, voided_by) VALUES (?, ?, ?)`
     ),
-    restoreStock: e.prepare(
-      "UPDATE products SET stock = stock + ? WHERE id = ?"
+    restoreStock: db.prepare(
+      `UPDATE products SET stock = stock + ? WHERE id = ?`
     ),
-    topProducts: e.prepare(`
+    getProductForMove: db.prepare(
+      `SELECT id, name, stock FROM products WHERE id = ?`
+    ),
+    insertMovement: db.prepare(`
+      INSERT INTO stock_movements
+        (product_id, product_name, type, qty, qty_before, qty_after, reference_type, reference_id, notes, created_by, created_by_name)
+      VALUES
+        (@product_id, @product_name, @type, @qty, @qty_before, @qty_after, @reference_type, @reference_id, @notes, @created_by, @created_by_name)
+    `),
+    topProducts: db.prepare(`
       SELECT
         p.id,
         p.code,
@@ -1184,7 +1059,7 @@ function we(e) {
       ORDER BY units_sold DESC
       LIMIT 5
     `),
-    salesByDate: e.prepare(`
+    salesByDate: db.prepare(`
       SELECT
         date(date)              AS day,
         COUNT(*)                AS sale_count,
@@ -1197,7 +1072,7 @@ function we(e) {
       GROUP BY day
       ORDER BY day ASC
     `),
-    topProductsRange: e.prepare(`
+    topProductsRange: db.prepare(`
       SELECT
         p.id,
         p.code,
@@ -1214,7 +1089,7 @@ function we(e) {
       ORDER BY units_sold DESC
       LIMIT 10
     `),
-    salesByHour: e.prepare(`
+    salesByHour: db.prepare(`
       SELECT
         CAST(strftime('%H', date) AS INTEGER) AS hour,
         COUNT(*)                              AS sale_count,
@@ -1226,7 +1101,7 @@ function we(e) {
       GROUP BY hour
       ORDER BY hour ASC
     `),
-    salesByWeekday: e.prepare(`
+    salesByWeekday: db.prepare(`
       SELECT
         CAST(strftime('%w', date) AS INTEGER) AS weekday,
         COUNT(*)                              AS sale_count,
@@ -1238,7 +1113,7 @@ function we(e) {
       GROUP BY weekday
       ORDER BY weekday ASC
     `),
-    salesByPaymentMethod: e.prepare(`
+    salesByPaymentMethod: db.prepare(`
       SELECT
         COALESCE(payment_method, 'cash') AS method,
         COUNT(*)                          AS sale_count,
@@ -1251,24 +1126,46 @@ function we(e) {
       ORDER BY sale_count DESC
     `)
   };
+  const insertSale = db.transaction((record) => {
+    const info = stmts.insertSale.run(
+      record.total,
+      record.subtotal,
+      record.taxRate,
+      record.taxAmount,
+      record.currencyCode,
+      record.customerId,
+      record.customerNameSnapshot,
+      record.customerNitSnapshot,
+      record.paymentMethod ?? "cash",
+      record.clientType ?? "cf",
+      record.discountType ?? "none",
+      record.discountValue ?? 0,
+      record.discountAmount ?? 0
+    );
+    const saleId = info.lastInsertRowid;
+    for (const item of record.items) {
+      const prod = stmts.getProductForMove.get(item.id);
+      const qtyBefore = (prod == null ? void 0 : prod.stock) ?? 0;
+      stmts.insertItem.run(saleId, item.id, item.qty, item.price);
+      stmts.updateStock.run(item.qty, item.id);
+      stmts.insertMovement.run({
+        product_id: item.id,
+        product_name: (prod == null ? void 0 : prod.name) ?? "",
+        type: "sale",
+        qty: item.qty,
+        qty_before: qtyBefore,
+        qty_after: qtyBefore - item.qty,
+        reference_type: "sale",
+        reference_id: saleId,
+        notes: null,
+        created_by: null,
+        created_by_name: null
+      });
+    }
+    return saleId;
+  });
   return {
-    insertSale: e.transaction((r) => {
-      const s = n.insertSale.run(
-        r.total,
-        r.subtotal,
-        r.taxRate,
-        r.taxAmount,
-        r.currencyCode,
-        r.customerId,
-        r.customerNameSnapshot,
-        r.customerNitSnapshot,
-        r.paymentMethod ?? "cash",
-        r.clientType ?? "cf"
-      ).lastInsertRowid;
-      for (const i of r.items)
-        n.insertItem.run(s, i.id, i.qty, i.price), n.updateStock.run(i.qty, i.id);
-      return s;
-    }),
+    insertSale,
     /**
      * Anula una venta en transacción: marca status='voided', registra en
      * sale_voids y devuelve el stock de cada item.
@@ -1276,37 +1173,58 @@ function we(e) {
      * @param {import('../sales/sales.repository.js').SaleItemRow[]} items
      * @returns {boolean} true si se anuló, false si ya estaba anulada
      */
-    voidSale: e.transaction((r, a) => {
-      if (n.markVoided.run(r.saleId).changes === 0) return !1;
-      n.insertVoid.run(r.saleId, r.reason, r.userId ?? null);
-      for (const i of a)
-        n.restoreStock.run(i.qty, i.product_id);
-      return !0;
+    voidSale: db.transaction((input, items) => {
+      const info = stmts.markVoided.run(input.saleId);
+      if (info.changes === 0) return false;
+      stmts.insertVoid.run(input.saleId, input.reason, input.userId ?? null);
+      for (const item of items) {
+        const prod = stmts.getProductForMove.get(item.product_id);
+        const qtyBefore = (prod == null ? void 0 : prod.stock) ?? 0;
+        stmts.restoreStock.run(item.qty, item.product_id);
+        stmts.insertMovement.run({
+          product_id: item.product_id,
+          product_name: (prod == null ? void 0 : prod.name) ?? item.product_name ?? "",
+          type: "in",
+          qty: item.qty,
+          qty_before: qtyBefore,
+          qty_after: qtyBefore + item.qty,
+          reference_type: "sale_void",
+          reference_id: input.saleId,
+          notes: `Anulación venta #${input.saleId}`,
+          created_by: null,
+          created_by_name: null
+        });
+      }
+      return true;
     }),
     /**
      * @param {number} id
      * @returns {SaleRow | undefined}
      */
-    findSaleById(r) {
-      return n.selectById.get(r);
+    findSaleById(id) {
+      return stmts.selectById.get(id);
     },
     /**
      * @param {number} saleId
      * @returns {SaleItemRow[]}
      */
-    findSaleItems(r) {
-      return n.selectItems.all(r);
+    findSaleItems(saleId) {
+      return stmts.selectItems.all(saleId);
     },
     /**
-     * @param {PageOptions} opts
+     * @param {{ limit: number, offset: number, search?: string|null, from?: string|null, to?: string|null, status?: string|null }} opts
      * @returns {SaleRow[]}
      */
-    findPage({ limit: r, offset: a }) {
-      return n.selectPage.all(r, a);
+    findPage({ limit, offset, search = null, from = null, to = null, status = null }) {
+      return stmts.findPageFiltered.all({ limit, offset, search, from, to, status });
     },
-    /** @returns {number} */
-    countAll() {
-      return /** @type {{ total: number }} */ n.countAll.get().total;
+    /** @param {{ search?: string|null, from?: string|null, to?: string|null, status?: string|null }} [opts] */
+    countAll({ search = null, from = null, to = null, status = null } = {}) {
+      const row = (
+        /** @type {{ total: number }} */
+        stmts.countFiltered.get({ search, from, to, status })
+      );
+      return row.total;
     },
     /**
      * Resumen del día actual (fecha local del servidor/electron).
@@ -1315,7 +1233,7 @@ function we(e) {
     getDailySummary() {
       return (
         /** @type {any} */
-        n.dailySummary.get() ?? null
+        stmts.dailySummary.get() ?? null
       );
     },
     /**
@@ -1325,7 +1243,7 @@ function we(e) {
     getTopProducts() {
       return (
         /** @type {any[]} */
-        n.topProducts.all()
+        stmts.topProducts.all()
       );
     },
     /**
@@ -1333,10 +1251,10 @@ function we(e) {
      * @param {{ from: string, to: string }} range  Fechas en formato YYYY-MM-DD
      * @returns {{ day: string, sale_count: number, subtotal: number, total: number }[]}
      */
-    getSalesByDate({ from: r, to: a }) {
+    getSalesByDate({ from, to }) {
       return (
         /** @type {any[]} */
-        n.salesByDate.all({ from: r, to: a })
+        stmts.salesByDate.all({ from, to })
       );
     },
     /**
@@ -1344,10 +1262,10 @@ function we(e) {
      * @param {{ from: string, to: string }} range
      * @returns {{ id: number, code: string, name: string, units_sold: number, revenue: number }[]}
      */
-    getTopProductsRange({ from: r, to: a }) {
+    getTopProductsRange({ from, to }) {
       return (
         /** @type {any[]} */
-        n.topProductsRange.all({ from: r, to: a })
+        stmts.topProductsRange.all({ from, to })
       );
     },
     /**
@@ -1355,10 +1273,10 @@ function we(e) {
      * @param {{ from: string, to: string }} range
      * @returns {{ hour: number, sale_count: number, total: number }[]}
      */
-    getSalesByHour({ from: r, to: a }) {
+    getSalesByHour({ from, to }) {
       return (
         /** @type {any[]} */
-        n.salesByHour.all({ from: r, to: a })
+        stmts.salesByHour.all({ from, to })
       );
     },
     /**
@@ -1366,10 +1284,10 @@ function we(e) {
      * @param {{ from: string, to: string }} range
      * @returns {{ weekday: number, sale_count: number, total: number }[]}
      */
-    getSalesByWeekday({ from: r, to: a }) {
+    getSalesByWeekday({ from, to }) {
       return (
         /** @type {any[]} */
-        n.salesByWeekday.all({ from: r, to: a })
+        stmts.salesByWeekday.all({ from, to })
       );
     },
     /**
@@ -1377,164 +1295,216 @@ function we(e) {
      * @param {{ from: string, to: string }} range
      * @returns {{ method: string, sale_count: number, total: number }[]}
      */
-    getSalesByPaymentMethod({ from: r, to: a }) {
+    getSalesByPaymentMethod({ from, to }) {
       return (
         /** @type {any[]} */
-        n.salesByPaymentMethod.all({ from: r, to: a })
+        stmts.salesByPaymentMethod.all({ from, to })
       );
     }
   };
 }
-const ve = 200, Me = 1;
-function Fe(e) {
-  if (!e || !Array.isArray(e.items) || e.items.length === 0)
+const MAX_PAGE_SIZE$1 = 200;
+const DEFAULT_CUSTOMER_ID = 1;
+function assertValidInput(input) {
+  if (!input || !Array.isArray(input.items) || input.items.length === 0) {
     throw Object.assign(new Error("La venta debe contener al menos un item"), {
       code: "SALE_EMPTY"
     });
-  for (const n of e.items) {
-    if (!Number.isInteger(n.id) || n.id <= 0)
-      throw Object.assign(new Error(`product_id invalido: ${n.id}`), {
-        code: "SALE_INVALID_ITEM"
-      });
-    if (!Number.isInteger(n.qty) || n.qty <= 0)
-      throw Object.assign(new Error(`qty invalida para producto ${n.id}`), {
-        code: "SALE_INVALID_ITEM"
-      });
-    if (!Number.isFinite(n.price) || n.price < 0)
-      throw Object.assign(new Error(`price invalido para producto ${n.id}`), {
-        code: "SALE_INVALID_ITEM"
-      });
   }
-  if (e.customerId !== void 0 && (!Number.isInteger(e.customerId) || e.customerId <= 0))
-    throw Object.assign(new Error(`customer_id invalido: ${e.customerId}`), {
-      code: "SALE_INVALID_CUSTOMER"
-    });
-}
-function Be(e, n, t, r) {
-  const a = Math.pow(10, r), s = (c) => Math.round(c * a) / a;
-  if (t) {
-    const c = s(e), E = s(c - c / (1 + n));
-    return { subtotal: s(c - E), taxAmount: E, total: c };
+  for (const item of input.items) {
+    if (!Number.isInteger(item.id) || item.id <= 0) {
+      throw Object.assign(new Error(`product_id invalido: ${item.id}`), {
+        code: "SALE_INVALID_ITEM"
+      });
+    }
+    if (!Number.isInteger(item.qty) || item.qty <= 0) {
+      throw Object.assign(new Error(`qty invalida para producto ${item.id}`), {
+        code: "SALE_INVALID_ITEM"
+      });
+    }
+    if (!Number.isFinite(item.price) || item.price < 0) {
+      throw Object.assign(new Error(`price invalido para producto ${item.id}`), {
+        code: "SALE_INVALID_ITEM"
+      });
+    }
   }
-  const i = s(e), o = s(i * n), d = s(i + o);
-  return { subtotal: i, taxAmount: o, total: d };
+  if (input.customerId !== void 0) {
+    if (!Number.isInteger(input.customerId) || input.customerId <= 0) {
+      throw Object.assign(new Error(`customer_id invalido: ${input.customerId}`), {
+        code: "SALE_INVALID_CUSTOMER"
+      });
+    }
+  }
 }
-function Pe(e, n, t, r) {
+function computeBreakdown(rawSum, rate, included, decimals) {
+  const factor = Math.pow(10, decimals);
+  const round = (n) => Math.round(n * factor) / factor;
+  if (included) {
+    const total2 = round(rawSum);
+    const taxAmount2 = round(total2 - total2 / (1 + rate));
+    const subtotal2 = round(total2 - taxAmount2);
+    return { subtotal: subtotal2, taxAmount: taxAmount2, total: total2 };
+  }
+  const subtotal = round(rawSum);
+  const taxAmount = round(subtotal * rate);
+  const total = round(subtotal + taxAmount);
+  return { subtotal, taxAmount, total };
+}
+function createSalesService(repo, settings, customers, audit) {
   return {
     /**
      * @param {SaleInput} input
      * @returns {SaleCreatedResult}
      */
-    create(a) {
-      Fe(a);
-      const s = (
+    create(input) {
+      assertValidInput(input);
+      const taxRate = (
         /** @type {number} */
-        n.get("tax_rate")
-      ), i = (
+        settings.get("tax_rate")
+      );
+      const taxIncluded = (
         /** @type {boolean} */
-        n.get("tax_included_in_price")
-      ), o = (
+        settings.get("tax_included_in_price")
+      );
+      const currency = (
         /** @type {string} */
-        n.get("currency_code")
-      ), d = (
+        settings.get("currency_code")
+      );
+      const decimals = (
         /** @type {number} */
-        n.get("decimal_places")
-      ), c = a.customerId ?? Me, E = t.requireById(c), _ = a.items.reduce((O, L) => O + L.price * L.qty, 0), { subtotal: m, taxAmount: N, total: T } = Be(
-        _,
-        s,
-        i,
-        d
-      ), p = e.insertSale({
-        items: a.items,
-        subtotal: m,
-        taxRate: s,
-        taxAmount: N,
-        total: T,
-        currencyCode: o,
-        customerId: c,
-        customerNameSnapshot: E.name,
-        customerNitSnapshot: E.nit,
-        paymentMethod: a.paymentMethod ?? "cash",
-        clientType: a.clientType ?? "cf"
+        settings.get("decimal_places")
+      );
+      const customerId = input.customerId ?? DEFAULT_CUSTOMER_ID;
+      const customer = customers.requireById(customerId);
+      const rawSum = input.items.reduce((acc, i) => acc + i.price * i.qty, 0);
+      const discountType = input.discountType ?? "none";
+      const discountValue = input.discountValue ?? 0;
+      const factor = Math.pow(10, decimals);
+      const roundD = (n) => Math.round(n * factor) / factor;
+      let discountAmount = 0;
+      if (discountType === "percent" && discountValue > 0) {
+        discountAmount = roundD(rawSum * (discountValue / 100));
+      } else if (discountType === "fixed" && discountValue > 0) {
+        discountAmount = roundD(Math.min(discountValue, rawSum));
+      }
+      const discountedSum = roundD(Math.max(0, rawSum - discountAmount));
+      const { subtotal, taxAmount, total } = computeBreakdown(
+        discountedSum,
+        taxRate,
+        taxIncluded,
+        decimals
+      );
+      const saleId = repo.insertSale({
+        items: input.items,
+        subtotal,
+        taxRate,
+        taxAmount,
+        total,
+        currencyCode: currency,
+        customerId,
+        customerNameSnapshot: customer.name,
+        customerNitSnapshot: customer.nit,
+        paymentMethod: input.paymentMethod ?? "cash",
+        clientType: input.clientType ?? "cf",
+        discountType,
+        discountValue,
+        discountAmount
       });
       return {
-        saleId: typeof p == "bigint" ? Number(p) : p,
-        subtotal: m,
-        taxRate: s,
-        taxAmount: N,
-        total: T,
-        currencyCode: o,
-        customerId: c,
-        customerName: E.name,
-        customerNit: E.nit
+        saleId: typeof saleId === "bigint" ? Number(saleId) : saleId,
+        subtotal,
+        taxRate,
+        taxAmount,
+        total,
+        currencyCode: currency,
+        customerId,
+        customerName: customer.name,
+        customerNit: customer.nit
       };
     },
     /**
      * @param {number} id
      * @returns {SaleWithItems | null}
      */
-    getById(a) {
-      if (!Number.isInteger(a) || a <= 0)
-        throw Object.assign(new Error(`sale id invalido: ${a}`), { code: "SALE_INVALID_ID" });
-      const s = e.findSaleById(a);
-      if (!s) return null;
-      const i = e.findSaleItems(a);
-      return { ...s, items: i };
+    getById(id) {
+      if (!Number.isInteger(id) || id <= 0) {
+        throw Object.assign(new Error(`sale id invalido: ${id}`), { code: "SALE_INVALID_ID" });
+      }
+      const sale = repo.findSaleById(id);
+      if (!sale) return null;
+      const items = repo.findSaleItems(id);
+      return { ...sale, items };
     },
     /**
      * @param {{ page?: number, pageSize?: number }} [opts]
      * @returns {SaleListResult}
      */
-    list(a = {}) {
-      const s = Number.isInteger(a.page) && /** @type {number} */
-      a.page > 0 ? (
+    list(opts = {}) {
+      var _a, _b, _c, _d;
+      const page = Number.isInteger(opts.page) && /** @type {number} */
+      opts.page > 0 ? (
         /** @type {number} */
-        a.page
-      ) : 1, i = Number.isInteger(a.pageSize) && /** @type {number} */
-      a.pageSize > 0 ? (
+        opts.page
+      ) : 1;
+      const requested = Number.isInteger(opts.pageSize) && /** @type {number} */
+      opts.pageSize > 0 ? (
         /** @type {number} */
-        a.pageSize
-      ) : 50, o = Math.min(i, ve), d = (s - 1) * o;
+        opts.pageSize
+      ) : 50;
+      const pageSize = Math.min(requested, MAX_PAGE_SIZE$1);
+      const offset = (page - 1) * pageSize;
+      const search = ((_a = opts.search) == null ? void 0 : _a.trim()) || null;
+      const from = ((_b = opts.from) == null ? void 0 : _b.trim()) || null;
+      const to = ((_c = opts.to) == null ? void 0 : _c.trim()) || null;
+      const status = ((_d = opts.status) == null ? void 0 : _d.trim()) || null;
       return {
-        data: e.findPage({ limit: o, offset: d }),
-        total: e.countAll(),
-        page: s,
-        pageSize: o
+        data: repo.findPage({ limit: pageSize, offset, search, from, to, status }),
+        total: repo.countAll({ search, from, to, status }),
+        page,
+        pageSize
       };
     },
     /**
      * Anula una venta, restaura stock y registra en bitácora.
      * @param {{ saleId: number, reason: string, userId?: number, userName?: string }} input
      */
-    voidSale(a) {
-      if (!Number.isInteger(a.saleId) || a.saleId <= 0)
-        throw Object.assign(new Error(`sale id invalido: ${a.saleId}`), { code: "SALE_INVALID_ID" });
-      if (!a.reason || a.reason.trim().length < 5)
+    voidSale(input) {
+      if (!Number.isInteger(input.saleId) || input.saleId <= 0) {
+        throw Object.assign(new Error(`sale id invalido: ${input.saleId}`), { code: "SALE_INVALID_ID" });
+      }
+      if (!input.reason || input.reason.trim().length < 5) {
         throw Object.assign(new Error("El motivo debe tener al menos 5 caracteres"), { code: "VOID_REASON_REQUIRED" });
-      const s = e.findSaleById(a.saleId);
-      if (!s)
-        throw Object.assign(new Error(`Venta ${a.saleId} no encontrada`), { code: "SALE_NOT_FOUND" });
-      if (s.status === "voided")
-        throw Object.assign(new Error(`La venta ${a.saleId} ya está anulada`), { code: "SALE_ALREADY_VOIDED" });
-      const i = e.findSaleItems(a.saleId), o = e.voidSale(
-        { saleId: a.saleId, reason: a.reason.trim(), userId: a.userId },
-        i
+      }
+      const sale = repo.findSaleById(input.saleId);
+      if (!sale) {
+        throw Object.assign(new Error(`Venta ${input.saleId} no encontrada`), { code: "SALE_NOT_FOUND" });
+      }
+      if (sale.status === "voided") {
+        throw Object.assign(new Error(`La venta ${input.saleId} ya está anulada`), { code: "SALE_ALREADY_VOIDED" });
+      }
+      const items = repo.findSaleItems(input.saleId);
+      const voided = repo.voidSale(
+        { saleId: input.saleId, reason: input.reason.trim(), userId: input.userId },
+        items
       );
-      return o && (r == null || r.log({
-        action: "sale_voided",
-        entity: "sale",
-        entityId: a.saleId,
-        description: `Venta #${a.saleId} anulada. Motivo: ${a.reason.trim()}`,
-        payload: { total: s.total, customer: s.customer_name_snapshot, reason: a.reason.trim() },
-        userId: a.userId,
-        userName: a.userName
-      })), { voided: o, saleId: a.saleId };
+      if (voided) {
+        audit == null ? void 0 : audit.log({
+          action: "sale_voided",
+          entity: "sale",
+          entityId: input.saleId,
+          description: `Venta #${input.saleId} anulada. Motivo: ${input.reason.trim()}`,
+          payload: { total: sale.total, customer: sale.customer_name_snapshot, reason: input.reason.trim() },
+          userId: input.userId,
+          userName: input.userName
+        });
+      }
+      return { voided, saleId: input.saleId };
     },
     /** Reporte del día: totales + top 5 productos. */
     dailyReport() {
       return {
-        summary: e.getDailySummary(),
-        topProducts: e.getTopProducts()
+        summary: repo.getDailySummary(),
+        topProducts: repo.getTopProducts()
       };
     },
     /**
@@ -1542,58 +1512,65 @@ function Pe(e, n, t, r) {
      * horarios concurridos, días de semana y métodos de pago.
      * @param {{ from: string, to: string }} range  Formato YYYY-MM-DD
      */
-    rangeReport({ from: a, to: s }) {
-      if (!a || !s || a > s)
+    rangeReport({ from, to }) {
+      if (!from || !to || from > to) {
         throw Object.assign(new Error("Rango de fechas inválido"), { code: "INVALID_DATE_RANGE" });
+      }
       return {
-        series: e.getSalesByDate({ from: a, to: s }),
-        topProducts: e.getTopProductsRange({ from: a, to: s }),
-        byHour: e.getSalesByHour({ from: a, to: s }),
-        byWeekday: e.getSalesByWeekday({ from: a, to: s }),
-        byPaymentMethod: e.getSalesByPaymentMethod({ from: a, to: s })
+        series: repo.getSalesByDate({ from, to }),
+        topProducts: repo.getTopProductsRange({ from, to }),
+        byHour: repo.getSalesByHour({ from, to }),
+        byWeekday: repo.getSalesByWeekday({ from, to }),
+        byPaymentMethod: repo.getSalesByPaymentMethod({ from, to })
       };
     }
   };
 }
-function He(e) {
-  l.handle("sales:create", u((n, t) => e.create(t))), l.handle("sales:get-by-id", u((n, t) => e.getById(t))), l.handle("sales:list", u((n, t) => e.list(t))), l.handle("sales:daily-report", u(() => e.dailyReport())), l.handle("sales:void", u((n, t) => e.voidSale(t))), l.handle("sales:range-report", u((n, t) => e.rangeReport(t)));
+function registerSalesIpc(service) {
+  ipcMain.handle("sales:create", wrap((_e, saleData) => service.create(saleData)));
+  ipcMain.handle("sales:get-by-id", wrap((_e, id) => service.getById(id)));
+  ipcMain.handle("sales:list", wrap((_e, opts) => service.list(opts)));
+  ipcMain.handle("sales:daily-report", wrap(() => service.dailyReport()));
+  ipcMain.handle("sales:void", wrap((_e, input) => service.voidSale(input)));
+  ipcMain.handle("sales:range-report", wrap((_e, range) => service.rangeReport(range)));
 }
-const H = "id, email, full_name, role, active, avatar, created_at, updated_at", qe = "id, email, full_name, role, password_hash, active, avatar, created_at, updated_at";
-function Xe(e) {
-  const n = {
-    findAll: e.prepare(
-      `SELECT ${H} FROM users ORDER BY role, full_name`
+const COLS = "id, email, full_name, role, active, avatar, created_at, updated_at";
+const COLS_WITH_HASH = "id, email, full_name, role, password_hash, active, avatar, created_at, updated_at";
+function createUsersRepository(db) {
+  const stmts = {
+    findAll: db.prepare(
+      `SELECT ${COLS} FROM users ORDER BY role, full_name`
     ),
-    findById: e.prepare(
-      `SELECT ${H} FROM users WHERE id = ?`
+    findById: db.prepare(
+      `SELECT ${COLS} FROM users WHERE id = ?`
     ),
-    findByEmail: e.prepare(
-      `SELECT ${qe} FROM users WHERE email = ? COLLATE NOCASE`
+    findByEmail: db.prepare(
+      `SELECT ${COLS_WITH_HASH} FROM users WHERE email = ? COLLATE NOCASE`
     ),
-    insert: e.prepare(
+    insert: db.prepare(
       `INSERT INTO users (email, full_name, role, password_hash)
        VALUES (@email, @full_name, @role, @password_hash)`
     ),
-    update: e.prepare(
+    update: db.prepare(
       `UPDATE users
           SET full_name  = @full_name,
               role       = @role,
               updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE id = @id`
     ),
-    updateAvatar: e.prepare(
+    updateAvatar: db.prepare(
       `UPDATE users
           SET avatar     = @avatar,
               updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE id = @id`
     ),
-    updatePassword: e.prepare(
+    updatePassword: db.prepare(
       `UPDATE users
           SET password_hash = @password_hash,
               updated_at    = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE id = @id`
     ),
-    setActive: e.prepare(
+    setActive: db.prepare(
       `UPDATE users
           SET active     = @active,
               updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -1603,182 +1580,220 @@ function Xe(e) {
   return {
     /** @returns {Omit<UserRow, 'password_hash'>[]} */
     findAll() {
-      return n.findAll.all();
+      return stmts.findAll.all();
     },
     /**
      * @param {number} id
      * @returns {Omit<UserRow, 'password_hash'> | undefined}
      */
-    findById(t) {
-      return n.findById.get(t);
+    findById(id) {
+      return stmts.findById.get(id);
     },
     /**
      * Incluye password_hash — solo para login.
      * @param {string} email
      * @returns {UserRow | undefined}
      */
-    findByEmailWithHash(t) {
-      return n.findByEmail.get(t);
+    findByEmailWithHash(email) {
+      return stmts.findByEmail.get(email);
     },
     /**
      * @param {{ email: string, full_name: string, role: string, password_hash: string }} data
      * @returns {number}
      */
-    create(t) {
-      return Number(n.insert.run(t).lastInsertRowid);
+    create(data) {
+      return Number(stmts.insert.run(data).lastInsertRowid);
     },
     /**
      * @param {number} id
      * @param {{ full_name: string, role: string }} data
      */
-    update(t, r) {
-      n.update.run({ ...r, id: t });
+    update(id, data) {
+      stmts.update.run({ ...data, id });
     },
     /**
      * @param {number} id
      * @param {string} password_hash
      */
-    updatePassword(t, r) {
-      n.updatePassword.run({ id: t, password_hash: r });
+    updatePassword(id, password_hash) {
+      stmts.updatePassword.run({ id, password_hash });
     },
     /**
      * @param {number} id
      * @param {string|null} avatar  — base64 data-URL o null para borrar
      */
-    updateAvatar(t, r) {
-      n.updateAvatar.run({ id: t, avatar: r ?? null });
+    updateAvatar(id, avatar) {
+      stmts.updateAvatar.run({ id, avatar: avatar ?? null });
     },
     /**
      * @param {number} id
      * @param {0|1} active
      */
-    setActive(t, r) {
-      n.setActive.run({ id: t, active: r });
+    setActive(id, active) {
+      stmts.setActive.run({ id, active });
     }
   };
 }
-const q = (
+const ROLES = (
   /** @type {const} */
   ["admin", "cashier", "mechanic", "warehouse"]
 );
-function D(e) {
-  return ee("sha256").update(e).digest("hex");
+function hashPassword(password) {
+  return createHash("sha256").update(password).digest("hex");
 }
-function je(e) {
-  function n(r) {
-    if (!Number.isInteger(r) || r <= 0)
-      throw Object.assign(new Error(`user id invalido: ${r}`), { code: "USER_INVALID_ID" });
+function createUsersService(repo) {
+  function assertId(id) {
+    if (!Number.isInteger(id) || id <= 0) {
+      throw Object.assign(new Error(`user id invalido: ${id}`), { code: "USER_INVALID_ID" });
+    }
   }
-  function t(r) {
-    n(r);
-    const a = e.findById(r);
-    if (!a) throw Object.assign(new Error(`usuario no encontrado: ${r}`), { code: "USER_NOT_FOUND" });
-    return a;
+  function assertExists(id) {
+    assertId(id);
+    const row = repo.findById(id);
+    if (!row) throw Object.assign(new Error(`usuario no encontrado: ${id}`), { code: "USER_NOT_FOUND" });
+    return row;
   }
   return {
     /** Lista todos los usuarios sin exponer password_hash. */
     list() {
-      return e.findAll();
+      return repo.findAll();
     },
     /** @param {number} id */
-    getById(r) {
-      return n(r), e.findById(r) ?? null;
+    getById(id) {
+      assertId(id);
+      return repo.findById(id) ?? null;
     },
     /**
      * Login: valida credenciales y devuelve el usuario sin hash.
      * @param {string} email
      * @param {string} password
      */
-    login(r, a) {
-      if (!r || !a)
+    login(email, password) {
+      if (!email || !password) {
         throw Object.assign(new Error("Email y contraseña requeridos"), { code: "AUTH_MISSING_FIELDS" });
-      const s = e.findByEmailWithHash(r.trim());
-      if (!s)
+      }
+      const user = repo.findByEmailWithHash(email.trim());
+      if (!user) {
         throw Object.assign(new Error("Credenciales incorrectas"), { code: "AUTH_INVALID" });
-      if (s.active === 0)
+      }
+      if (user.active === 0) {
         throw Object.assign(new Error("Usuario desactivado"), { code: "AUTH_INACTIVE" });
-      if (s.password_hash !== D(a))
+      }
+      if (user.password_hash !== hashPassword(password)) {
         throw Object.assign(new Error("Credenciales incorrectas"), { code: "AUTH_INVALID" });
-      const { password_hash: i, ...o } = s;
-      return o;
+      }
+      const { password_hash: _, ...safeUser } = user;
+      return safeUser;
     },
     /**
      * @param {{ email: string, full_name: string, role: string, password: string }} input
      */
-    create(r) {
-      const a = (r.email ?? "").trim().toLowerCase(), s = (r.full_name ?? "").trim(), i = r.role;
-      if (!a) throw Object.assign(new Error("Email requerido"), { code: "USER_MISSING_EMAIL" });
-      if (!s) throw Object.assign(new Error("Nombre requerido"), { code: "USER_MISSING_NAME" });
-      if (!q.includes(
+    create(input) {
+      const email = (input.email ?? "").trim().toLowerCase();
+      const full_name = (input.full_name ?? "").trim();
+      const role = input.role;
+      if (!email) throw Object.assign(new Error("Email requerido"), { code: "USER_MISSING_EMAIL" });
+      if (!full_name) throw Object.assign(new Error("Nombre requerido"), { code: "USER_MISSING_NAME" });
+      if (!ROLES.includes(
         /** @type {any} */
-        i
-      ))
-        throw Object.assign(new Error(`Rol invalido: ${i}`), { code: "USER_INVALID_ROLE" });
-      if (!r.password || r.password.length < 6)
+        role
+      )) {
+        throw Object.assign(new Error(`Rol invalido: ${role}`), { code: "USER_INVALID_ROLE" });
+      }
+      if (!input.password || input.password.length < 6) {
         throw Object.assign(new Error("Contraseña minimo 6 caracteres"), { code: "USER_WEAK_PASSWORD" });
-      if (e.findByEmailWithHash(a)) throw Object.assign(new Error("El email ya está en uso"), { code: "USER_EMAIL_TAKEN" });
-      const d = e.create({ email: a, full_name: s, role: i, password_hash: D(r.password) });
-      return e.findById(d);
+      }
+      const existing = repo.findByEmailWithHash(email);
+      if (existing) throw Object.assign(new Error("El email ya está en uso"), { code: "USER_EMAIL_TAKEN" });
+      const id = repo.create({ email, full_name, role, password_hash: hashPassword(input.password) });
+      return repo.findById(id);
     },
     /**
      * @param {number} id
      * @param {{ full_name?: string, role?: string }} patch
      */
-    update(r, a) {
-      const s = t(r), i = (a.full_name ?? s.full_name).trim(), o = a.role ?? s.role;
-      if (!i) throw Object.assign(new Error("Nombre requerido"), { code: "USER_MISSING_NAME" });
-      if (!q.includes(
+    update(id, patch) {
+      const row = assertExists(id);
+      const full_name = (patch.full_name ?? row.full_name).trim();
+      const role = patch.role ?? row.role;
+      if (!full_name) throw Object.assign(new Error("Nombre requerido"), { code: "USER_MISSING_NAME" });
+      if (!ROLES.includes(
         /** @type {any} */
-        o
-      ))
-        throw Object.assign(new Error(`Rol invalido: ${o}`), { code: "USER_INVALID_ROLE" });
-      if (s.role === "admin" && o !== "admin" && e.findAll().filter((c) => c.role === "admin" && c.active === 1).length <= 1)
-        throw Object.assign(new Error("Debe existir al menos un administrador activo"), { code: "USER_LAST_ADMIN" });
-      return e.update(r, { full_name: i, role: o }), e.findById(r);
+        role
+      )) {
+        throw Object.assign(new Error(`Rol invalido: ${role}`), { code: "USER_INVALID_ROLE" });
+      }
+      if (row.role === "admin" && role !== "admin") {
+        const admins = repo.findAll().filter((u) => u.role === "admin" && u.active === 1);
+        if (admins.length <= 1) {
+          throw Object.assign(new Error("Debe existir al menos un administrador activo"), { code: "USER_LAST_ADMIN" });
+        }
+      }
+      repo.update(id, { full_name, role });
+      return repo.findById(id);
     },
     /**
      * @param {number} id
      * @param {string} newPassword
      */
-    changePassword(r, a) {
-      if (t(r), !a || a.length < 6)
+    changePassword(id, newPassword) {
+      assertExists(id);
+      if (!newPassword || newPassword.length < 6) {
         throw Object.assign(new Error("Contraseña minimo 6 caracteres"), { code: "USER_WEAK_PASSWORD" });
-      return e.updatePassword(r, D(a)), e.findById(r);
+      }
+      repo.updatePassword(id, hashPassword(newPassword));
+      return repo.findById(id);
     },
     /**
      * @param {number} id
      * @param {string|null} avatar  — base64 data-URL (max ~300 KB) o null
      */
-    updateAvatar(r, a) {
-      if (t(r), a !== null && typeof a != "string")
+    updateAvatar(id, avatar) {
+      assertExists(id);
+      if (avatar !== null && typeof avatar !== "string") {
         throw Object.assign(new Error("Avatar invalido"), { code: "USER_INVALID_AVATAR" });
-      if (a && a.length > 4e5)
+      }
+      if (avatar && avatar.length > 4e5) {
         throw Object.assign(new Error("Imagen demasiado grande (max 300 KB)"), { code: "USER_AVATAR_TOO_LARGE" });
-      return e.updateAvatar(r, a), e.findById(r);
+      }
+      repo.updateAvatar(id, avatar);
+      return repo.findById(id);
     },
     /**
      * @param {number} id
      * @param {boolean} active
      */
-    setActive(r, a) {
-      const s = t(r);
-      if (!a && s.role === "admin" && e.findAll().filter((o) => o.role === "admin" && o.active === 1).length <= 1)
-        throw Object.assign(new Error("Debe existir al menos un administrador activo"), { code: "USER_LAST_ADMIN" });
-      return e.setActive(r, a ? 1 : 0), e.findById(r);
+    setActive(id, active) {
+      const row = assertExists(id);
+      if (!active && row.role === "admin") {
+        const admins = repo.findAll().filter((u) => u.role === "admin" && u.active === 1);
+        if (admins.length <= 1) {
+          throw Object.assign(new Error("Debe existir al menos un administrador activo"), { code: "USER_LAST_ADMIN" });
+        }
+      }
+      repo.setActive(id, active ? 1 : 0);
+      return repo.findById(id);
     }
   };
 }
-function Ye(e) {
-  l.handle("users:login", u((n, t, r) => e.login(t, r))), l.handle("users:list", u(() => e.list())), l.handle("users:get-by-id", u((n, t) => e.getById(t))), l.handle("users:create", u((n, t) => e.create(t))), l.handle("users:update", u((n, t, r) => e.update(t, r))), l.handle("users:change-password", u((n, t, r) => e.changePassword(t, r))), l.handle("users:set-active", u((n, t, r) => e.setActive(t, r))), l.handle("users:update-avatar", u((n, t, r) => e.updateAvatar(t, r)));
+function registerUsersIpc(service) {
+  ipcMain.handle("users:login", wrap((_e, email, password) => service.login(email, password)));
+  ipcMain.handle("users:list", wrap(() => service.list()));
+  ipcMain.handle("users:get-by-id", wrap((_e, id) => service.getById(id)));
+  ipcMain.handle("users:create", wrap((_e, input) => service.create(input)));
+  ipcMain.handle("users:update", wrap((_e, id, patch) => service.update(id, patch)));
+  ipcMain.handle("users:change-password", wrap((_e, id, newPassword) => service.changePassword(id, newPassword)));
+  ipcMain.handle("users:set-active", wrap((_e, id, active) => service.setActive(id, active)));
+  ipcMain.handle("users:update-avatar", wrap((_e, id, avatar) => service.updateAvatar(id, avatar)));
 }
-const ke = 200;
-function xe(e) {
-  const n = {
-    insert: e.prepare(`
+const MAX_PAGE_SIZE = 200;
+function createAuditRepository(db) {
+  const stmts = {
+    insert: db.prepare(`
       INSERT INTO audit_log (action, entity, entity_id, description, payload_json, user_id, user_name)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `),
-    selectPage: e.prepare(`
+    selectPage: db.prepare(`
       SELECT id, action, entity, entity_id, description, payload_json, user_id, user_name, created_at
       FROM audit_log
       WHERE (:action IS NULL OR action = :action)
@@ -1788,7 +1803,7 @@ function xe(e) {
       ORDER BY id DESC
       LIMIT :limit OFFSET :offset
     `),
-    countFiltered: e.prepare(`
+    countFiltered: db.prepare(`
       SELECT COUNT(*) AS total FROM audit_log
       WHERE (:action IS NULL OR action = :action)
         AND (:entity IS NULL OR entity = :entity)
@@ -1800,75 +1815,80 @@ function xe(e) {
     /**
      * @param {AuditEntry} entry
      */
-    log(t) {
-      n.insert.run(
-        t.action,
-        t.entity ?? null,
-        t.entityId ?? null,
-        t.description ?? null,
-        t.payload ? JSON.stringify(t.payload) : null,
-        t.userId ?? null,
-        t.userName ?? null
+    log(entry) {
+      stmts.insert.run(
+        entry.action,
+        entry.entity ?? null,
+        entry.entityId ?? null,
+        entry.description ?? null,
+        entry.payload ? JSON.stringify(entry.payload) : null,
+        entry.userId ?? null,
+        entry.userName ?? null
       );
     },
     /**
      * @param {{ page?: number, pageSize?: number, action?: string, entity?: string, from?: string, to?: string }} opts
      * @returns {{ data: AuditRow[], total: number, page: number, pageSize: number }}
      */
-    findPage(t = {}) {
-      const r = t.page ?? 1, a = Math.min(t.pageSize ?? 50, ke), s = (r - 1) * a, i = {
-        action: t.action ?? null,
-        entity: t.entity ?? null,
-        from: t.from ?? null,
-        to: t.to ?? null,
-        limit: a,
-        offset: s
-      }, o = (
+    findPage(opts = {}) {
+      const page = opts.page ?? 1;
+      const pageSize = Math.min(opts.pageSize ?? 50, MAX_PAGE_SIZE);
+      const offset = (page - 1) * pageSize;
+      const params = {
+        action: opts.action ?? null,
+        entity: opts.entity ?? null,
+        from: opts.from ?? null,
+        to: opts.to ?? null,
+        limit: pageSize,
+        offset
+      };
+      const data = (
         /** @type {AuditRow[]} */
-        n.selectPage.all(i)
-      ), d = (
-        /** @type {{ total: number }} */
-        n.countFiltered.get(i).total
+        stmts.selectPage.all(params)
       );
-      return { data: o, total: d, page: r, pageSize: a };
+      const total = (
+        /** @type {{ total: number }} */
+        stmts.countFiltered.get(params).total
+      );
+      return { data, total, page, pageSize };
     }
   };
 }
-function Ve(e) {
+function createAuditService(repo) {
   return {
     /**
      * @param {import('./audit.repository.js').AuditEntry} entry
      */
-    log(n) {
-      e.log(n);
+    log(entry) {
+      repo.log(entry);
     },
     /**
      * @param {{ page?: number, pageSize?: number, action?: string, entity?: string, from?: string, to?: string }} opts
      */
-    list(n = {}) {
-      return e.findPage(n);
+    list(opts = {}) {
+      return repo.findPage(opts);
     }
   };
 }
-function Ge(e) {
-  l.handle("audit:list", u((n, t) => e.list(t)));
+function registerAuditIpc(service) {
+  ipcMain.handle("audit:list", wrap((_e, opts) => service.list(opts)));
 }
-function We(e) {
-  const n = {
-    findOpen: e.prepare(
-      "SELECT * FROM cash_sessions WHERE status = 'open' ORDER BY opened_at DESC LIMIT 1"
+function createCashRepository(db) {
+  const stmts = {
+    findOpen: db.prepare(
+      `SELECT * FROM cash_sessions WHERE status = 'open' ORDER BY opened_at DESC LIMIT 1`
     ),
-    findById: e.prepare(
-      "SELECT * FROM cash_sessions WHERE id = ?"
+    findById: db.prepare(
+      `SELECT * FROM cash_sessions WHERE id = ?`
     ),
-    findAll: e.prepare(
-      "SELECT * FROM cash_sessions ORDER BY opened_at DESC LIMIT 100"
+    findAll: db.prepare(
+      `SELECT * FROM cash_sessions ORDER BY opened_at DESC LIMIT 100`
     ),
-    insert: e.prepare(
+    insert: db.prepare(
       `INSERT INTO cash_sessions (opened_by, opened_by_name, opening_amount)
        VALUES (@opened_by, @opened_by_name, @opening_amount)`
     ),
-    close: e.prepare(
+    close: db.prepare(
       `UPDATE cash_sessions
           SET closed_by       = @closed_by,
               closed_by_name  = @closed_by_name,
@@ -1880,14 +1900,14 @@ function We(e) {
               status          = 'closed'
         WHERE id = @id AND status = 'open'`
     ),
-    movementsForSession: e.prepare(
-      "SELECT * FROM cash_movements WHERE session_id = ? ORDER BY created_at ASC"
+    movementsForSession: db.prepare(
+      `SELECT * FROM cash_movements WHERE session_id = ? ORDER BY created_at ASC`
     ),
-    insertMovement: e.prepare(
+    insertMovement: db.prepare(
       `INSERT INTO cash_movements (session_id, type, amount, concept, created_by)
        VALUES (@session_id, @type, @amount, @concept, @created_by)`
     ),
-    salesTotalForSession: e.prepare(
+    salesTotalForSession: db.prepare(
       `SELECT COALESCE(SUM(total), 0) AS total
          FROM sales
         WHERE status = 'active'
@@ -1899,39 +1919,39 @@ function We(e) {
   return {
     /** @returns {CashSessionRow|undefined} */
     findOpen() {
-      return n.findOpen.get();
+      return stmts.findOpen.get();
     },
     /** @param {number} id @returns {CashSessionRow|undefined} */
-    findById(t) {
-      return n.findById.get(t);
+    findById(id) {
+      return stmts.findById.get(id);
     },
     /** @returns {CashSessionRow[]} */
     findAll() {
-      return n.findAll.all();
+      return stmts.findAll.all();
     },
     /**
      * @param {{ opened_by: number, opened_by_name: string, opening_amount: number }} data
      * @returns {number}
      */
-    open(t) {
-      return Number(n.insert.run(t).lastInsertRowid);
+    open(data) {
+      return Number(stmts.insert.run(data).lastInsertRowid);
     },
     /**
      * @param {{ id: number, closed_by: number, closed_by_name: string, closing_amount: number, expected_amount: number, difference: number, notes: string|null }} data
      */
-    close(t) {
-      n.close.run(t);
+    close(data) {
+      stmts.close.run(data);
     },
     /** @param {number} sessionId @returns {CashMovementRow[]} */
-    movementsForSession(t) {
-      return n.movementsForSession.all(t);
+    movementsForSession(sessionId) {
+      return stmts.movementsForSession.all(sessionId);
     },
     /**
      * @param {{ session_id: number, type: 'in'|'out', amount: number, concept: string, created_by: number }} data
      * @returns {number}
      */
-    insertMovement(t) {
-      return Number(n.insertMovement.run(t).lastInsertRowid);
+    insertMovement(data) {
+      return Number(stmts.insertMovement.run(data).lastInsertRowid);
     },
     /**
      * Suma de ventas activas durante la sesión.
@@ -1939,214 +1959,247 @@ function We(e) {
      * @param {string|null} closedAt
      * @returns {number}
      */
-    salesTotal(t, r) {
-      const a = (
+    salesTotal(sessionId, closedAt) {
+      const row = (
         /** @type {{ total: number }} */
-        n.salesTotalForSession.get(t, r, r)
+        stmts.salesTotalForSession.get(sessionId, closedAt, closedAt)
       );
-      return (a == null ? void 0 : a.total) ?? 0;
+      return (row == null ? void 0 : row.total) ?? 0;
     }
   };
 }
-function $e(e) {
-  function n(t) {
-    if (t !== "admin")
+function createCashService(repo) {
+  function assertAdmin(role) {
+    if (role !== "admin") {
       throw Object.assign(new Error("Solo el administrador puede gestionar la caja"), { code: "CASH_FORBIDDEN" });
+    }
   }
   return {
     /** Devuelve la sesión abierta o null */
     getOpenSession() {
-      return e.findOpen() ?? null;
+      return repo.findOpen() ?? null;
     },
     /** Lista todas las sesiones (historial) */
     listSessions() {
-      return e.findAll();
+      return repo.findAll();
     },
     /**
      * @param {number} sessionId
      */
-    getSession(t) {
-      const r = e.findById(t);
-      if (!r) throw Object.assign(new Error("Sesión no encontrada"), { code: "CASH_NOT_FOUND" });
-      const a = e.movementsForSession(t), s = e.salesTotal(t, r.closed_at);
-      return { session: r, movements: a, salesTotal: s };
+    getSession(sessionId) {
+      const session = repo.findById(sessionId);
+      if (!session) throw Object.assign(new Error("Sesión no encontrada"), { code: "CASH_NOT_FOUND" });
+      const movements = repo.movementsForSession(sessionId);
+      const salesTotal = repo.salesTotal(sessionId, session.closed_at);
+      return { session, movements, salesTotal };
     },
     /**
      * Abre una nueva sesión de caja. Solo admin.
      * @param {{ userId: number, userName: string, role: string, openingAmount: number }} input
      */
-    openSession({ userId: t, userName: r, role: a, openingAmount: s }) {
-      if (n(a), e.findOpen())
+    openSession({ userId, userName, role, openingAmount }) {
+      assertAdmin(role);
+      const existing = repo.findOpen();
+      if (existing) {
         throw Object.assign(new Error("Ya hay una caja abierta"), { code: "CASH_ALREADY_OPEN" });
-      if (typeof s != "number" || s < 0)
+      }
+      if (typeof openingAmount !== "number" || openingAmount < 0) {
         throw Object.assign(new Error("Monto inicial inválido"), { code: "CASH_INVALID_AMOUNT" });
-      const o = e.open({
-        opened_by: t,
-        opened_by_name: r,
-        opening_amount: s
+      }
+      const id = repo.open({
+        opened_by: userId,
+        opened_by_name: userName,
+        opening_amount: openingAmount
       });
-      return e.findById(o);
+      return repo.findById(id);
     },
     /**
      * Cierra la sesión abierta. Solo admin.
      * @param {{ userId: number, userName: string, role: string, closingAmount: number, notes?: string }} input
      */
-    closeSession({ userId: t, userName: r, role: a, closingAmount: s, notes: i }) {
-      n(a);
-      const o = e.findOpen();
-      if (!o)
+    closeSession({ userId, userName, role, closingAmount, notes }) {
+      assertAdmin(role);
+      const session = repo.findOpen();
+      if (!session) {
         throw Object.assign(new Error("No hay caja abierta"), { code: "CASH_NOT_OPEN" });
-      if (typeof s != "number" || s < 0)
+      }
+      if (typeof closingAmount !== "number" || closingAmount < 0) {
         throw Object.assign(new Error("Monto de cierre inválido"), { code: "CASH_INVALID_AMOUNT" });
-      const d = e.salesTotal(o.id, null), c = e.movementsForSession(o.id), E = c.filter((T) => T.type === "in").reduce((T, p) => T + p.amount, 0), _ = c.filter((T) => T.type === "out").reduce((T, p) => T + p.amount, 0), m = o.opening_amount + d + E - _, N = s - m;
-      return e.close({
-        id: o.id,
-        closed_by: t,
-        closed_by_name: r,
-        closing_amount: s,
-        expected_amount: m,
-        difference: N,
-        notes: i ?? null
-      }), e.findById(o.id);
+      }
+      const salesTotal = repo.salesTotal(session.id, null);
+      const movements = repo.movementsForSession(session.id);
+      const movIn = movements.filter((m) => m.type === "in").reduce((s, m) => s + m.amount, 0);
+      const movOut = movements.filter((m) => m.type === "out").reduce((s, m) => s + m.amount, 0);
+      const expected = session.opening_amount + salesTotal + movIn - movOut;
+      const difference = closingAmount - expected;
+      repo.close({
+        id: session.id,
+        closed_by: userId,
+        closed_by_name: userName,
+        closing_amount: closingAmount,
+        expected_amount: expected,
+        difference,
+        notes: notes ?? null
+      });
+      return repo.findById(session.id);
     },
     /**
      * Agrega un movimiento manual (ingreso o egreso). Solo admin.
      * @param {{ userId: number, role: string, type: 'in'|'out', amount: number, concept: string }} input
      */
-    addMovement({ userId: t, role: r, type: a, amount: s, concept: i }) {
-      n(r);
-      const o = e.findOpen();
-      if (!o)
+    addMovement({ userId, role, type, amount, concept }) {
+      assertAdmin(role);
+      const session = repo.findOpen();
+      if (!session) {
         throw Object.assign(new Error("No hay caja abierta"), { code: "CASH_NOT_OPEN" });
-      if (!["in", "out"].includes(a))
+      }
+      if (!["in", "out"].includes(type)) {
         throw Object.assign(new Error("Tipo de movimiento inválido"), { code: "CASH_INVALID_TYPE" });
-      if (!s || s <= 0)
+      }
+      if (!amount || amount <= 0) {
         throw Object.assign(new Error("Monto inválido"), { code: "CASH_INVALID_AMOUNT" });
-      if (!(i != null && i.trim()))
+      }
+      if (!(concept == null ? void 0 : concept.trim())) {
         throw Object.assign(new Error("Concepto requerido"), { code: "CASH_MISSING_CONCEPT" });
-      return { id: e.insertMovement({ session_id: o.id, type: a, amount: s, concept: i.trim(), created_by: t }), session_id: o.id, type: a, amount: s, concept: i, created_by: t };
+      }
+      const id = repo.insertMovement({ session_id: session.id, type, amount, concept: concept.trim(), created_by: userId });
+      return { id, session_id: session.id, type, amount, concept, created_by: userId };
     }
   };
 }
-function Ke(e) {
-  l.handle("cash:get-open", u(() => e.getOpenSession())), l.handle("cash:list", u(() => e.listSessions())), l.handle("cash:get-session", u((n, t) => e.getSession(t))), l.handle("cash:open", u((n, t) => e.openSession(t))), l.handle("cash:close", u((n, t) => e.closeSession(t))), l.handle("cash:add-movement", u((n, t) => e.addMovement(t)));
+function registerCashIpc(service) {
+  ipcMain.handle("cash:get-open", wrap(() => service.getOpenSession()));
+  ipcMain.handle("cash:list", wrap(() => service.listSessions()));
+  ipcMain.handle("cash:get-session", wrap((_e, id) => service.getSession(id)));
+  ipcMain.handle("cash:open", wrap((_e, input) => service.openSession(input)));
+  ipcMain.handle("cash:close", wrap((_e, input) => service.closeSession(input)));
+  ipcMain.handle("cash:add-movement", wrap((_e, input) => service.addMovement(input)));
 }
-function Qe(e) {
-  const n = {
+function createPurchasesRepository(db) {
+  const stmts = {
     // suppliers
-    findAllSuppliers: e.prepare(
-      "SELECT * FROM suppliers ORDER BY name"
+    findAllSuppliers: db.prepare(
+      `SELECT * FROM suppliers ORDER BY name`
     ),
-    findSupplierById: e.prepare(
-      "SELECT * FROM suppliers WHERE id = ?"
+    findSupplierById: db.prepare(
+      `SELECT * FROM suppliers WHERE id = ?`
     ),
-    insertSupplier: e.prepare(
+    insertSupplier: db.prepare(
       `INSERT INTO suppliers (name, contact_name, phone, email, address, notes)
        VALUES (@name, @contact_name, @phone, @email, @address, @notes)`
     ),
-    updateSupplier: e.prepare(
+    updateSupplier: db.prepare(
       `UPDATE suppliers SET name=@name, contact_name=@contact_name, phone=@phone,
        email=@email, address=@address, notes=@notes,
        updated_at=strftime('%Y-%m-%d %H:%M:%S','now','localtime')
        WHERE id=@id`
     ),
-    setSupplierActive: e.prepare(
+    setSupplierActive: db.prepare(
       `UPDATE suppliers SET active=@active,
        updated_at=strftime('%Y-%m-%d %H:%M:%S','now','localtime')
        WHERE id=@id`
     ),
     // purchase orders
-    findAllOrders: e.prepare(
+    findAllOrders: db.prepare(
       `SELECT po.*, s.name AS supplier_name
          FROM purchase_orders po
          JOIN suppliers s ON s.id = po.supplier_id
         ORDER BY po.created_at DESC LIMIT 200`
     ),
-    findOrderById: e.prepare(
+    findOrderById: db.prepare(
       `SELECT po.*, s.name AS supplier_name
          FROM purchase_orders po
          JOIN suppliers s ON s.id = po.supplier_id
         WHERE po.id = ?`
     ),
-    findOrdersBySupplier: e.prepare(
+    findOrdersBySupplier: db.prepare(
       `SELECT po.*, s.name AS supplier_name
          FROM purchase_orders po
          JOIN suppliers s ON s.id = po.supplier_id
         WHERE po.supplier_id = ?
         ORDER BY po.created_at DESC`
     ),
-    insertOrder: e.prepare(
+    insertOrder: db.prepare(
       `INSERT INTO purchase_orders (supplier_id, notes, created_by, created_by_name)
        VALUES (@supplier_id, @notes, @created_by, @created_by_name)`
     ),
-    updateOrderStatus: e.prepare(
+    updateOrderStatus: db.prepare(
       `UPDATE purchase_orders SET status=@status, received_at=@received_at,
        total_cost=@total_cost WHERE id=@id`
     ),
-    cancelOrder: e.prepare(
-      "UPDATE purchase_orders SET status='cancelled' WHERE id=? AND status IN ('draft','sent')"
+    cancelOrder: db.prepare(
+      `UPDATE purchase_orders SET status='cancelled' WHERE id=? AND status IN ('draft','sent')`
     ),
     // purchase items
-    findItemsByOrder: e.prepare(
-      "SELECT * FROM purchase_items WHERE order_id = ?"
+    findItemsByOrder: db.prepare(
+      `SELECT * FROM purchase_items WHERE order_id = ?`
     ),
-    insertItem: e.prepare(
+    insertItem: db.prepare(
       `INSERT INTO purchase_items (order_id, product_id, product_name, product_code, qty_ordered, unit_cost)
        VALUES (@order_id, @product_id, @product_name, @product_code, @qty_ordered, @unit_cost)`
     ),
-    updateItemReceived: e.prepare(
-      "UPDATE purchase_items SET qty_received=@qty_received WHERE id=@id"
+    updateItemReceived: db.prepare(
+      `UPDATE purchase_items SET qty_received=@qty_received WHERE id=@id`
     ),
     // stock update on receive
-    addStock: e.prepare(
-      "UPDATE products SET stock = stock + @qty WHERE id = @id"
+    addStock: db.prepare(
+      `UPDATE products SET stock = stock + @qty WHERE id = @id`
     ),
-    updateProductCost: e.prepare(
-      "UPDATE products SET cost = @cost WHERE id = @id"
-    )
+    updateProductCost: db.prepare(
+      `UPDATE products SET cost = @cost WHERE id = @id`
+    ),
+    getProductForMove: db.prepare(
+      `SELECT id, name, stock FROM products WHERE id = ?`
+    ),
+    insertMovement: db.prepare(`
+      INSERT INTO stock_movements
+        (product_id, product_name, type, qty, qty_before, qty_after, reference_type, reference_id, notes, created_by, created_by_name)
+      VALUES
+        (@product_id, @product_name, @type, @qty, @qty_before, @qty_after, @reference_type, @reference_id, @notes, @created_by, @created_by_name)
+    `)
   };
   return {
     // ── Suppliers ──────────────────────────────────────────────────────────
     findAllSuppliers() {
-      return n.findAllSuppliers.all();
+      return stmts.findAllSuppliers.all();
     },
-    findSupplierById(t) {
-      return n.findSupplierById.get(t);
+    findSupplierById(id) {
+      return stmts.findSupplierById.get(id);
     },
-    createSupplier(t) {
-      return Number(n.insertSupplier.run(t).lastInsertRowid);
+    createSupplier(data) {
+      return Number(stmts.insertSupplier.run(data).lastInsertRowid);
     },
-    updateSupplier(t, r) {
-      n.updateSupplier.run({ ...r, id: t });
+    updateSupplier(id, data) {
+      stmts.updateSupplier.run({ ...data, id });
     },
-    setSupplierActive(t, r) {
-      n.setSupplierActive.run({ id: t, active: r });
+    setSupplierActive(id, active) {
+      stmts.setSupplierActive.run({ id, active });
     },
     // ── Orders ─────────────────────────────────────────────────────────────
     findAllOrders() {
-      return n.findAllOrders.all();
+      return stmts.findAllOrders.all();
     },
-    findOrderById(t) {
-      return n.findOrderById.get(t);
+    findOrderById(id) {
+      return stmts.findOrderById.get(id);
     },
-    findOrdersBySupplier(t) {
-      return n.findOrdersBySupplier.all(t);
+    findOrdersBySupplier(supplierId) {
+      return stmts.findOrdersBySupplier.all(supplierId);
     },
-    createOrder(t) {
-      return Number(n.insertOrder.run(t).lastInsertRowid);
+    createOrder(data) {
+      return Number(stmts.insertOrder.run(data).lastInsertRowid);
     },
-    updateOrderStatus(t, r, a, s) {
-      n.updateOrderStatus.run({ id: t, status: r, received_at: a ?? null, total_cost: s });
+    updateOrderStatus(id, status, receivedAt, totalCost) {
+      stmts.updateOrderStatus.run({ id, status, received_at: receivedAt ?? null, total_cost: totalCost });
     },
-    cancelOrder(t) {
-      n.cancelOrder.run(t);
+    cancelOrder(id) {
+      stmts.cancelOrder.run(id);
     },
     // ── Items ──────────────────────────────────────────────────────────────
-    findItemsByOrder(t) {
-      return n.findItemsByOrder.all(t);
+    findItemsByOrder(orderId) {
+      return stmts.findItemsByOrder.all(orderId);
     },
-    insertItem(t) {
-      return Number(n.insertItem.run(t).lastInsertRowid);
+    insertItem(data) {
+      return Number(stmts.insertItem.run(data).lastInsertRowid);
     },
     // ── Receive (transaction) ──────────────────────────────────────────────
     /**
@@ -2154,172 +2207,213 @@ function Qe(e) {
      * @param {number} orderId
      * @param {{ id: number, qty_received: number }[]} receivedItems
      */
-    receiveOrder: e.transaction((t, r) => {
-      let a = 0;
-      for (const i of r) {
-        n.updateItemReceived.run(i);
-        const o = n.findItemsByOrder.all(t).find((d) => d.id === i.id);
-        o != null && o.product_id && i.qty_received > 0 && (n.addStock.run({ id: o.product_id, qty: i.qty_received }), o.unit_cost > 0 && n.updateProductCost.run({ id: o.product_id, cost: o.unit_cost })), a += ((o == null ? void 0 : o.unit_cost) ?? 0) * i.qty_received;
+    receiveOrder: db.transaction((orderId, receivedItems) => {
+      let total = 0;
+      for (const item of receivedItems) {
+        stmts.updateItemReceived.run(item);
+        const row = stmts.findItemsByOrder.all(orderId).find((i) => i.id === item.id);
+        if ((row == null ? void 0 : row.product_id) && item.qty_received > 0) {
+          const prod = stmts.getProductForMove.get(row.product_id);
+          const qtyBefore = (prod == null ? void 0 : prod.stock) ?? 0;
+          stmts.addStock.run({ id: row.product_id, qty: item.qty_received });
+          if (row.unit_cost > 0) {
+            stmts.updateProductCost.run({ id: row.product_id, cost: row.unit_cost });
+          }
+          stmts.insertMovement.run({
+            product_id: row.product_id,
+            product_name: (prod == null ? void 0 : prod.name) ?? row.product_name,
+            type: "purchase",
+            qty: item.qty_received,
+            qty_before: qtyBefore,
+            qty_after: qtyBefore + item.qty_received,
+            reference_type: "purchase",
+            reference_id: orderId,
+            notes: null,
+            created_by: null,
+            created_by_name: null
+          });
+        }
+        total += ((row == null ? void 0 : row.unit_cost) ?? 0) * item.qty_received;
       }
-      const s = (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace("T", " ");
-      n.updateOrderStatus.run({ id: t, status: "received", received_at: s, total_cost: a });
+      const receivedAt = (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace("T", " ");
+      stmts.updateOrderStatus.run({ id: orderId, status: "received", received_at: receivedAt, total_cost: total });
     })
   };
 }
-function ze(e) {
-  function n(t) {
-    if (t !== "admin")
+function createPurchasesService(repo) {
+  function assertAdmin(role) {
+    if (role !== "admin") {
       throw Object.assign(new Error("Solo el administrador puede gestionar compras"), { code: "PURCHASES_FORBIDDEN" });
+    }
   }
   return {
     // ── Suppliers ────────────────────────────────────────────────────────
     listSuppliers() {
-      return e.findAllSuppliers();
+      return repo.findAllSuppliers();
     },
-    getSupplier(t) {
-      return e.findSupplierById(t) ?? null;
+    getSupplier(id) {
+      return repo.findSupplierById(id) ?? null;
     },
-    createSupplier(t, r) {
-      var i, o, d, c, E;
-      n(r);
-      const a = (t.name ?? "").trim();
-      if (!a) throw Object.assign(new Error("Nombre del proveedor requerido"), { code: "SUPPLIER_MISSING_NAME" });
-      const s = e.createSupplier({
-        name: a,
-        contact_name: ((i = t.contact_name) == null ? void 0 : i.trim()) || null,
-        phone: ((o = t.phone) == null ? void 0 : o.trim()) || null,
-        email: ((d = t.email) == null ? void 0 : d.trim()) || null,
-        address: ((c = t.address) == null ? void 0 : c.trim()) || null,
-        notes: ((E = t.notes) == null ? void 0 : E.trim()) || null
+    createSupplier(input, role) {
+      var _a, _b, _c, _d, _e;
+      assertAdmin(role);
+      const name = (input.name ?? "").trim();
+      if (!name) throw Object.assign(new Error("Nombre del proveedor requerido"), { code: "SUPPLIER_MISSING_NAME" });
+      const id = repo.createSupplier({
+        name,
+        contact_name: ((_a = input.contact_name) == null ? void 0 : _a.trim()) || null,
+        phone: ((_b = input.phone) == null ? void 0 : _b.trim()) || null,
+        email: ((_c = input.email) == null ? void 0 : _c.trim()) || null,
+        address: ((_d = input.address) == null ? void 0 : _d.trim()) || null,
+        notes: ((_e = input.notes) == null ? void 0 : _e.trim()) || null
       });
-      return e.findSupplierById(s);
+      return repo.findSupplierById(id);
     },
-    updateSupplier(t, r, a) {
-      var o, d, c, E, _;
-      n(a);
-      const s = e.findSupplierById(t);
-      if (!s) throw Object.assign(new Error("Proveedor no encontrado"), { code: "SUPPLIER_NOT_FOUND" });
-      const i = (r.name ?? s.name).trim();
-      if (!i) throw Object.assign(new Error("Nombre requerido"), { code: "SUPPLIER_MISSING_NAME" });
-      return e.updateSupplier(t, {
-        name: i,
-        contact_name: ((o = r.contact_name) == null ? void 0 : o.trim()) ?? s.contact_name,
-        phone: ((d = r.phone) == null ? void 0 : d.trim()) ?? s.phone,
-        email: ((c = r.email) == null ? void 0 : c.trim()) ?? s.email,
-        address: ((E = r.address) == null ? void 0 : E.trim()) ?? s.address,
-        notes: ((_ = r.notes) == null ? void 0 : _.trim()) ?? s.notes
-      }), e.findSupplierById(t);
+    updateSupplier(id, input, role) {
+      var _a, _b, _c, _d, _e;
+      assertAdmin(role);
+      const row = repo.findSupplierById(id);
+      if (!row) throw Object.assign(new Error("Proveedor no encontrado"), { code: "SUPPLIER_NOT_FOUND" });
+      const name = (input.name ?? row.name).trim();
+      if (!name) throw Object.assign(new Error("Nombre requerido"), { code: "SUPPLIER_MISSING_NAME" });
+      repo.updateSupplier(id, {
+        name,
+        contact_name: ((_a = input.contact_name) == null ? void 0 : _a.trim()) ?? row.contact_name,
+        phone: ((_b = input.phone) == null ? void 0 : _b.trim()) ?? row.phone,
+        email: ((_c = input.email) == null ? void 0 : _c.trim()) ?? row.email,
+        address: ((_d = input.address) == null ? void 0 : _d.trim()) ?? row.address,
+        notes: ((_e = input.notes) == null ? void 0 : _e.trim()) ?? row.notes
+      });
+      return repo.findSupplierById(id);
     },
-    setSupplierActive(t, r, a) {
-      return n(a), e.setSupplierActive(t, r ? 1 : 0), e.findSupplierById(t);
+    setSupplierActive(id, active, role) {
+      assertAdmin(role);
+      repo.setSupplierActive(id, active ? 1 : 0);
+      return repo.findSupplierById(id);
     },
     // ── Purchase Orders ──────────────────────────────────────────────────
     listOrders() {
-      return e.findAllOrders();
+      return repo.findAllOrders();
     },
-    getOrder(t) {
-      const r = e.findOrderById(t);
-      if (!r) throw Object.assign(new Error("Orden no encontrada"), { code: "ORDER_NOT_FOUND" });
-      const a = e.findItemsByOrder(t);
-      return { order: r, items: a };
+    getOrder(id) {
+      const order = repo.findOrderById(id);
+      if (!order) throw Object.assign(new Error("Orden no encontrada"), { code: "ORDER_NOT_FOUND" });
+      const items = repo.findItemsByOrder(id);
+      return { order, items };
     },
     /**
      * @param {{ supplierId: number, notes?: string, items: { productId?: number, productName: string, productCode?: string, qtyOrdered: number, unitCost: number }[], userId: number, userName: string, role: string }} input
      */
-    createOrder(t) {
-      var a, s, i, o;
-      if (n(t.role), !t.supplierId) throw Object.assign(new Error("Proveedor requerido"), { code: "ORDER_MISSING_SUPPLIER" });
-      if (!((a = t.items) != null && a.length)) throw Object.assign(new Error("Agrega al menos un producto"), { code: "ORDER_EMPTY" });
-      const r = e.createOrder({
-        supplier_id: t.supplierId,
-        notes: ((s = t.notes) == null ? void 0 : s.trim()) || null,
-        created_by: t.userId,
-        created_by_name: t.userName
+    createOrder(input) {
+      var _a, _b, _c, _d;
+      assertAdmin(input.role);
+      if (!input.supplierId) throw Object.assign(new Error("Proveedor requerido"), { code: "ORDER_MISSING_SUPPLIER" });
+      if (!((_a = input.items) == null ? void 0 : _a.length)) throw Object.assign(new Error("Agrega al menos un producto"), { code: "ORDER_EMPTY" });
+      const orderId = repo.createOrder({
+        supplier_id: input.supplierId,
+        notes: ((_b = input.notes) == null ? void 0 : _b.trim()) || null,
+        created_by: input.userId,
+        created_by_name: input.userName
       });
-      for (const d of t.items) {
-        if (!((i = d.productName) != null && i.trim())) throw Object.assign(new Error("Nombre de producto requerido"), { code: "ITEM_MISSING_NAME" });
-        if (d.qtyOrdered <= 0) throw Object.assign(new Error("Cantidad debe ser mayor a 0"), { code: "ITEM_INVALID_QTY" });
-        e.insertItem({
-          order_id: r,
-          product_id: d.productId ?? null,
-          product_name: d.productName.trim(),
-          product_code: ((o = d.productCode) == null ? void 0 : o.trim()) || null,
-          qty_ordered: d.qtyOrdered,
-          unit_cost: d.unitCost ?? 0
+      for (const item of input.items) {
+        if (!((_c = item.productName) == null ? void 0 : _c.trim())) throw Object.assign(new Error("Nombre de producto requerido"), { code: "ITEM_MISSING_NAME" });
+        if (item.qtyOrdered <= 0) throw Object.assign(new Error("Cantidad debe ser mayor a 0"), { code: "ITEM_INVALID_QTY" });
+        repo.insertItem({
+          order_id: orderId,
+          product_id: item.productId ?? null,
+          product_name: item.productName.trim(),
+          product_code: ((_d = item.productCode) == null ? void 0 : _d.trim()) || null,
+          qty_ordered: item.qtyOrdered,
+          unit_cost: item.unitCost ?? 0
         });
       }
-      return e.findOrderById(r);
+      return repo.findOrderById(orderId);
     },
-    markSent(t, r) {
-      n(r);
-      const a = e.findOrderById(t);
-      if (!a) throw Object.assign(new Error("Orden no encontrada"), { code: "ORDER_NOT_FOUND" });
-      if (a.status !== "draft") throw Object.assign(new Error("Solo se pueden enviar órdenes en borrador"), { code: "ORDER_INVALID_STATUS" });
-      return e.updateOrderStatus(t, "sent", null, a.total_cost), e.findOrderById(t);
+    markSent(id, role) {
+      assertAdmin(role);
+      const order = repo.findOrderById(id);
+      if (!order) throw Object.assign(new Error("Orden no encontrada"), { code: "ORDER_NOT_FOUND" });
+      if (order.status !== "draft") throw Object.assign(new Error("Solo se pueden enviar órdenes en borrador"), { code: "ORDER_INVALID_STATUS" });
+      repo.updateOrderStatus(id, "sent", null, order.total_cost);
+      return repo.findOrderById(id);
     },
     /**
      * Recibe la orden: actualiza stock y costo de productos.
      * @param {{ orderId: number, role: string, items: { id: number, qty_received: number }[] }} input
      */
-    receiveOrder(t) {
-      var a;
-      n(t.role);
-      const r = e.findOrderById(t.orderId);
-      if (!r) throw Object.assign(new Error("Orden no encontrada"), { code: "ORDER_NOT_FOUND" });
-      if (!["draft", "sent"].includes(r.status))
+    receiveOrder(input) {
+      var _a;
+      assertAdmin(input.role);
+      const order = repo.findOrderById(input.orderId);
+      if (!order) throw Object.assign(new Error("Orden no encontrada"), { code: "ORDER_NOT_FOUND" });
+      if (!["draft", "sent"].includes(order.status)) {
         throw Object.assign(new Error("Esta orden ya fue recibida o cancelada"), { code: "ORDER_INVALID_STATUS" });
-      if (!((a = t.items) != null && a.length)) throw Object.assign(new Error("Sin items para recibir"), { code: "ORDER_EMPTY" });
-      return e.receiveOrder(t.orderId, t.items), e.findOrderById(t.orderId);
+      }
+      if (!((_a = input.items) == null ? void 0 : _a.length)) throw Object.assign(new Error("Sin items para recibir"), { code: "ORDER_EMPTY" });
+      repo.receiveOrder(input.orderId, input.items);
+      return repo.findOrderById(input.orderId);
     },
-    cancelOrder(t, r) {
-      n(r);
-      const a = e.findOrderById(t);
-      if (!a) throw Object.assign(new Error("Orden no encontrada"), { code: "ORDER_NOT_FOUND" });
-      if (!["draft", "sent"].includes(a.status))
+    cancelOrder(id, role) {
+      assertAdmin(role);
+      const order = repo.findOrderById(id);
+      if (!order) throw Object.assign(new Error("Orden no encontrada"), { code: "ORDER_NOT_FOUND" });
+      if (!["draft", "sent"].includes(order.status)) {
         throw Object.assign(new Error("No se puede cancelar esta orden"), { code: "ORDER_INVALID_STATUS" });
-      return e.cancelOrder(t), e.findOrderById(t);
+      }
+      repo.cancelOrder(id);
+      return repo.findOrderById(id);
     }
   };
 }
-function Ze(e) {
-  l.handle("suppliers:list", u(() => e.listSuppliers())), l.handle("suppliers:get", u((n, t) => e.getSupplier(t))), l.handle("suppliers:create", u((n, t, r) => e.createSupplier(t, r))), l.handle("suppliers:update", u((n, t, r, a) => e.updateSupplier(t, r, a))), l.handle("suppliers:set-active", u((n, t, r, a) => e.setSupplierActive(t, r, a))), l.handle("purchases:list", u(() => e.listOrders())), l.handle("purchases:get", u((n, t) => e.getOrder(t))), l.handle("purchases:create", u((n, t) => e.createOrder(t))), l.handle("purchases:mark-sent", u((n, t, r) => e.markSent(t, r))), l.handle("purchases:receive", u((n, t) => e.receiveOrder(t))), l.handle("purchases:cancel", u((n, t, r) => e.cancelOrder(t, r)));
+function registerPurchasesIpc(service) {
+  ipcMain.handle("suppliers:list", wrap(() => service.listSuppliers()));
+  ipcMain.handle("suppliers:get", wrap((_e, id) => service.getSupplier(id)));
+  ipcMain.handle("suppliers:create", wrap((_e, input, role) => service.createSupplier(input, role)));
+  ipcMain.handle("suppliers:update", wrap((_e, id, input, role) => service.updateSupplier(id, input, role)));
+  ipcMain.handle("suppliers:set-active", wrap((_e, id, active, role) => service.setSupplierActive(id, active, role)));
+  ipcMain.handle("purchases:list", wrap(() => service.listOrders()));
+  ipcMain.handle("purchases:get", wrap((_e, id) => service.getOrder(id)));
+  ipcMain.handle("purchases:create", wrap((_e, input) => service.createOrder(input)));
+  ipcMain.handle("purchases:mark-sent", wrap((_e, id, role) => service.markSent(id, role)));
+  ipcMain.handle("purchases:receive", wrap((_e, input) => service.receiveOrder(input)));
+  ipcMain.handle("purchases:cancel", wrap((_e, id, role) => service.cancelOrder(id, role)));
 }
-function Je(e) {
-  const n = {
-    findAll: e.prepare(`
+function createReceivablesRepository(db) {
+  const stmts = {
+    findAll: db.prepare(`
       SELECT * FROM receivables ORDER BY
         CASE status WHEN 'pending' THEN 0 WHEN 'partial' THEN 1 ELSE 2 END,
         due_date ASC NULLS LAST, created_at DESC
     `),
-    findById: e.prepare("SELECT * FROM receivables WHERE id = ?"),
-    findByCustomer: e.prepare("SELECT * FROM receivables WHERE customer_id = ? ORDER BY created_at DESC"),
-    insert: e.prepare(`
+    findById: db.prepare(`SELECT * FROM receivables WHERE id = ?`),
+    findByCustomer: db.prepare(`SELECT * FROM receivables WHERE customer_id = ? ORDER BY created_at DESC`),
+    insert: db.prepare(`
       INSERT INTO receivables
         (customer_id, customer_name, customer_nit, description, amount, due_date, notes, created_by, created_by_name)
       VALUES
         (@customer_id, @customer_name, @customer_nit, @description, @amount, @due_date, @notes, @created_by, @created_by_name)
     `),
-    updateStatus: e.prepare(`
+    updateStatus: db.prepare(`
       UPDATE receivables
       SET status=@status, amount_paid=@amount_paid,
           updated_at=strftime('%Y-%m-%d %H:%M:%S','now','localtime')
       WHERE id=@id
     `),
-    cancel: e.prepare(`
+    cancel: db.prepare(`
       UPDATE receivables
       SET status='cancelled', updated_at=strftime('%Y-%m-%d %H:%M:%S','now','localtime')
       WHERE id=?
     `),
     // payments
-    findPayments: e.prepare("SELECT * FROM receivable_payments WHERE receivable_id = ? ORDER BY created_at"),
-    insertPayment: e.prepare(`
+    findPayments: db.prepare(`SELECT * FROM receivable_payments WHERE receivable_id = ? ORDER BY created_at`),
+    insertPayment: db.prepare(`
       INSERT INTO receivable_payments
         (receivable_id, amount, payment_method, notes, created_by, created_by_name)
       VALUES
         (@receivable_id, @amount, @payment_method, @notes, @created_by, @created_by_name)
     `),
     // summary
-    summary: e.prepare(`
+    summary: db.prepare(`
       SELECT
         COUNT(*)                                         AS total_count,
         COALESCE(SUM(amount),0)                          AS total_amount,
@@ -2330,146 +2424,159 @@ function Je(e) {
         COALESCE(SUM(CASE WHEN due_date < strftime('%Y-%m-%d','now') AND status IN ('pending','partial') THEN amount - amount_paid ELSE 0 END),0) AS overdue_balance
       FROM receivables WHERE status NOT IN ('cancelled','paid')
     `)
-  }, t = e.transaction((r, a) => {
-    n.insertPayment.run(a);
-    const s = n.findById.get(r), i = (s.amount_paid ?? 0) + a.amount, o = i >= s.amount ? "paid" : "partial";
-    return n.updateStatus.run({ id: r, amount_paid: i, status: o }), n.findById.get(r);
+  };
+  const applyPayment = db.transaction((receivableId, payment) => {
+    stmts.insertPayment.run(payment);
+    const row = stmts.findById.get(receivableId);
+    const newPaid = (row.amount_paid ?? 0) + payment.amount;
+    const newStatus = newPaid >= row.amount ? "paid" : "partial";
+    stmts.updateStatus.run({ id: receivableId, amount_paid: newPaid, status: newStatus });
+    return stmts.findById.get(receivableId);
   });
   return {
     findAll() {
-      return n.findAll.all();
+      return stmts.findAll.all();
     },
-    findById(r) {
-      return n.findById.get(r) ?? null;
+    findById(id) {
+      return stmts.findById.get(id) ?? null;
     },
-    findByCustomer(r) {
-      return n.findByCustomer.all(r);
+    findByCustomer(id) {
+      return stmts.findByCustomer.all(id);
     },
-    create(r) {
-      return Number(n.insert.run(r).lastInsertRowid);
+    create(data) {
+      return Number(stmts.insert.run(data).lastInsertRowid);
     },
-    cancel(r) {
-      n.cancel.run(r);
+    cancel(id) {
+      stmts.cancel.run(id);
     },
-    findPayments(r) {
-      return n.findPayments.all(r);
+    findPayments(id) {
+      return stmts.findPayments.all(id);
     },
-    applyPayment: t,
+    applyPayment,
     getSummary() {
-      return n.summary.get();
+      return stmts.summary.get();
     }
   };
 }
-function et(e) {
+function createReceivablesService(repo) {
   return {
     list() {
-      return e.findAll();
+      return repo.findAll();
     },
-    getDetail(n) {
-      const t = e.findById(n);
-      if (!t) throw Object.assign(new Error("Cuenta no encontrada"), { code: "RECV_NOT_FOUND" });
-      const r = e.findPayments(n);
-      return { receivable: t, payments: r };
+    getDetail(id) {
+      const receivable = repo.findById(id);
+      if (!receivable) throw Object.assign(new Error("Cuenta no encontrada"), { code: "RECV_NOT_FOUND" });
+      const payments = repo.findPayments(id);
+      return { receivable, payments };
     },
     getSummary() {
-      return e.getSummary();
+      return repo.getSummary();
     },
     /**
      * @param {{ customerId?: number, customerName: string, customerNit?: string, description: string, amount: number, dueDate?: string, notes?: string, userId: number, userName: string }} input
      */
-    create(n) {
-      var s, i, o, d;
-      const t = (s = n.description) == null ? void 0 : s.trim();
-      if (!t) throw Object.assign(new Error("Descripción requerida"), { code: "RECV_MISSING_DESC" });
-      if (!((i = n.customerName) != null && i.trim())) throw Object.assign(new Error("Nombre del cliente requerido"), { code: "RECV_MISSING_CUSTOMER" });
-      const r = Number(n.amount);
-      if (isNaN(r) || r <= 0) throw Object.assign(new Error("Monto debe ser mayor a 0"), { code: "RECV_INVALID_AMOUNT" });
-      const a = e.create({
-        customer_id: n.customerId ?? null,
-        customer_name: n.customerName.trim(),
-        customer_nit: ((o = n.customerNit) == null ? void 0 : o.trim()) || null,
-        description: t,
-        amount: r,
-        due_date: n.dueDate || null,
-        notes: ((d = n.notes) == null ? void 0 : d.trim()) || null,
-        created_by: n.userId,
-        created_by_name: n.userName
+    create(input) {
+      var _a, _b, _c, _d;
+      const desc = (_a = input.description) == null ? void 0 : _a.trim();
+      if (!desc) throw Object.assign(new Error("Descripción requerida"), { code: "RECV_MISSING_DESC" });
+      if (!((_b = input.customerName) == null ? void 0 : _b.trim())) throw Object.assign(new Error("Nombre del cliente requerido"), { code: "RECV_MISSING_CUSTOMER" });
+      const amount = Number(input.amount);
+      if (isNaN(amount) || amount <= 0) throw Object.assign(new Error("Monto debe ser mayor a 0"), { code: "RECV_INVALID_AMOUNT" });
+      const id = repo.create({
+        customer_id: input.customerId ?? null,
+        customer_name: input.customerName.trim(),
+        customer_nit: ((_c = input.customerNit) == null ? void 0 : _c.trim()) || null,
+        description: desc,
+        amount,
+        due_date: input.dueDate || null,
+        notes: ((_d = input.notes) == null ? void 0 : _d.trim()) || null,
+        created_by: input.userId,
+        created_by_name: input.userName
       });
-      return e.findById(a);
+      return repo.findById(id);
     },
     /**
      * @param {{ receivableId: number, amount: number, paymentMethod?: string, notes?: string, userId: number, userName: string }} input
      */
-    applyPayment(n) {
-      var s;
-      const t = e.findById(n.receivableId);
-      if (!t) throw Object.assign(new Error("Cuenta no encontrada"), { code: "RECV_NOT_FOUND" });
-      if (["paid", "cancelled"].includes(t.status))
+    applyPayment(input) {
+      var _a;
+      const rec = repo.findById(input.receivableId);
+      if (!rec) throw Object.assign(new Error("Cuenta no encontrada"), { code: "RECV_NOT_FOUND" });
+      if (["paid", "cancelled"].includes(rec.status)) {
         throw Object.assign(new Error("Esta cuenta ya está cerrada"), { code: "RECV_CLOSED" });
-      const r = Number(n.amount);
-      if (isNaN(r) || r <= 0) throw Object.assign(new Error("Monto de pago inválido"), { code: "RECV_INVALID_PAYMENT" });
-      const a = t.amount - t.amount_paid;
-      if (r > a + 1e-3)
-        throw Object.assign(new Error(`El pago (${r}) supera el saldo (${a.toFixed(2)})`), { code: "RECV_OVERPAYMENT" });
-      return e.applyPayment(n.receivableId, {
-        receivable_id: n.receivableId,
-        amount: r,
-        payment_method: n.paymentMethod || "cash",
-        notes: ((s = n.notes) == null ? void 0 : s.trim()) || null,
-        created_by: n.userId,
-        created_by_name: n.userName
+      }
+      const amount = Number(input.amount);
+      if (isNaN(amount) || amount <= 0) throw Object.assign(new Error("Monto de pago inválido"), { code: "RECV_INVALID_PAYMENT" });
+      const balance = rec.amount - rec.amount_paid;
+      if (amount > balance + 1e-3) {
+        throw Object.assign(new Error(`El pago (${amount}) supera el saldo (${balance.toFixed(2)})`), { code: "RECV_OVERPAYMENT" });
+      }
+      return repo.applyPayment(input.receivableId, {
+        receivable_id: input.receivableId,
+        amount,
+        payment_method: input.paymentMethod || "cash",
+        notes: ((_a = input.notes) == null ? void 0 : _a.trim()) || null,
+        created_by: input.userId,
+        created_by_name: input.userName
       });
     },
-    cancel(n) {
-      const t = e.findById(n);
-      if (!t) throw Object.assign(new Error("Cuenta no encontrada"), { code: "RECV_NOT_FOUND" });
-      if (t.status === "paid") throw Object.assign(new Error("No se puede cancelar una cuenta ya pagada"), { code: "RECV_CLOSED" });
-      return e.cancel(n), e.findById(n);
+    cancel(id) {
+      const rec = repo.findById(id);
+      if (!rec) throw Object.assign(new Error("Cuenta no encontrada"), { code: "RECV_NOT_FOUND" });
+      if (rec.status === "paid") throw Object.assign(new Error("No se puede cancelar una cuenta ya pagada"), { code: "RECV_CLOSED" });
+      repo.cancel(id);
+      return repo.findById(id);
     }
   };
 }
-function tt(e) {
-  function n(t, r) {
-    l.handle(t, async (a, ...s) => {
+function registerReceivablesIpc(svc) {
+  function handle(channel, fn) {
+    ipcMain.handle(channel, async (_e, ...args) => {
       try {
-        return { ok: !0, data: await r(...s) };
-      } catch (i) {
-        return { ok: !1, error: { code: i.code ?? "RECV_ERROR", message: i.message } };
+        const data = await fn(...args);
+        return { ok: true, data };
+      } catch (err) {
+        return { ok: false, error: { code: err.code ?? "RECV_ERROR", message: err.message } };
       }
     });
   }
-  n("receivables:list", () => e.list()), n("receivables:get", (t) => e.getDetail(t)), n("receivables:summary", () => e.getSummary()), n("receivables:create", (t) => e.create(t)), n("receivables:apply-payment", (t) => e.applyPayment(t)), n("receivables:cancel", (t) => e.cancel(t));
+  handle("receivables:list", () => svc.list());
+  handle("receivables:get", (id) => svc.getDetail(id));
+  handle("receivables:summary", () => svc.getSummary());
+  handle("receivables:create", (input) => svc.create(input));
+  handle("receivables:apply-payment", (input) => svc.applyPayment(input));
+  handle("receivables:cancel", (id) => svc.cancel(id));
 }
-function nt(e) {
-  const n = {
-    findAll: e.prepare(`
+function createQuotesRepository(db) {
+  const stmts = {
+    findAll: db.prepare(`
       SELECT * FROM quotes
       ORDER BY CASE status WHEN 'draft' THEN 0 WHEN 'sent' THEN 1 WHEN 'accepted' THEN 2 ELSE 3 END,
                created_at DESC
     `),
-    findById: e.prepare("SELECT * FROM quotes WHERE id = ?"),
-    findItems: e.prepare("SELECT * FROM quote_items WHERE quote_id = ? ORDER BY id"),
-    insert: e.prepare(`
+    findById: db.prepare(`SELECT * FROM quotes WHERE id = ?`),
+    findItems: db.prepare(`SELECT * FROM quote_items WHERE quote_id = ? ORDER BY id`),
+    insert: db.prepare(`
       INSERT INTO quotes (customer_id, customer_name, customer_nit, notes, valid_until,
                           subtotal, tax_rate, tax_amount, total, created_by, created_by_name)
       VALUES (@customer_id, @customer_name, @customer_nit, @notes, @valid_until,
               @subtotal, @tax_rate, @tax_amount, @total, @created_by, @created_by_name)
     `),
-    insertItem: e.prepare(`
+    insertItem: db.prepare(`
       INSERT INTO quote_items (quote_id, product_id, product_name, product_code, qty, unit_price, subtotal)
       VALUES (@quote_id, @product_id, @product_name, @product_code, @qty, @unit_price, @subtotal)
     `),
-    deleteItems: e.prepare("DELETE FROM quote_items WHERE quote_id = ?"),
-    updateStatus: e.prepare(`
+    deleteItems: db.prepare(`DELETE FROM quote_items WHERE quote_id = ?`),
+    updateStatus: db.prepare(`
       UPDATE quotes SET status=@status, updated_at=strftime('%Y-%m-%d %H:%M:%S','now','localtime')
       WHERE id=@id
     `),
-    markConverted: e.prepare(`
+    markConverted: db.prepare(`
       UPDATE quotes SET status='converted', sale_id=@sale_id,
         updated_at=strftime('%Y-%m-%d %H:%M:%S','now','localtime')
       WHERE id=@id
     `),
-    update: e.prepare(`
+    update: db.prepare(`
       UPDATE quotes
       SET customer_id=@customer_id, customer_name=@customer_name, customer_nit=@customer_nit,
           notes=@notes, valid_until=@valid_until,
@@ -2477,259 +2584,740 @@ function nt(e) {
           updated_at=strftime('%Y-%m-%d %H:%M:%S','now','localtime')
       WHERE id=@id
     `)
-  }, t = e.transaction((a, s) => {
-    const i = Number(n.insert.run(a).lastInsertRowid);
-    for (const o of s) n.insertItem.run({ ...o, quote_id: i });
-    return i;
-  }), r = e.transaction((a, s, i) => {
-    n.update.run({ ...s, id: a }), n.deleteItems.run(a);
-    for (const o of i) n.insertItem.run({ ...o, quote_id: a });
+  };
+  const createQuote = db.transaction((quoteData, items) => {
+    const id = Number(stmts.insert.run(quoteData).lastInsertRowid);
+    for (const item of items) stmts.insertItem.run({ ...item, quote_id: id });
+    return id;
+  });
+  const updateQuote = db.transaction((id, quoteData, items) => {
+    stmts.update.run({ ...quoteData, id });
+    stmts.deleteItems.run(id);
+    for (const item of items) stmts.insertItem.run({ ...item, quote_id: id });
   });
   return {
     findAll() {
-      return n.findAll.all();
+      return stmts.findAll.all();
     },
-    findById(a) {
-      return n.findById.get(a) ?? null;
+    findById(id) {
+      return stmts.findById.get(id) ?? null;
     },
-    findItems(a) {
-      return n.findItems.all(a);
+    findItems(id) {
+      return stmts.findItems.all(id);
     },
-    createQuote: t,
-    updateQuote: r,
-    updateStatus(a, s) {
-      n.updateStatus.run({ id: a, status: s });
+    createQuote,
+    updateQuote,
+    updateStatus(id, status) {
+      stmts.updateStatus.run({ id, status });
     },
-    markConverted(a, s) {
-      n.markConverted.run({ id: a, sale_id: s });
+    markConverted(id, saleId) {
+      stmts.markConverted.run({ id, sale_id: saleId });
     }
   };
 }
-function rt(e, n, t, r) {
-  function a(o) {
-    const d = (
+function createQuotesService(repo, settings, sales, receivables) {
+  function calcTotals(items) {
+    const taxRate = (
       /** @type {number} */
-      n.get("tax_rate") ?? 0
-    ), c = o.reduce((_, m) => _ + m.qty * m.unit_price, 0), E = Math.round(c * d * 100) / 100;
-    return { subtotal: c, tax_rate: d, tax_amount: E, total: c + E };
+      settings.get("tax_rate") ?? 0
+    );
+    const subtotal = items.reduce((s, i) => s + i.qty * i.unit_price, 0);
+    const taxAmt = Math.round(subtotal * taxRate * 100) / 100;
+    return { subtotal, tax_rate: taxRate, tax_amount: taxAmt, total: subtotal + taxAmt };
   }
-  function s(o) {
-    var d;
-    if (!(o != null && o.length)) throw Object.assign(new Error("Agrega al menos un producto"), { code: "QUOTE_EMPTY" });
-    for (const c of o) {
-      if (!((d = c.productName) != null && d.trim())) throw Object.assign(new Error("Nombre de producto requerido"), { code: "QUOTE_ITEM_NAME" });
-      if (c.qty <= 0) throw Object.assign(new Error("Cantidad debe ser mayor a 0"), { code: "QUOTE_ITEM_QTY" });
-      if (c.unitPrice < 0) throw Object.assign(new Error("Precio no puede ser negativo"), { code: "QUOTE_ITEM_PRICE" });
+  function validateItems(items) {
+    var _a;
+    if (!(items == null ? void 0 : items.length)) throw Object.assign(new Error("Agrega al menos un producto"), { code: "QUOTE_EMPTY" });
+    for (const it of items) {
+      if (!((_a = it.productName) == null ? void 0 : _a.trim())) throw Object.assign(new Error("Nombre de producto requerido"), { code: "QUOTE_ITEM_NAME" });
+      if (it.qty <= 0) throw Object.assign(new Error("Cantidad debe ser mayor a 0"), { code: "QUOTE_ITEM_QTY" });
+      if (it.unitPrice < 0) throw Object.assign(new Error("Precio no puede ser negativo"), { code: "QUOTE_ITEM_PRICE" });
     }
   }
-  function i(o) {
-    return o.map((d) => {
-      var c;
+  function mapItems(rawItems) {
+    return rawItems.map((it) => {
+      var _a;
       return {
-        product_id: d.productId ?? null,
-        product_name: d.productName.trim(),
-        product_code: ((c = d.productCode) == null ? void 0 : c.trim()) || null,
-        qty: d.qty,
-        unit_price: d.unitPrice,
-        subtotal: d.qty * d.unitPrice
+        product_id: it.productId ?? null,
+        product_name: it.productName.trim(),
+        product_code: ((_a = it.productCode) == null ? void 0 : _a.trim()) || null,
+        qty: it.qty,
+        unit_price: it.unitPrice,
+        subtotal: it.qty * it.unitPrice
       };
     });
   }
   return {
     list() {
-      return e.findAll();
+      return repo.findAll();
     },
-    getDetail(o) {
-      const d = e.findById(o);
-      if (!d) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
-      return { quote: d, items: e.findItems(o) };
+    getDetail(id) {
+      const quote = repo.findById(id);
+      if (!quote) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
+      return { quote, items: repo.findItems(id) };
     },
     /**
      * @param {{ customerId?: number, customerName: string, customerNit?: string, notes?: string, validUntil?: string, items: any[], userId: number, userName: string }} input
      */
-    create(o) {
-      var T, p, O;
-      if (!((T = o.customerName) != null && T.trim())) throw Object.assign(new Error("Nombre del cliente requerido"), { code: "QUOTE_MISSING_CUSTOMER" });
-      s(o.items);
-      const d = i(o.items), { subtotal: c, tax_rate: E, tax_amount: _, total: m } = a(d), N = e.createQuote({
-        customer_id: o.customerId ?? null,
-        customer_name: o.customerName.trim(),
-        customer_nit: ((p = o.customerNit) == null ? void 0 : p.trim()) || null,
-        notes: ((O = o.notes) == null ? void 0 : O.trim()) || null,
-        valid_until: o.validUntil || null,
-        subtotal: c,
-        tax_rate: E,
-        tax_amount: _,
-        total: m,
-        created_by: o.userId,
-        created_by_name: o.userName
-      }, d);
-      return e.findById(N);
+    create(input) {
+      var _a, _b, _c;
+      if (!((_a = input.customerName) == null ? void 0 : _a.trim())) throw Object.assign(new Error("Nombre del cliente requerido"), { code: "QUOTE_MISSING_CUSTOMER" });
+      validateItems(input.items);
+      const items = mapItems(input.items);
+      const { subtotal, tax_rate, tax_amount, total } = calcTotals(items);
+      const id = repo.createQuote({
+        customer_id: input.customerId ?? null,
+        customer_name: input.customerName.trim(),
+        customer_nit: ((_b = input.customerNit) == null ? void 0 : _b.trim()) || null,
+        notes: ((_c = input.notes) == null ? void 0 : _c.trim()) || null,
+        valid_until: input.validUntil || null,
+        subtotal,
+        tax_rate,
+        tax_amount,
+        total,
+        created_by: input.userId,
+        created_by_name: input.userName
+      }, items);
+      return repo.findById(id);
     },
     /**
      * @param {number} id
      * @param {{ customerId?: number, customerName: string, customerNit?: string, notes?: string, validUntil?: string, items: any[] }} input
      */
-    update(o, d) {
-      var p, O;
-      const c = e.findById(o);
-      if (!c) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
-      if (!["draft", "sent"].includes(c.status))
+    update(id, input) {
+      var _a, _b;
+      const quote = repo.findById(id);
+      if (!quote) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
+      if (!["draft", "sent"].includes(quote.status)) {
         throw Object.assign(new Error("Solo se pueden editar cotizaciones en borrador o enviadas"), { code: "QUOTE_NOT_EDITABLE" });
-      s(d.items);
-      const E = i(d.items), { subtotal: _, tax_rate: m, tax_amount: N, total: T } = a(E);
-      return e.updateQuote(o, {
-        customer_id: d.customerId ?? c.customer_id,
-        customer_name: (d.customerName ?? c.customer_name).trim(),
-        customer_nit: ((p = d.customerNit) == null ? void 0 : p.trim()) || c.customer_nit,
-        notes: ((O = d.notes) == null ? void 0 : O.trim()) || null,
-        valid_until: d.validUntil || null,
-        subtotal: _,
-        tax_rate: m,
-        tax_amount: N,
-        total: T
-      }, E), e.findById(o);
+      }
+      validateItems(input.items);
+      const items = mapItems(input.items);
+      const { subtotal, tax_rate, tax_amount, total } = calcTotals(items);
+      repo.updateQuote(id, {
+        customer_id: input.customerId ?? quote.customer_id,
+        customer_name: (input.customerName ?? quote.customer_name).trim(),
+        customer_nit: ((_a = input.customerNit) == null ? void 0 : _a.trim()) || quote.customer_nit,
+        notes: ((_b = input.notes) == null ? void 0 : _b.trim()) || null,
+        valid_until: input.validUntil || null,
+        subtotal,
+        tax_rate,
+        tax_amount,
+        total
+      }, items);
+      return repo.findById(id);
     },
-    markSent(o) {
-      const d = e.findById(o);
-      if (!d) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
-      if (d.status !== "draft") throw Object.assign(new Error("Solo se pueden enviar cotizaciones en borrador"), { code: "QUOTE_INVALID_STATUS" });
-      return e.updateStatus(o, "sent"), e.findById(o);
+    markSent(id) {
+      const quote = repo.findById(id);
+      if (!quote) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
+      if (quote.status !== "draft") throw Object.assign(new Error("Solo se pueden enviar cotizaciones en borrador"), { code: "QUOTE_INVALID_STATUS" });
+      repo.updateStatus(id, "sent");
+      return repo.findById(id);
     },
-    accept(o) {
-      const d = e.findById(o);
-      if (!d) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
-      if (!["draft", "sent"].includes(d.status)) throw Object.assign(new Error("Estado inválido para aceptar"), { code: "QUOTE_INVALID_STATUS" });
-      return e.updateStatus(o, "accepted"), e.findById(o);
+    accept(id) {
+      const quote = repo.findById(id);
+      if (!quote) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
+      if (!["draft", "sent"].includes(quote.status)) throw Object.assign(new Error("Estado inválido para aceptar"), { code: "QUOTE_INVALID_STATUS" });
+      repo.updateStatus(id, "accepted");
+      return repo.findById(id);
     },
-    reject(o) {
-      const d = e.findById(o);
-      if (!d) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
-      if (["converted", "cancelled"].includes(d.status)) throw Object.assign(new Error("No se puede rechazar esta cotización"), { code: "QUOTE_INVALID_STATUS" });
-      return e.updateStatus(o, "rejected"), e.findById(o);
+    reject(id) {
+      const quote = repo.findById(id);
+      if (!quote) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
+      if (["converted", "cancelled"].includes(quote.status)) throw Object.assign(new Error("No se puede rechazar esta cotización"), { code: "QUOTE_INVALID_STATUS" });
+      repo.updateStatus(id, "rejected");
+      return repo.findById(id);
     },
     /**
      * Convierte la cotización aceptada en una venta real.
      * @param {{ id: number, userId: number, userName: string }} input
      */
-    convertToSale(o) {
-      const d = e.findById(o.id);
-      if (!d) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
-      if (!["accepted", "sent", "draft"].includes(d.status))
+    convertToSale(input) {
+      const quote = repo.findById(input.id);
+      if (!quote) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
+      if (!["accepted", "sent", "draft"].includes(quote.status)) {
         throw Object.assign(new Error("Solo se pueden convertir cotizaciones activas"), { code: "QUOTE_INVALID_STATUS" });
-      const c = e.findItems(o.id);
-      if (!c.length) throw Object.assign(new Error("La cotización no tiene productos"), { code: "QUOTE_EMPTY" });
-      const E = c.filter((m) => m.product_id != null);
-      if (!E.length)
+      }
+      const items = repo.findItems(input.id);
+      if (!items.length) throw Object.assign(new Error("La cotización no tiene productos"), { code: "QUOTE_EMPTY" });
+      const itemsWithProduct = items.filter((it) => it.product_id != null);
+      if (!itemsWithProduct.length) {
         throw Object.assign(new Error("Para convertir a venta todos los items deben tener un producto del sistema"), { code: "QUOTE_NO_PRODUCTS" });
-      const _ = t.create({
-        items: E.map((m) => ({
-          id: m.product_id,
-          qty: m.qty,
-          price: m.unit_price
+      }
+      const saleResult = sales.create({
+        items: itemsWithProduct.map((it) => ({
+          id: it.product_id,
+          qty: it.qty,
+          price: it.unit_price
         })),
-        customerId: d.customer_id ?? void 0
+        customerId: quote.customer_id ?? void 0
       });
-      return e.markConverted(o.id, _.saleId), { quote: e.findById(o.id), sale: _ };
+      repo.markConverted(input.id, saleResult.saleId);
+      return { quote: repo.findById(input.id), sale: saleResult };
     },
     /**
      * Crea una cuenta por cobrar desde una cotización aceptada.
      * @param {{ id: number, dueDate?: string, notes?: string, userId: number, userName: string }} input
      */
-    convertToReceivable(o) {
-      const d = e.findById(o.id);
-      if (!d) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
-      if (!["accepted", "sent", "draft"].includes(d.status))
+    convertToReceivable(input) {
+      const quote = repo.findById(input.id);
+      if (!quote) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
+      if (!["accepted", "sent", "draft"].includes(quote.status)) {
         throw Object.assign(new Error("Solo se pueden convertir cotizaciones activas"), { code: "QUOTE_INVALID_STATUS" });
-      const c = r.create({
-        customerId: d.customer_id ?? void 0,
-        customerName: d.customer_name,
-        customerNit: d.customer_nit ?? void 0,
-        description: `Cotización #${d.id}${d.notes ? ` · ${d.notes}` : ""}`,
-        amount: d.total,
-        dueDate: o.dueDate || void 0,
-        notes: o.notes || void 0,
-        userId: o.userId,
-        userName: o.userName
+      }
+      const receivable = receivables.create({
+        customerId: quote.customer_id ?? void 0,
+        customerName: quote.customer_name,
+        customerNit: quote.customer_nit ?? void 0,
+        description: `Cotización #${quote.id}${quote.notes ? ` · ${quote.notes}` : ""}`,
+        amount: quote.total,
+        dueDate: input.dueDate || void 0,
+        notes: input.notes || void 0,
+        userId: input.userId,
+        userName: input.userName
       });
-      return e.updateStatus(o.id, "converted"), { quote: e.findById(o.id), receivable: c };
+      repo.updateStatus(input.id, "converted");
+      return { quote: repo.findById(input.id), receivable };
     }
   };
 }
-function at(e) {
-  function n(t, r) {
-    l.handle(t, async (a, ...s) => {
+function registerQuotesIpc(svc) {
+  function handle(channel, fn) {
+    ipcMain.handle(channel, async (_e, ...args) => {
       try {
-        return { ok: !0, data: await r(...s) };
-      } catch (i) {
-        return { ok: !1, error: { code: i.code ?? "QUOTE_ERROR", message: i.message } };
+        const data = await fn(...args);
+        return { ok: true, data };
+      } catch (err) {
+        return { ok: false, error: { code: err.code ?? "QUOTE_ERROR", message: err.message } };
       }
     });
   }
-  n("quotes:list", () => e.list()), n("quotes:get", (t) => e.getDetail(t)), n("quotes:create", (t) => e.create(t)), n("quotes:update", (t, r) => e.update(t, r)), n("quotes:mark-sent", (t) => e.markSent(t)), n("quotes:accept", (t) => e.accept(t)), n("quotes:reject", (t) => e.reject(t)), n("quotes:convert", (t) => e.convertToSale(t)), n("quotes:convert-receivable", (t) => e.convertToReceivable(t));
+  handle("quotes:list", () => svc.list());
+  handle("quotes:get", (id) => svc.getDetail(id));
+  handle("quotes:create", (input) => svc.create(input));
+  handle("quotes:update", (id, input) => svc.update(id, input));
+  handle("quotes:mark-sent", (id) => svc.markSent(id));
+  handle("quotes:accept", (id) => svc.accept(id));
+  handle("quotes:reject", (id) => svc.reject(id));
+  handle("quotes:convert", (input) => svc.convertToSale(input));
+  handle("quotes:convert-receivable", (input) => svc.convertToReceivable(input));
 }
-const st = /* @__PURE__ */ Object.assign({
-  "../database/migrations/001_init.sql": te,
-  "../database/migrations/002_settings.sql": ne,
-  "../database/migrations/003_sales_tax_snapshot.sql": re,
-  "../database/migrations/004_customers.sql": ae,
-  "../database/migrations/005_products_extended.sql": se,
-  "../database/migrations/006_users.sql": oe,
-  "../database/migrations/007_settings_extended.sql": ie,
-  "../database/migrations/008_settings_theme.sql": de,
-  "../database/migrations/009_sales_payment.sql": ce,
-  "../database/migrations/010_sales_void_audit.sql": le,
-  "../database/migrations/011_users_avatar.sql": ue,
-  "../database/migrations/012_cash_sessions.sql": Ee,
-  "../database/migrations/013_purchases.sql": me,
-  "../database/migrations/014_receivables.sql": _e,
-  "../database/migrations/015_quotes.sql": Te
+function createExpensesRepository(db) {
+  const stmts = {
+    findAll: db.prepare(`
+      SELECT * FROM expenses ORDER BY expense_date DESC, created_at DESC
+    `),
+    findByRange: db.prepare(`
+      SELECT * FROM expenses
+      WHERE expense_date >= @from AND expense_date <= @to
+      ORDER BY expense_date DESC, created_at DESC
+    `),
+    findById: db.prepare(`SELECT * FROM expenses WHERE id = ?`),
+    insert: db.prepare(`
+      INSERT INTO expenses
+        (category, description, amount, payment_method, expense_date, notes, created_by, created_by_name)
+      VALUES
+        (@category, @description, @amount, @payment_method, @expense_date, @notes, @created_by, @created_by_name)
+    `),
+    update: db.prepare(`
+      UPDATE expenses
+      SET category=@category, description=@description, amount=@amount,
+          payment_method=@payment_method, expense_date=@expense_date, notes=@notes
+      WHERE id=@id
+    `),
+    remove: db.prepare(`DELETE FROM expenses WHERE id = ?`),
+    summary: db.prepare(`
+      SELECT
+        COALESCE(SUM(amount),0)                                             AS total,
+        COALESCE(SUM(CASE WHEN expense_date = strftime('%Y-%m-%d','now','localtime') THEN amount ELSE 0 END),0) AS today,
+        COUNT(*)                                                            AS count
+      FROM expenses
+      WHERE expense_date >= @from AND expense_date <= @to
+    `),
+    byCategory: db.prepare(`
+      SELECT category, COALESCE(SUM(amount),0) AS total, COUNT(*) AS count
+      FROM expenses
+      WHERE expense_date >= @from AND expense_date <= @to
+      GROUP BY category ORDER BY total DESC
+    `)
+  };
+  return {
+    findAll() {
+      return stmts.findAll.all();
+    },
+    findByRange(from, to) {
+      return stmts.findByRange.all({ from, to });
+    },
+    findById(id) {
+      return stmts.findById.get(id) ?? null;
+    },
+    create(data) {
+      return Number(stmts.insert.run(data).lastInsertRowid);
+    },
+    update(id, data) {
+      stmts.update.run({ ...data, id });
+    },
+    remove(id) {
+      stmts.remove.run(id);
+    },
+    getSummary(from, to) {
+      return stmts.summary.get({ from, to });
+    },
+    getByCategory(from, to) {
+      return stmts.byCategory.all({ from, to });
+    }
+  };
+}
+const VALID_CATEGORIES = [
+  "renta",
+  "servicios",
+  "sueldos",
+  "insumos",
+  "transporte",
+  "mantenimiento",
+  "publicidad",
+  "impuestos",
+  "otros"
+];
+const VALID_METHODS = ["cash", "transfer", "card", "check"];
+function createExpensesService(repo) {
+  function validate(input) {
+    var _a;
+    if (!((_a = input.description) == null ? void 0 : _a.trim())) {
+      throw Object.assign(new Error("La descripción es requerida"), { code: "EXP_INVALID" });
+    }
+    if (!Number.isFinite(input.amount) || input.amount <= 0) {
+      throw Object.assign(new Error("El monto debe ser mayor a 0"), { code: "EXP_INVALID" });
+    }
+  }
+  function today() {
+    return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+  }
+  return {
+    list(opts = {}) {
+      if (opts.from && opts.to) return repo.findByRange(opts.from, opts.to);
+      return repo.findAll();
+    },
+    getById(id) {
+      const row = repo.findById(id);
+      if (!row) throw Object.assign(new Error(`Gasto ${id} no encontrado`), { code: "EXP_NOT_FOUND" });
+      return row;
+    },
+    create(input) {
+      var _a;
+      validate(input);
+      const id = repo.create({
+        category: VALID_CATEGORIES.includes(input.category) ? input.category : "otros",
+        description: input.description.trim(),
+        amount: input.amount,
+        payment_method: VALID_METHODS.includes(input.payment_method) ? input.payment_method : "cash",
+        expense_date: input.expense_date || today(),
+        notes: ((_a = input.notes) == null ? void 0 : _a.trim()) || null,
+        created_by: input.created_by ?? null,
+        created_by_name: input.created_by_name ?? null
+      });
+      return repo.findById(id);
+    },
+    update(id, input) {
+      var _a;
+      validate(input);
+      const existing = repo.findById(id);
+      if (!existing) throw Object.assign(new Error(`Gasto ${id} no encontrado`), { code: "EXP_NOT_FOUND" });
+      repo.update(id, {
+        category: VALID_CATEGORIES.includes(input.category) ? input.category : "otros",
+        description: input.description.trim(),
+        amount: input.amount,
+        payment_method: VALID_METHODS.includes(input.payment_method) ? input.payment_method : "cash",
+        expense_date: input.expense_date || existing.expense_date,
+        notes: ((_a = input.notes) == null ? void 0 : _a.trim()) || null
+      });
+      return repo.findById(id);
+    },
+    remove(id) {
+      const existing = repo.findById(id);
+      if (!existing) throw Object.assign(new Error(`Gasto ${id} no encontrado`), { code: "EXP_NOT_FOUND" });
+      repo.remove(id);
+      return true;
+    },
+    summary(from, to) {
+      const f = from || today();
+      const t = to || today();
+      return {
+        ...repo.getSummary(f, t),
+        byCategory: repo.getByCategory(f, t)
+      };
+    },
+    categories: () => VALID_CATEGORIES
+  };
+}
+function registerExpensesIpc(svc) {
+  function handle(channel, fn) {
+    ipcMain.handle(channel, async (_e, ...args) => {
+      try {
+        return { ok: true, data: await fn(...args) };
+      } catch (err) {
+        return { ok: false, error: { code: err.code ?? "EXP_ERROR", message: err.message } };
+      }
+    });
+  }
+  handle("expenses:list", (opts) => svc.list(opts));
+  handle("expenses:get", (id) => svc.getById(id));
+  handle("expenses:create", (input) => svc.create(input));
+  handle("expenses:update", (id, input) => svc.update(id, input));
+  handle("expenses:remove", (id) => svc.remove(id));
+  handle("expenses:summary", (from, to) => svc.summary(from, to));
+  handle("expenses:categories", () => svc.categories());
+}
+function createReturnsRepository(db) {
+  const stmts = {
+    findAll: db.prepare(`SELECT * FROM returns ORDER BY created_at DESC`),
+    findBySale: db.prepare(`SELECT * FROM returns WHERE sale_id = ? ORDER BY created_at DESC`),
+    findById: db.prepare(`SELECT * FROM returns WHERE id = ?`),
+    findItems: db.prepare(`SELECT * FROM return_items WHERE return_id = ?`),
+    insertReturn: db.prepare(`
+      INSERT INTO returns (sale_id, reason, notes, total_refund, created_by, created_by_name)
+      VALUES (@sale_id, @reason, @notes, @total_refund, @created_by, @created_by_name)
+    `),
+    insertItem: db.prepare(`
+      INSERT INTO return_items (return_id, sale_item_id, product_id, product_name, qty_returned, unit_price, subtotal)
+      VALUES (@return_id, @sale_item_id, @product_id, @product_name, @qty_returned, @unit_price, @subtotal)
+    `),
+    restoreStock: db.prepare(`UPDATE products SET stock = stock + ? WHERE id = ?`)
+  };
+  const createReturn = db.transaction((header, items) => {
+    const returnId = Number(stmts.insertReturn.run(header).lastInsertRowid);
+    for (const it of items) {
+      stmts.insertItem.run({ ...it, return_id: returnId });
+      stmts.restoreStock.run(it.qty_returned, it.product_id);
+    }
+    return returnId;
+  });
+  return {
+    findAll() {
+      return stmts.findAll.all();
+    },
+    findBySale(sid) {
+      return stmts.findBySale.all(sid);
+    },
+    findById(id) {
+      return stmts.findById.get(id) ?? null;
+    },
+    findItems(id) {
+      return stmts.findItems.all(id);
+    },
+    createReturn
+  };
+}
+function createReturnsService(repo, salesRepo) {
+  return {
+    list() {
+      return repo.findAll();
+    },
+    listBySale(saleId) {
+      const rows = repo.findBySale(saleId);
+      return rows.map((r) => ({ ...r, items: repo.findItems(r.id) }));
+    },
+    getById(id) {
+      const row = repo.findById(id);
+      if (!row) throw Object.assign(new Error(`Devolución ${id} no encontrada`), { code: "RET_NOT_FOUND" });
+      return { ...row, items: repo.findItems(id) };
+    },
+    /**
+     * @param {{
+     *   saleId: number,
+     *   reason: string,
+     *   notes?: string,
+     *   items: Array<{ saleItemId: number, productId: number, productName: string, qtyReturned: number, unitPrice: number }>,
+     *   createdBy?: number,
+     *   createdByName?: string,
+     * }} input
+     */
+    create(input) {
+      var _a, _b;
+      if (!((_a = input.reason) == null ? void 0 : _a.trim()) || input.reason.trim().length < 3) {
+        throw Object.assign(new Error("El motivo debe tener al menos 3 caracteres"), { code: "RET_INVALID" });
+      }
+      if (!Array.isArray(input.items) || input.items.length === 0) {
+        throw Object.assign(new Error("Selecciona al menos un producto a devolver"), { code: "RET_INVALID" });
+      }
+      for (const it of input.items) {
+        if (!it.qtyReturned || it.qtyReturned <= 0) {
+          throw Object.assign(new Error(`Cantidad inválida para ${it.productName}`), { code: "RET_INVALID" });
+        }
+      }
+      const sale = salesRepo.findSaleById(input.saleId);
+      if (!sale) throw Object.assign(new Error(`Venta ${input.saleId} no encontrada`), { code: "RET_INVALID" });
+      if (sale.status === "voided") throw Object.assign(new Error("No se puede devolver una venta anulada"), { code: "RET_INVALID" });
+      const mappedItems = input.items.map((it) => ({
+        sale_item_id: it.saleItemId,
+        product_id: it.productId,
+        product_name: it.productName,
+        qty_returned: it.qtyReturned,
+        unit_price: it.unitPrice,
+        subtotal: Math.round(it.qtyReturned * it.unitPrice * 100) / 100
+      }));
+      const totalRefund = mappedItems.reduce((s, it) => s + it.subtotal, 0);
+      const returnId = repo.createReturn({
+        sale_id: input.saleId,
+        reason: input.reason.trim(),
+        notes: ((_b = input.notes) == null ? void 0 : _b.trim()) || null,
+        total_refund: Math.round(totalRefund * 100) / 100,
+        created_by: input.createdBy ?? null,
+        created_by_name: input.createdByName ?? null
+      }, mappedItems);
+      return repo.findById(returnId);
+    }
+  };
+}
+function registerReturnsIpc(svc) {
+  function handle(channel, fn) {
+    ipcMain.handle(channel, async (_e, ...args) => {
+      try {
+        return { ok: true, data: await fn(...args) };
+      } catch (err) {
+        return { ok: false, error: { code: err.code ?? "RET_ERROR", message: err.message } };
+      }
+    });
+  }
+  handle("returns:list", () => svc.list());
+  handle("returns:list-by-sale", (saleId) => svc.listBySale(saleId));
+  handle("returns:get", (id) => svc.getById(id));
+  handle("returns:create", (input) => svc.create(input));
+}
+function createInventoryRepository(db) {
+  const stmts = {
+    findMovements: db.prepare(`
+      SELECT * FROM stock_movements
+      WHERE (@product_id IS NULL OR product_id = @product_id)
+      ORDER BY created_at DESC
+      LIMIT @limit OFFSET @offset
+    `),
+    countMovements: db.prepare(`
+      SELECT COUNT(*) AS total FROM stock_movements
+      WHERE (@product_id IS NULL OR product_id = @product_id)
+    `),
+    insertMovement: db.prepare(`
+      INSERT INTO stock_movements
+        (product_id, product_name, type, qty, qty_before, qty_after, reference_type, reference_id, notes, created_by, created_by_name)
+      VALUES
+        (@product_id, @product_name, @type, @qty, @qty_before, @qty_after, @reference_type, @reference_id, @notes, @created_by, @created_by_name)
+    `),
+    getProductStock: db.prepare(`SELECT id, code, name, stock, min_stock, category, is_active FROM products WHERE is_active = 1 ORDER BY name ASC`),
+    getProductById: db.prepare(`SELECT id, code, name, stock FROM products WHERE id = ?`),
+    adjustStock: db.prepare(`UPDATE products SET stock = stock + ? WHERE id = ?`)
+  };
+  const logAdjustment = db.transaction((productId, delta, movement) => {
+    const product = stmts.getProductById.get(productId);
+    if (!product) throw Object.assign(new Error(`Producto ${productId} no encontrado`), { code: "INV_NOT_FOUND" });
+    const qtyBefore = product.stock;
+    stmts.adjustStock.run(delta, productId);
+    const qtyAfter = qtyBefore + delta;
+    stmts.insertMovement.run({
+      ...movement,
+      product_id: productId,
+      product_name: product.name,
+      qty: Math.abs(delta),
+      qty_before: qtyBefore,
+      qty_after: qtyAfter
+    });
+    return { qtyBefore, qtyAfter, productName: product.name };
+  });
+  return {
+    getStock() {
+      return stmts.getProductStock.all();
+    },
+    findMovements({ productId = null, limit = 50, offset = 0 } = {}) {
+      return stmts.findMovements.all({ product_id: productId, limit, offset });
+    },
+    countMovements(productId = null) {
+      return stmts.countMovements.get({ product_id: productId }).total;
+    },
+    logAdjustment
+  };
+}
+function createInventoryService(repo) {
+  return {
+    getStock() {
+      return repo.getStock();
+    },
+    getMovements({ productId, page = 1, pageSize = 50 } = {}) {
+      const limit = Math.min(pageSize, 200);
+      const offset = (page - 1) * limit;
+      return {
+        data: repo.findMovements({ productId, limit, offset }),
+        total: repo.countMovements(productId ?? null),
+        page,
+        pageSize: limit
+      };
+    },
+    /**
+     * Ajuste manual de stock con registro en kardex.
+     * @param {{ productId: number, type: 'in'|'out'|'adjustment', qty: number, notes?: string, createdBy?: number, createdByName?: string }} input
+     */
+    adjust(input) {
+      const { productId, type, qty, notes, createdBy, createdByName } = input;
+      if (!Number.isInteger(productId) || productId <= 0) {
+        throw Object.assign(new Error("Producto inválido"), { code: "INV_INVALID" });
+      }
+      if (!["in", "out", "adjustment"].includes(type)) {
+        throw Object.assign(new Error("Tipo de movimiento inválido"), { code: "INV_INVALID" });
+      }
+      if (!Number.isFinite(qty) || qty <= 0) {
+        throw Object.assign(new Error("La cantidad debe ser mayor a 0"), { code: "INV_INVALID" });
+      }
+      const delta = type === "out" ? -qty : qty;
+      return repo.logAdjustment(productId, delta, {
+        type,
+        reference_type: "manual",
+        reference_id: null,
+        notes: (notes == null ? void 0 : notes.trim()) || null,
+        created_by: createdBy ?? null,
+        created_by_name: createdByName ?? null
+      });
+    }
+  };
+}
+function registerInventoryIpc(svc) {
+  function handle(channel, fn) {
+    ipcMain.handle(channel, async (_e, ...args) => {
+      try {
+        return { ok: true, data: await fn(...args) };
+      } catch (err) {
+        return { ok: false, error: { code: err.code ?? "INV_ERROR", message: err.message } };
+      }
+    });
+  }
+  handle("inventory:stock", () => svc.getStock());
+  handle("inventory:movements", (opts) => svc.getMovements(opts));
+  handle("inventory:adjust", (input) => svc.adjust(input));
+}
+const migrationModules = /* @__PURE__ */ Object.assign({
+  "../database/migrations/001_init.sql": __vite_glob_0_0,
+  "../database/migrations/002_settings.sql": __vite_glob_0_1,
+  "../database/migrations/003_sales_tax_snapshot.sql": __vite_glob_0_2,
+  "../database/migrations/004_customers.sql": __vite_glob_0_3,
+  "../database/migrations/005_products_extended.sql": __vite_glob_0_4,
+  "../database/migrations/006_users.sql": __vite_glob_0_5,
+  "../database/migrations/007_settings_extended.sql": __vite_glob_0_6,
+  "../database/migrations/008_settings_theme.sql": __vite_glob_0_7,
+  "../database/migrations/009_sales_payment.sql": __vite_glob_0_8,
+  "../database/migrations/010_sales_void_audit.sql": __vite_glob_0_9,
+  "../database/migrations/011_users_avatar.sql": __vite_glob_0_10,
+  "../database/migrations/012_cash_sessions.sql": __vite_glob_0_11,
+  "../database/migrations/013_purchases.sql": __vite_glob_0_12,
+  "../database/migrations/014_receivables.sql": __vite_glob_0_13,
+  "../database/migrations/015_quotes.sql": __vite_glob_0_14,
+  "../database/migrations/016_sales_discount.sql": __vite_glob_0_15,
+  "../database/migrations/017_expenses.sql": __vite_glob_0_16,
+  "../database/migrations/018_returns.sql": __vite_glob_0_17,
+  "../database/migrations/019_stock_movements.sql": __vite_glob_0_18
 });
-function ot() {
-  return Object.entries(st).map(([e, n]) => ({
-    name: e.split("/").pop(),
-    sql: n
+function loadMigrations() {
+  return Object.entries(migrationModules).map(([path2, sql]) => ({
+    name: path2.split("/").pop(),
+    sql
   }));
 }
-function it() {
-  const e = pe(), n = Ie(e, ot());
-  console.log("[migrator] applied:", n.applied, "skipped:", n.skipped);
-  const t = Se(e), r = fe(t);
-  r.init();
-  const a = ge(e), s = ye(a), i = Ue(e), o = be(i), d = xe(e), c = Ve(d), E = we(e), _ = Pe(E, r, o, c), m = Xe(e), N = je(m), T = We(e), p = $e(T), O = Qe(e), L = ze(O), x = Je(e), w = et(x), V = nt(e), G = rt(V, r, _, w);
-  Le(r), he(s), De(o), He(_), Ye(N), Ge(c), Ke(p), Ze(L), tt(w), at(G);
-  const W = z.join(S.getPath("userData"), "taller_pos.sqlite");
-  l.handle("db:backup", async () => {
+function bootstrap() {
+  const db = getDb();
+  const result = runMigrations(db, loadMigrations());
+  console.log(...oo_oo(`1712162842_86_2_86_80_4`, "[migrator] applied:", result.applied, "skipped:", result.skipped));
+  const settingsRepo = createSettingsRepository(db);
+  const settings = createSettingsService(settingsRepo);
+  settings.init();
+  const productsRepo = createProductsRepository(db);
+  const products = createProductsService(productsRepo);
+  const customersRepo = createCustomersRepository(db);
+  const customers = createCustomersService(customersRepo);
+  const auditRepo = createAuditRepository(db);
+  const audit = createAuditService(auditRepo);
+  const salesRepo = createSalesRepository(db);
+  const sales = createSalesService(salesRepo, settings, customers, audit);
+  const usersRepo = createUsersRepository(db);
+  const users = createUsersService(usersRepo);
+  const cashRepo = createCashRepository(db);
+  const cash = createCashService(cashRepo);
+  const purchasesRepo = createPurchasesRepository(db);
+  const purchases = createPurchasesService(purchasesRepo);
+  const receivablesRepo = createReceivablesRepository(db);
+  const receivables = createReceivablesService(receivablesRepo);
+  const quotesRepo = createQuotesRepository(db);
+  const quotes = createQuotesService(quotesRepo, settings, sales, receivables);
+  const expensesRepo = createExpensesRepository(db);
+  const expenses = createExpensesService(expensesRepo);
+  const returnsRepo = createReturnsRepository(db);
+  const returns_ = createReturnsService(returnsRepo, salesRepo);
+  const inventoryRepo = createInventoryRepository(db);
+  const inventory = createInventoryService(inventoryRepo);
+  registerSettingsIpc(settings);
+  registerProductsIpc(products);
+  registerCustomersIpc(customers);
+  registerSalesIpc(sales);
+  registerUsersIpc(users);
+  registerAuditIpc(audit);
+  registerCashIpc(cash);
+  registerPurchasesIpc(purchases);
+  registerReceivablesIpc(receivables);
+  registerQuotesIpc(quotes);
+  registerExpensesIpc(expenses);
+  registerReturnsIpc(returns_);
+  registerInventoryIpc(inventory);
+  const dbPath = path$1.join(app.getPath("userData"), "taller_pos.sqlite");
+  ipcMain.handle("db:backup", async () => {
     try {
-      const { filePath: A, canceled: $ } = await K.showSaveDialog({
+      const { filePath, canceled } = await dialog.showSaveDialog({
         title: "Guardar respaldo de base de datos",
         defaultPath: `backup_${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.sqlite`,
         filters: [{ name: "SQLite", extensions: ["sqlite"] }]
       });
-      return $ || !A ? { ok: !0, data: null } : (e.backup(A), { ok: !0, data: A });
-    } catch (A) {
-      return { ok: !1, error: { code: "BACKUP_ERROR", message: A.message } };
+      if (canceled || !filePath) return { ok: true, data: null };
+      db.backup(filePath);
+      return { ok: true, data: filePath };
+    } catch (err) {
+      return { ok: false, error: { code: "BACKUP_ERROR", message: err.message } };
     }
-  }), l.handle("db:get-path", () => ({ ok: !0, data: W }));
+  });
+  ipcMain.handle("db:get-path", () => ({ ok: true, data: dbPath }));
 }
-let h = null;
-function k() {
-  h = new X({
+function oo_cm() {
+  try {
+    return (0, eval)("globalThis._console_ninja") || (0, eval)(`/* https://github.com/wallabyjs/console-ninja#how-does-it-work */'use strict';function _0x4187(_0x52e140,_0x15844d){var _0x1edd14=_0x1edd();return _0x4187=function(_0x418736,_0x252226){_0x418736=_0x418736-0x1dc;var _0x1c174c=_0x1edd14[_0x418736];return _0x1c174c;},_0x4187(_0x52e140,_0x15844d);}var _0x3890c8=_0x4187;function _0x1edd(){var _0xd02a82=['background:\\x20rgb(30,30,30);\\x20color:\\x20rgb(255,213,92)','_connectToHostNow','NEGATIVE_INFINITY',{"resolveGetters":false,"defaultLimits":{"props":100,"elements":100,"strLength":51200,"totalStrLength":51200,"autoExpandLimit":5000,"autoExpandMaxDepth":10},"reducedLimits":{"props":5,"elements":5,"strLength":256,"totalStrLength":768,"autoExpandLimit":30,"autoExpandMaxDepth":2},"reducePolicy":{"perLogpoint":{"reduceOnCount":50,"reduceOnAccumulatedProcessingTimeMs":100,"resetWhenQuietMs":500,"resetOnProcessingTimeAverageMs":100},"global":{"reduceOnCount":1000,"reduceOnAccumulatedProcessingTimeMs":300,"resetWhenQuietMs":50,"resetOnProcessingTimeAverageMs":100}}},'_getOwnPropertyDescriptor','warn','_p_length','_regExpToString','38gkPcrc',',\\x20see\\x20https://tinyurl.com/2vt8jxzw\\x20for\\x20more\\x20info.','funcName','_isSet','hasOwnProperty','unshift','[object\\x20Array]','_maxConnectAttemptCount','ws://','autoExpandMaxDepth','default','stackTraceLimit','\\x20server','_addProperty','origin','reducedLimits','resolveGetters','disabledLog','cappedElements','indexOf','reload','Set','Symbol','_isArray','stack','port','function','resetOnProcessingTimeAverageMs','slice','onerror','_connectAttemptCount','emulator','reducePolicy','_processTreeNodeResult','count','_setNodeExpressionPath','HTMLAllCollection','String','strLength','_WebSocketClass','_addLoadNode','expo','ninjaSuppressConsole','_isUndefined','_connected','_keyStrRegExp','next.js','Number','9jOUldT','_isNegativeZero','_p_name','_ws','substr','import(\\x27url\\x27)','_consoleNinjaAllowedToStart','date','parse','_treeNodePropertiesBeforeFullValue','_setNodeLabel','_blacklistedProperty','Buffer','33763','20667vPUjDv','time','Promise','set','2035290pGkmlm','','logger\\x20failed\\x20to\\x20connect\\x20to\\x20host,\\x20see\\x20','angular','negativeInfinity','test','resolve','WebSocket','array','parent','bind','host','resetWhenQuietMs','failed\\x20to\\x20connect\\x20to\\x20host:\\x20','process','bigint','136cjwhMD','toString','object','readyState','_inBrowser','send','_attemptToReconnectShortly','_HTMLAllCollection','hostname','_allowedToSend','edge','name','stringify','_setNodeId','elapsed','constructor','182420mjmqKf','_numberRegExp',"/home/henry-tercero/.vscode/extensions/wallabyjs.console-ninja-1.0.525/node_modules",'type','prototype','astro','pop','expressionsToEvaluate','osName','reduceOnAccumulatedProcessingTimeMs','env','Map','_sendErrorMessage','RegExp','node','[object\\x20Date]','_sortProps','_console_ninja','autoExpandLimit','path','8098092eUysyP','_disposeWebsocket','_isPrimitiveWrapperType','autoExpandPropertyCount','return\\x20import(url.pathToFileURL(path.join(nodeModules,\\x20\\x27ws/index.js\\x27)).toString());','perLogpoint','map','_extendedWarning','android','join','rootExpression','_type','_capIfString','nan','_socket','root_exp_id','concat','_console_ninja_session','error','trace','_objectToString','isArray','_ninjaIgnoreNextError','onmessage','fromCharCode','\\x20browser','getWebSocketClass','catch','unknown','versions','_dateToString','_cleanNode','1.0.0','react-native','Console\\x20Ninja\\x20failed\\x20to\\x20send\\x20logs,\\x20refreshing\\x20the\\x20page\\x20may\\x20help;\\x20also\\x20see\\x20','isExpressionToEvaluate','now','then','serialize','toLowerCase','index','hrtime','close','allStrLength','valueOf','ExpoDevice','_p_','_inNextEdge','[object\\x20BigInt]','Console\\x20Ninja\\x20extension\\x20is\\x20connected\\x20to\\x20','timeStamp','autoExpand','1777323156755','_getOwnPropertySymbols','7574025BLeRlk','sortProps','replace','NEXT_RUNTIME','_connecting','_additionalMetadata','forEach','level','symbol','modules','_Symbol','undefined','[object\\x20Set]','eventReceivedCallback','remix','_setNodeQueryPath','[object\\x20Map]','log','depth','Boolean','dockerizedApp','global','null','args','gateway.docker.internal','_addFunctionsNode','perf_hooks','5058944NenKCb','_hasMapOnItsPath','_setNodeExpandableState','push',["localhost","127.0.0.1","example.cypress.io","10.0.2.2","henry-tercero-Victus-by-HP-Gaming-Laptop-15-fa2xxx","192.168.1.11"],'unref','_webSocketErrorDocsLink','','_treeNodePropertiesAfterFullValue','%c\\x20Console\\x20Ninja\\x20extension\\x20is\\x20connected\\x20to\\x20','Error','number','value','_isMap','defaultLimits','_addObjectProperty','totalStrLength','some','boolean','_WebSocket','autoExpandPreviousObjects','sort','_setNodePermissions','_allowedToConnectOnSend','disabledTrace','console','reduceOnCount','location','10.0.2.2','get','call','_propertyName','length','props','_hasSymbolPropertyOnItsPath','_reconnectTimeout','string','getOwnPropertyDescriptor','import(\\x27path\\x27)','noFunctions','nodeModules','elements','endsWith','POSITIVE_INFINITY','21223450LJhzYJ','expId','_isPrimitiveType','onopen','bound\\x20Promise','message','current','reduceLimits','_getOwnPropertyNames','data','url','_quotedRegExp','hits','match','_property','getOwnPropertySymbols','performance','toUpperCase','capped','includes'];_0x1edd=function(){return _0xd02a82;};return _0x1edd();}(function(_0x593217,_0xb66b98){var _0x477746=_0x4187,_0x4015ef=_0x593217();while(!![]){try{var _0x55fb6d=parseInt(_0x477746(0x254))/0x1*(-parseInt(_0x477746(0x216))/0x2)+parseInt(_0x477746(0x258))/0x3+-parseInt(_0x477746(0x2dd))/0x4+parseInt(_0x477746(0x2c2))/0x5+-parseInt(_0x477746(0x28c))/0x6+-parseInt(_0x477746(0x278))/0x7*(parseInt(_0x477746(0x268))/0x8)+parseInt(_0x477746(0x246))/0x9*(parseInt(_0x477746(0x1fa))/0xa);if(_0x55fb6d===_0xb66b98)break;else _0x4015ef['push'](_0x4015ef['shift']());}catch(_0x3d51fa){_0x4015ef['push'](_0x4015ef['shift']());}}}(_0x1edd,0xd34bd));function z(_0x592fc3,_0x315c78,_0x20b8bb,_0x322b6b,_0x3f5c59,_0x2ff362){var _0x1e9d9b=_0x4187,_0x1f3283,_0x1d630f,_0x518481,_0x138db6;this[_0x1e9d9b(0x2d7)]=_0x592fc3,this[_0x1e9d9b(0x263)]=_0x315c78,this[_0x1e9d9b(0x22f)]=_0x20b8bb,this['nodeModules']=_0x322b6b,this['dockerizedApp']=_0x3f5c59,this['eventReceivedCallback']=_0x2ff362,this[_0x1e9d9b(0x271)]=!0x0,this[_0x1e9d9b(0x1e5)]=!0x0,this[_0x1e9d9b(0x242)]=!0x1,this[_0x1e9d9b(0x2c6)]=!0x1,this[_0x1e9d9b(0x2bb)]=((_0x1d630f=(_0x1f3283=_0x592fc3['process'])==null?void 0x0:_0x1f3283[_0x1e9d9b(0x282)])==null?void 0x0:_0x1d630f['NEXT_RUNTIME'])===_0x1e9d9b(0x272),this[_0x1e9d9b(0x26c)]=!((_0x138db6=(_0x518481=this[_0x1e9d9b(0x2d7)][_0x1e9d9b(0x266)])==null?void 0x0:_0x518481[_0x1e9d9b(0x2a9)])!=null&&_0x138db6[_0x1e9d9b(0x286)])&&!this[_0x1e9d9b(0x2bb)],this[_0x1e9d9b(0x23d)]=null,this['_connectAttemptCount']=0x0,this[_0x1e9d9b(0x21d)]=0x14,this[_0x1e9d9b(0x2e3)]='https://tinyurl.com/37x8b79t',this[_0x1e9d9b(0x284)]=(this['_inBrowser']?_0x1e9d9b(0x2ae):'Console\\x20Ninja\\x20failed\\x20to\\x20send\\x20logs,\\x20restarting\\x20the\\x20process\\x20may\\x20help;\\x20also\\x20see\\x20')+this[_0x1e9d9b(0x2e3)];}z[_0x3890c8(0x27c)][_0x3890c8(0x2a6)]=async function(){var _0x47df01=_0x3890c8,_0x4c9b9c,_0x348789;if(this['_WebSocketClass'])return this[_0x47df01(0x23d)];let _0x5b4a33;if(this[_0x47df01(0x26c)]||this[_0x47df01(0x2bb)])_0x5b4a33=this[_0x47df01(0x2d7)][_0x47df01(0x25f)];else{if((_0x4c9b9c=this['global'][_0x47df01(0x266)])!=null&&_0x4c9b9c['_WebSocket'])_0x5b4a33=(_0x348789=this[_0x47df01(0x2d7)]['process'])==null?void 0x0:_0x348789[_0x47df01(0x1e1)];else try{_0x5b4a33=(await new Function('path',_0x47df01(0x204),_0x47df01(0x1f6),_0x47df01(0x290))(await(0x0,eval)(_0x47df01(0x1f4)),await(0x0,eval)(_0x47df01(0x24b)),this[_0x47df01(0x1f6)]))[_0x47df01(0x220)];}catch{try{_0x5b4a33=require(require(_0x47df01(0x28b))[_0x47df01(0x295)](this[_0x47df01(0x1f6)],'ws'));}catch{throw new Error('failed\\x20to\\x20find\\x20and\\x20load\\x20WebSocket');}}}return this[_0x47df01(0x23d)]=_0x5b4a33,_0x5b4a33;},z[_0x3890c8(0x27c)][_0x3890c8(0x20f)]=function(){var _0x1d32f3=_0x3890c8;this[_0x1d32f3(0x2c6)]||this[_0x1d32f3(0x242)]||this[_0x1d32f3(0x234)]>=this[_0x1d32f3(0x21d)]||(this[_0x1d32f3(0x1e5)]=!0x1,this[_0x1d32f3(0x2c6)]=!0x0,this[_0x1d32f3(0x234)]++,this[_0x1d32f3(0x249)]=new Promise((_0x1dfeca,_0x1ed537)=>{var _0x162cdd=_0x1d32f3;this[_0x162cdd(0x2a6)]()[_0x162cdd(0x2b1)](_0x47460b=>{var _0x1fc8dc=_0x162cdd;let _0xe561b2=new _0x47460b(_0x1fc8dc(0x21e)+(!this[_0x1fc8dc(0x26c)]&&this[_0x1fc8dc(0x2d6)]?_0x1fc8dc(0x2da):this[_0x1fc8dc(0x263)])+':'+this['port']);_0xe561b2[_0x1fc8dc(0x233)]=()=>{var _0x53cfe7=_0x1fc8dc;this[_0x53cfe7(0x271)]=!0x1,this[_0x53cfe7(0x28d)](_0xe561b2),this['_attemptToReconnectShortly'](),_0x1ed537(new Error('logger\\x20websocket\\x20error'));},_0xe561b2[_0x1fc8dc(0x1fd)]=()=>{var _0x1456f8=_0x1fc8dc;this[_0x1456f8(0x26c)]||_0xe561b2[_0x1456f8(0x29a)]&&_0xe561b2['_socket']['unref']&&_0xe561b2['_socket'][_0x1456f8(0x2e2)](),_0x1dfeca(_0xe561b2);},_0xe561b2['onclose']=()=>{var _0x1475d1=_0x1fc8dc;this[_0x1475d1(0x1e5)]=!0x0,this[_0x1475d1(0x28d)](_0xe561b2),this['_attemptToReconnectShortly']();},_0xe561b2[_0x1fc8dc(0x2a3)]=_0x175d79=>{var _0x2e3b9f=_0x1fc8dc;try{if(!(_0x175d79!=null&&_0x175d79[_0x2e3b9f(0x203)])||!this[_0x2e3b9f(0x2cf)])return;let _0x44f4d4=JSON[_0x2e3b9f(0x24e)](_0x175d79['data']);this[_0x2e3b9f(0x2cf)](_0x44f4d4['method'],_0x44f4d4[_0x2e3b9f(0x2d9)],this[_0x2e3b9f(0x2d7)],this[_0x2e3b9f(0x26c)]);}catch{}};})[_0x162cdd(0x2b1)](_0x2e6e48=>(this[_0x162cdd(0x242)]=!0x0,this[_0x162cdd(0x2c6)]=!0x1,this['_allowedToConnectOnSend']=!0x1,this[_0x162cdd(0x271)]=!0x0,this[_0x162cdd(0x234)]=0x0,_0x2e6e48))[_0x162cdd(0x2a7)](_0x890b60=>(this['_connected']=!0x1,this['_connecting']=!0x1,console[_0x162cdd(0x213)](_0x162cdd(0x25a)+this[_0x162cdd(0x2e3)]),_0x1ed537(new Error(_0x162cdd(0x265)+(_0x890b60&&_0x890b60[_0x162cdd(0x1ff)])))));}));},z[_0x3890c8(0x27c)]['_disposeWebsocket']=function(_0x1b2f6c){var _0x5b014b=_0x3890c8;this['_connected']=!0x1,this[_0x5b014b(0x2c6)]=!0x1;try{_0x1b2f6c['onclose']=null,_0x1b2f6c[_0x5b014b(0x233)]=null,_0x1b2f6c['onopen']=null;}catch{}try{_0x1b2f6c[_0x5b014b(0x26b)]<0x2&&_0x1b2f6c[_0x5b014b(0x2b6)]();}catch{}},z[_0x3890c8(0x27c)]['_attemptToReconnectShortly']=function(){var _0x124bb9=_0x3890c8;clearTimeout(this[_0x124bb9(0x1f1)]),!(this[_0x124bb9(0x234)]>=this[_0x124bb9(0x21d)])&&(this[_0x124bb9(0x1f1)]=setTimeout(()=>{var _0x4d4e90=_0x124bb9,_0xf6aafa;this[_0x4d4e90(0x242)]||this['_connecting']||(this[_0x4d4e90(0x20f)](),(_0xf6aafa=this[_0x4d4e90(0x249)])==null||_0xf6aafa['catch'](()=>this[_0x4d4e90(0x26e)]()));},0x1f4),this[_0x124bb9(0x1f1)][_0x124bb9(0x2e2)]&&this[_0x124bb9(0x1f1)][_0x124bb9(0x2e2)]());},z[_0x3890c8(0x27c)][_0x3890c8(0x26d)]=async function(_0x1bb714){var _0x9a6194=_0x3890c8;try{if(!this[_0x9a6194(0x271)])return;this[_0x9a6194(0x1e5)]&&this[_0x9a6194(0x20f)](),(await this[_0x9a6194(0x249)])[_0x9a6194(0x26d)](JSON[_0x9a6194(0x274)](_0x1bb714));}catch(_0x1b6312){this[_0x9a6194(0x293)]?console[_0x9a6194(0x213)](this[_0x9a6194(0x284)]+':\\x20'+(_0x1b6312&&_0x1b6312[_0x9a6194(0x1ff)])):(this['_extendedWarning']=!0x0,console[_0x9a6194(0x213)](this[_0x9a6194(0x284)]+':\\x20'+(_0x1b6312&&_0x1b6312[_0x9a6194(0x1ff)]),_0x1bb714)),this[_0x9a6194(0x271)]=!0x1,this[_0x9a6194(0x26e)]();}};function H(_0x20ad1f,_0x2292c5,_0x44fc0e,_0x23d982,_0x5cf68c,_0x2bf037,_0x2ca164,_0x17c366=ne){var _0x1889e1=_0x3890c8;let _0x540a51=_0x44fc0e['split'](',')[_0x1889e1(0x292)](_0x2d32cd=>{var _0xd94d2e=_0x1889e1,_0x5aa30d,_0x16905d,_0x42434e,_0x1ab968,_0x405adf,_0x2a8f7e,_0x117873,_0x5423c9;try{if(!_0x20ad1f[_0xd94d2e(0x29d)]){let _0x41ebfe=((_0x16905d=(_0x5aa30d=_0x20ad1f['process'])==null?void 0x0:_0x5aa30d[_0xd94d2e(0x2a9)])==null?void 0x0:_0x16905d[_0xd94d2e(0x286)])||((_0x1ab968=(_0x42434e=_0x20ad1f['process'])==null?void 0x0:_0x42434e[_0xd94d2e(0x282)])==null?void 0x0:_0x1ab968[_0xd94d2e(0x2c5)])==='edge';(_0x5cf68c===_0xd94d2e(0x244)||_0x5cf68c===_0xd94d2e(0x2d0)||_0x5cf68c===_0xd94d2e(0x27d)||_0x5cf68c===_0xd94d2e(0x25b))&&(_0x5cf68c+=_0x41ebfe?_0xd94d2e(0x222):_0xd94d2e(0x2a5));let _0x3b5c0e='';_0x5cf68c==='react-native'&&(_0x3b5c0e=(((_0x117873=(_0x2a8f7e=(_0x405adf=_0x20ad1f[_0xd94d2e(0x23f)])==null?void 0x0:_0x405adf['modules'])==null?void 0x0:_0x2a8f7e[_0xd94d2e(0x2b9)])==null?void 0x0:_0x117873[_0xd94d2e(0x280)])||_0xd94d2e(0x235))[_0xd94d2e(0x2b3)](),_0x3b5c0e&&(_0x5cf68c+='\\x20'+_0x3b5c0e,(_0x3b5c0e===_0xd94d2e(0x294)||_0x3b5c0e===_0xd94d2e(0x235)&&((_0x5423c9=_0x20ad1f[_0xd94d2e(0x1e9)])==null?void 0x0:_0x5423c9['hostname'])===_0xd94d2e(0x1ea))&&(_0x2292c5=_0xd94d2e(0x1ea)))),_0x20ad1f[_0xd94d2e(0x29d)]={'id':+new Date(),'tool':_0x5cf68c},_0x2ca164&&_0x5cf68c&&!_0x41ebfe&&(_0x3b5c0e?console['log'](_0xd94d2e(0x2bd)+_0x3b5c0e+_0xd94d2e(0x217)):console[_0xd94d2e(0x2d3)](_0xd94d2e(0x2e6)+(_0x5cf68c['charAt'](0x0)[_0xd94d2e(0x20b)]()+_0x5cf68c[_0xd94d2e(0x24a)](0x1))+',',_0xd94d2e(0x20e),'see\\x20https://tinyurl.com/2vt8jxzw\\x20for\\x20more\\x20info.'));}let _0x326972=new z(_0x20ad1f,_0x2292c5,_0x2d32cd,_0x23d982,_0x2bf037,_0x17c366);return _0x326972[_0xd94d2e(0x26d)]['bind'](_0x326972);}catch(_0x266308){return console[_0xd94d2e(0x213)]('logger\\x20failed\\x20to\\x20connect\\x20to\\x20host',_0x266308&&_0x266308[_0xd94d2e(0x1ff)]),()=>{};}});return _0x3b9c7f=>_0x540a51['forEach'](_0x742346=>_0x742346(_0x3b9c7f));}function ne(_0x31e108,_0x3ec168,_0x417cab,_0xfd62c4){var _0x4be061=_0x3890c8;_0xfd62c4&&_0x31e108===_0x4be061(0x22a)&&_0x417cab[_0x4be061(0x1e9)][_0x4be061(0x22a)]();}function b(_0x30160c){var _0x151986=_0x3890c8,_0x2c787f,_0x2a95b9;let _0x2b4527=function(_0x1f6955,_0x424bf1){return _0x424bf1-_0x1f6955;},_0x19085c;if(_0x30160c[_0x151986(0x20a)])_0x19085c=function(){var _0x56aa7e=_0x151986;return _0x30160c[_0x56aa7e(0x20a)][_0x56aa7e(0x2b0)]();};else{if(_0x30160c[_0x151986(0x266)]&&_0x30160c[_0x151986(0x266)][_0x151986(0x2b5)]&&((_0x2a95b9=(_0x2c787f=_0x30160c[_0x151986(0x266)])==null?void 0x0:_0x2c787f[_0x151986(0x282)])==null?void 0x0:_0x2a95b9['NEXT_RUNTIME'])!==_0x151986(0x272))_0x19085c=function(){var _0x2687a2=_0x151986;return _0x30160c[_0x2687a2(0x266)][_0x2687a2(0x2b5)]();},_0x2b4527=function(_0x841d75,_0x2991da){return 0x3e8*(_0x2991da[0x0]-_0x841d75[0x0])+(_0x2991da[0x1]-_0x841d75[0x1])/0xf4240;};else try{let {performance:_0xd3a2df}=require(_0x151986(0x2dc));_0x19085c=function(){var _0x52330d=_0x151986;return _0xd3a2df[_0x52330d(0x2b0)]();};}catch{_0x19085c=function(){return+new Date();};}}return{'elapsed':_0x2b4527,'timeStamp':_0x19085c,'now':()=>Date[_0x151986(0x2b0)]()};}function X(_0x31ddec,_0x301594,_0x57b351){var _0xd50045=_0x3890c8,_0x21878c,_0x18f50c,_0x1295d0,_0x2b81d1,_0x429f3b,_0x1a0b9b,_0x4dbdad;if(_0x31ddec[_0xd50045(0x24c)]!==void 0x0)return _0x31ddec[_0xd50045(0x24c)];let _0x36bf8=((_0x18f50c=(_0x21878c=_0x31ddec['process'])==null?void 0x0:_0x21878c[_0xd50045(0x2a9)])==null?void 0x0:_0x18f50c[_0xd50045(0x286)])||((_0x2b81d1=(_0x1295d0=_0x31ddec[_0xd50045(0x266)])==null?void 0x0:_0x1295d0[_0xd50045(0x282)])==null?void 0x0:_0x2b81d1['NEXT_RUNTIME'])===_0xd50045(0x272),_0xd67b84=!!(_0x57b351===_0xd50045(0x2ad)&&((_0x429f3b=_0x31ddec[_0xd50045(0x23f)])==null?void 0x0:_0x429f3b[_0xd50045(0x2cb)]));function _0x224a39(_0x3f855b){var _0x554bf3=_0xd50045;if(_0x3f855b['startsWith']('/')&&_0x3f855b[_0x554bf3(0x1f8)]('/')){let _0x1a86b1=new RegExp(_0x3f855b['slice'](0x1,-0x1));return _0xda75d7=>_0x1a86b1[_0x554bf3(0x25d)](_0xda75d7);}else{if(_0x3f855b[_0x554bf3(0x20d)]('*')||_0x3f855b[_0x554bf3(0x20d)]('?')){let _0x1cb7b0=new RegExp('^'+_0x3f855b['replace'](/\\./g,String[_0x554bf3(0x2a4)](0x5c)+'.')['replace'](/\\*/g,'.*')['replace'](/\\?/g,'.')+String[_0x554bf3(0x2a4)](0x24));return _0x3d762c=>_0x1cb7b0['test'](_0x3d762c);}else return _0x362679=>_0x362679===_0x3f855b;}}let _0x8cb568=_0x301594[_0xd50045(0x292)](_0x224a39);return _0x31ddec[_0xd50045(0x24c)]=_0x36bf8||!_0x301594,!_0x31ddec[_0xd50045(0x24c)]&&((_0x1a0b9b=_0x31ddec[_0xd50045(0x1e9)])==null?void 0x0:_0x1a0b9b[_0xd50045(0x270)])&&(_0x31ddec[_0xd50045(0x24c)]=_0x8cb568[_0xd50045(0x1df)](_0x16149e=>_0x16149e(_0x31ddec[_0xd50045(0x1e9)][_0xd50045(0x270)]))),_0xd67b84&&!_0x31ddec[_0xd50045(0x24c)]&&!((_0x4dbdad=_0x31ddec[_0xd50045(0x1e9)])!=null&&_0x4dbdad[_0xd50045(0x270)])&&(_0x31ddec[_0xd50045(0x24c)]=!0x0),_0x31ddec[_0xd50045(0x24c)];}function J(_0x1b046d,_0x3af781,_0x5b51f5,_0x4cee6a,_0x39e136,_0x5d8b23){var _0x1f5d44=_0x3890c8;_0x1b046d=_0x1b046d,_0x3af781=_0x3af781,_0x5b51f5=_0x5b51f5,_0x4cee6a=_0x4cee6a,_0x39e136=_0x39e136,_0x39e136=_0x39e136||{},_0x39e136['defaultLimits']=_0x39e136['defaultLimits']||{},_0x39e136[_0x1f5d44(0x225)]=_0x39e136[_0x1f5d44(0x225)]||{},_0x39e136[_0x1f5d44(0x236)]=_0x39e136[_0x1f5d44(0x236)]||{},_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x291)]=_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x291)]||{},_0x39e136[_0x1f5d44(0x236)]['global']=_0x39e136[_0x1f5d44(0x236)]['global']||{};let _0x4756a1={'perLogpoint':{'reduceOnCount':_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x291)][_0x1f5d44(0x1e8)]||0x32,'reduceOnAccumulatedProcessingTimeMs':_0x39e136['reducePolicy'][_0x1f5d44(0x291)][_0x1f5d44(0x281)]||0x64,'resetWhenQuietMs':_0x39e136[_0x1f5d44(0x236)]['perLogpoint']['resetWhenQuietMs']||0x1f4,'resetOnProcessingTimeAverageMs':_0x39e136[_0x1f5d44(0x236)]['perLogpoint']['resetOnProcessingTimeAverageMs']||0x64},'global':{'reduceOnCount':_0x39e136['reducePolicy'][_0x1f5d44(0x2d7)][_0x1f5d44(0x1e8)]||0x3e8,'reduceOnAccumulatedProcessingTimeMs':_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x2d7)]['reduceOnAccumulatedProcessingTimeMs']||0x12c,'resetWhenQuietMs':_0x39e136[_0x1f5d44(0x236)]['global'][_0x1f5d44(0x264)]||0x32,'resetOnProcessingTimeAverageMs':_0x39e136[_0x1f5d44(0x236)][_0x1f5d44(0x2d7)][_0x1f5d44(0x231)]||0x64}},_0x41af91=b(_0x1b046d),_0x13f85b=_0x41af91[_0x1f5d44(0x276)],_0x5553e9=_0x41af91[_0x1f5d44(0x2be)];function _0x39602c(){var _0x293841=_0x1f5d44;this[_0x293841(0x243)]=/^(?!(?:do|if|in|for|let|new|try|var|case|else|enum|eval|false|null|this|true|void|with|break|catch|class|const|super|throw|while|yield|delete|export|import|public|return|static|switch|typeof|default|extends|finally|package|private|continue|debugger|function|arguments|interface|protected|implements|instanceof)$)[_$a-zA-Z\\xA0-\\uFFFF][_$a-zA-Z0-9\\xA0-\\uFFFF]*$/,this[_0x293841(0x279)]=/^(0|[1-9][0-9]*)$/,this[_0x293841(0x205)]=/'([^\\\\']|\\\\')*'/,this['_undefined']=_0x1b046d[_0x293841(0x2cd)],this[_0x293841(0x26f)]=_0x1b046d[_0x293841(0x23a)],this['_getOwnPropertyDescriptor']=Object[_0x293841(0x1f3)],this[_0x293841(0x202)]=Object['getOwnPropertyNames'],this['_Symbol']=_0x1b046d[_0x293841(0x22c)],this[_0x293841(0x215)]=RegExp[_0x293841(0x27c)][_0x293841(0x269)],this['_dateToString']=Date[_0x293841(0x27c)][_0x293841(0x269)];}_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2b2)]=function(_0x254f7f,_0x1babfb,_0x2e90c6,_0xdb54a9){var _0x33bfa3=_0x1f5d44,_0x168568=this,_0x471824=_0x2e90c6[_0x33bfa3(0x2bf)];function _0x3a3c67(_0x142852,_0x2cc0b4,_0x381677){var _0x16d30c=_0x33bfa3;_0x2cc0b4[_0x16d30c(0x27b)]=_0x16d30c(0x2a8),_0x2cc0b4[_0x16d30c(0x29e)]=_0x142852[_0x16d30c(0x1ff)],_0x3b2ef2=_0x381677[_0x16d30c(0x286)]['current'],_0x381677[_0x16d30c(0x286)][_0x16d30c(0x200)]=_0x2cc0b4,_0x168568[_0x16d30c(0x24f)](_0x2cc0b4,_0x381677);}let _0x361300,_0x7450c3,_0x1f473b=_0x1b046d[_0x33bfa3(0x240)];_0x1b046d[_0x33bfa3(0x240)]=!0x0,_0x1b046d[_0x33bfa3(0x1e7)]&&(_0x361300=_0x1b046d[_0x33bfa3(0x1e7)][_0x33bfa3(0x29e)],_0x7450c3=_0x1b046d['console'][_0x33bfa3(0x213)],_0x361300&&(_0x1b046d[_0x33bfa3(0x1e7)][_0x33bfa3(0x29e)]=function(){}),_0x7450c3&&(_0x1b046d[_0x33bfa3(0x1e7)][_0x33bfa3(0x213)]=function(){}));try{try{_0x2e90c6[_0x33bfa3(0x2c9)]++,_0x2e90c6[_0x33bfa3(0x2bf)]&&_0x2e90c6[_0x33bfa3(0x1e2)]['push'](_0x1babfb);var _0x2e727d,_0x4ce0a7,_0x5c981d,_0x3de9f4,_0x2ee350=[],_0x1fd1ab=[],_0x5481d5,_0x4e2612=this[_0x33bfa3(0x297)](_0x1babfb),_0x443a68=_0x4e2612==='array',_0xf19808=!0x1,_0x10ecde=_0x4e2612===_0x33bfa3(0x230),_0x4ec234=this[_0x33bfa3(0x1fc)](_0x4e2612),_0x13a3ac=this[_0x33bfa3(0x28e)](_0x4e2612),_0x21daba=_0x4ec234||_0x13a3ac,_0x5d7eb8={},_0x4a200a=0x0,_0x2e69b1=!0x1,_0x3b2ef2,_0x1ec59c=/^(([1-9]{1}[0-9]*)|0)$/;if(_0x2e90c6['depth']){if(_0x443a68){if(_0x4ce0a7=_0x1babfb[_0x33bfa3(0x1ee)],_0x4ce0a7>_0x2e90c6['elements']){for(_0x5c981d=0x0,_0x3de9f4=_0x2e90c6[_0x33bfa3(0x1f7)],_0x2e727d=_0x5c981d;_0x2e727d<_0x3de9f4;_0x2e727d++)_0x1fd1ab['push'](_0x168568[_0x33bfa3(0x223)](_0x2ee350,_0x1babfb,_0x4e2612,_0x2e727d,_0x2e90c6));_0x254f7f[_0x33bfa3(0x228)]=!0x0;}else{for(_0x5c981d=0x0,_0x3de9f4=_0x4ce0a7,_0x2e727d=_0x5c981d;_0x2e727d<_0x3de9f4;_0x2e727d++)_0x1fd1ab['push'](_0x168568[_0x33bfa3(0x223)](_0x2ee350,_0x1babfb,_0x4e2612,_0x2e727d,_0x2e90c6));}_0x2e90c6['autoExpandPropertyCount']+=_0x1fd1ab[_0x33bfa3(0x1ee)];}if(!(_0x4e2612===_0x33bfa3(0x2d8)||_0x4e2612===_0x33bfa3(0x2cd))&&!_0x4ec234&&_0x4e2612!=='String'&&_0x4e2612!==_0x33bfa3(0x252)&&_0x4e2612!==_0x33bfa3(0x267)){var _0x2d45fa=_0xdb54a9[_0x33bfa3(0x1ef)]||_0x2e90c6[_0x33bfa3(0x1ef)];if(this['_isSet'](_0x1babfb)?(_0x2e727d=0x0,_0x1babfb[_0x33bfa3(0x2c8)](function(_0x3b3e4c){var _0x118b02=_0x33bfa3;if(_0x4a200a++,_0x2e90c6['autoExpandPropertyCount']++,_0x4a200a>_0x2d45fa){_0x2e69b1=!0x0;return;}if(!_0x2e90c6[_0x118b02(0x2af)]&&_0x2e90c6['autoExpand']&&_0x2e90c6[_0x118b02(0x28f)]>_0x2e90c6[_0x118b02(0x28a)]){_0x2e69b1=!0x0;return;}_0x1fd1ab[_0x118b02(0x2e0)](_0x168568[_0x118b02(0x223)](_0x2ee350,_0x1babfb,'Set',_0x2e727d++,_0x2e90c6,function(_0xba6f7b){return function(){return _0xba6f7b;};}(_0x3b3e4c)));})):this[_0x33bfa3(0x2ea)](_0x1babfb)&&_0x1babfb[_0x33bfa3(0x2c8)](function(_0x26b876,_0x1cd31e){var _0x13d9e6=_0x33bfa3;if(_0x4a200a++,_0x2e90c6[_0x13d9e6(0x28f)]++,_0x4a200a>_0x2d45fa){_0x2e69b1=!0x0;return;}if(!_0x2e90c6[_0x13d9e6(0x2af)]&&_0x2e90c6[_0x13d9e6(0x2bf)]&&_0x2e90c6[_0x13d9e6(0x28f)]>_0x2e90c6[_0x13d9e6(0x28a)]){_0x2e69b1=!0x0;return;}var _0x5245d5=_0x1cd31e[_0x13d9e6(0x269)]();_0x5245d5['length']>0x64&&(_0x5245d5=_0x5245d5[_0x13d9e6(0x232)](0x0,0x64)+'...'),_0x1fd1ab[_0x13d9e6(0x2e0)](_0x168568['_addProperty'](_0x2ee350,_0x1babfb,_0x13d9e6(0x283),_0x5245d5,_0x2e90c6,function(_0x437b32){return function(){return _0x437b32;};}(_0x26b876)));}),!_0xf19808){try{for(_0x5481d5 in _0x1babfb)if(!(_0x443a68&&_0x1ec59c[_0x33bfa3(0x25d)](_0x5481d5))&&!this[_0x33bfa3(0x251)](_0x1babfb,_0x5481d5,_0x2e90c6)){if(_0x4a200a++,_0x2e90c6['autoExpandPropertyCount']++,_0x4a200a>_0x2d45fa){_0x2e69b1=!0x0;break;}if(!_0x2e90c6['isExpressionToEvaluate']&&_0x2e90c6[_0x33bfa3(0x2bf)]&&_0x2e90c6[_0x33bfa3(0x28f)]>_0x2e90c6[_0x33bfa3(0x28a)]){_0x2e69b1=!0x0;break;}_0x1fd1ab[_0x33bfa3(0x2e0)](_0x168568[_0x33bfa3(0x1dd)](_0x2ee350,_0x5d7eb8,_0x1babfb,_0x4e2612,_0x5481d5,_0x2e90c6));}}catch{}if(_0x5d7eb8[_0x33bfa3(0x214)]=!0x0,_0x10ecde&&(_0x5d7eb8[_0x33bfa3(0x248)]=!0x0),!_0x2e69b1){var _0x4a9287=[][_0x33bfa3(0x29c)](this[_0x33bfa3(0x202)](_0x1babfb))['concat'](this[_0x33bfa3(0x2c1)](_0x1babfb));for(_0x2e727d=0x0,_0x4ce0a7=_0x4a9287[_0x33bfa3(0x1ee)];_0x2e727d<_0x4ce0a7;_0x2e727d++)if(_0x5481d5=_0x4a9287[_0x2e727d],!(_0x443a68&&_0x1ec59c[_0x33bfa3(0x25d)](_0x5481d5['toString']()))&&!this[_0x33bfa3(0x251)](_0x1babfb,_0x5481d5,_0x2e90c6)&&!_0x5d7eb8[typeof _0x5481d5!=_0x33bfa3(0x2ca)?_0x33bfa3(0x2ba)+_0x5481d5['toString']():_0x5481d5]){if(_0x4a200a++,_0x2e90c6[_0x33bfa3(0x28f)]++,_0x4a200a>_0x2d45fa){_0x2e69b1=!0x0;break;}if(!_0x2e90c6[_0x33bfa3(0x2af)]&&_0x2e90c6[_0x33bfa3(0x2bf)]&&_0x2e90c6[_0x33bfa3(0x28f)]>_0x2e90c6[_0x33bfa3(0x28a)]){_0x2e69b1=!0x0;break;}_0x1fd1ab['push'](_0x168568[_0x33bfa3(0x1dd)](_0x2ee350,_0x5d7eb8,_0x1babfb,_0x4e2612,_0x5481d5,_0x2e90c6));}}}}}if(_0x254f7f['type']=_0x4e2612,_0x21daba?(_0x254f7f[_0x33bfa3(0x2e9)]=_0x1babfb[_0x33bfa3(0x2b8)](),this[_0x33bfa3(0x298)](_0x4e2612,_0x254f7f,_0x2e90c6,_0xdb54a9)):_0x4e2612===_0x33bfa3(0x24d)?_0x254f7f[_0x33bfa3(0x2e9)]=this[_0x33bfa3(0x2aa)]['call'](_0x1babfb):_0x4e2612===_0x33bfa3(0x267)?_0x254f7f[_0x33bfa3(0x2e9)]=_0x1babfb['toString']():_0x4e2612===_0x33bfa3(0x285)?_0x254f7f['value']=this[_0x33bfa3(0x215)][_0x33bfa3(0x1ec)](_0x1babfb):_0x4e2612===_0x33bfa3(0x2ca)&&this[_0x33bfa3(0x2cc)]?_0x254f7f[_0x33bfa3(0x2e9)]=this[_0x33bfa3(0x2cc)]['prototype'][_0x33bfa3(0x269)]['call'](_0x1babfb):!_0x2e90c6[_0x33bfa3(0x2d4)]&&!(_0x4e2612===_0x33bfa3(0x2d8)||_0x4e2612===_0x33bfa3(0x2cd))&&(delete _0x254f7f[_0x33bfa3(0x2e9)],_0x254f7f[_0x33bfa3(0x20c)]=!0x0),_0x2e69b1&&(_0x254f7f['cappedProps']=!0x0),_0x3b2ef2=_0x2e90c6[_0x33bfa3(0x286)][_0x33bfa3(0x200)],_0x2e90c6['node'][_0x33bfa3(0x200)]=_0x254f7f,this['_treeNodePropertiesBeforeFullValue'](_0x254f7f,_0x2e90c6),_0x1fd1ab['length']){for(_0x2e727d=0x0,_0x4ce0a7=_0x1fd1ab['length'];_0x2e727d<_0x4ce0a7;_0x2e727d++)_0x1fd1ab[_0x2e727d](_0x2e727d);}_0x2ee350[_0x33bfa3(0x1ee)]&&(_0x254f7f[_0x33bfa3(0x1ef)]=_0x2ee350);}catch(_0x36e778){_0x3a3c67(_0x36e778,_0x254f7f,_0x2e90c6);}this[_0x33bfa3(0x2c7)](_0x1babfb,_0x254f7f),this[_0x33bfa3(0x2e5)](_0x254f7f,_0x2e90c6),_0x2e90c6[_0x33bfa3(0x286)][_0x33bfa3(0x200)]=_0x3b2ef2,_0x2e90c6[_0x33bfa3(0x2c9)]--,_0x2e90c6[_0x33bfa3(0x2bf)]=_0x471824,_0x2e90c6['autoExpand']&&_0x2e90c6[_0x33bfa3(0x1e2)][_0x33bfa3(0x27e)]();}finally{_0x361300&&(_0x1b046d['console'][_0x33bfa3(0x29e)]=_0x361300),_0x7450c3&&(_0x1b046d[_0x33bfa3(0x1e7)][_0x33bfa3(0x213)]=_0x7450c3),_0x1b046d[_0x33bfa3(0x240)]=_0x1f473b;}return _0x254f7f;},_0x39602c[_0x1f5d44(0x27c)]['_getOwnPropertySymbols']=function(_0xd19fef){var _0x1f8178=_0x1f5d44;return Object['getOwnPropertySymbols']?Object[_0x1f8178(0x209)](_0xd19fef):[];},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x219)]=function(_0x5ece89){var _0x396459=_0x1f5d44;return!!(_0x5ece89&&_0x1b046d['Set']&&this[_0x396459(0x2a0)](_0x5ece89)===_0x396459(0x2ce)&&_0x5ece89[_0x396459(0x2c8)]);},_0x39602c['prototype'][_0x1f5d44(0x251)]=function(_0x5e3ecf,_0x457efe,_0x503699){var _0x58ab93=_0x1f5d44;if(!_0x503699[_0x58ab93(0x226)]){let _0x40a764=this['_getOwnPropertyDescriptor'](_0x5e3ecf,_0x457efe);if(_0x40a764&&_0x40a764[_0x58ab93(0x1eb)])return!0x0;}return _0x503699[_0x58ab93(0x1f5)]?typeof _0x5e3ecf[_0x457efe]==_0x58ab93(0x230):!0x1;},_0x39602c['prototype'][_0x1f5d44(0x297)]=function(_0x55aea2){var _0x3223a6=_0x1f5d44,_0x435cfc='';return _0x435cfc=typeof _0x55aea2,_0x435cfc===_0x3223a6(0x26a)?this[_0x3223a6(0x2a0)](_0x55aea2)==='[object\\x20Array]'?_0x435cfc=_0x3223a6(0x260):this['_objectToString'](_0x55aea2)===_0x3223a6(0x287)?_0x435cfc=_0x3223a6(0x24d):this['_objectToString'](_0x55aea2)===_0x3223a6(0x2bc)?_0x435cfc=_0x3223a6(0x267):_0x55aea2===null?_0x435cfc='null':_0x55aea2[_0x3223a6(0x277)]&&(_0x435cfc=_0x55aea2[_0x3223a6(0x277)][_0x3223a6(0x273)]||_0x435cfc):_0x435cfc===_0x3223a6(0x2cd)&&this[_0x3223a6(0x26f)]&&_0x55aea2 instanceof this[_0x3223a6(0x26f)]&&(_0x435cfc=_0x3223a6(0x23a)),_0x435cfc;},_0x39602c['prototype'][_0x1f5d44(0x2a0)]=function(_0x2bac5a){var _0x4622cb=_0x1f5d44;return Object['prototype'][_0x4622cb(0x269)][_0x4622cb(0x1ec)](_0x2bac5a);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x1fc)]=function(_0x2ccf2c){var _0x674b58=_0x1f5d44;return _0x2ccf2c===_0x674b58(0x1e0)||_0x2ccf2c===_0x674b58(0x1f2)||_0x2ccf2c===_0x674b58(0x2e8);},_0x39602c[_0x1f5d44(0x27c)]['_isPrimitiveWrapperType']=function(_0x5299e2){var _0x55fd87=_0x1f5d44;return _0x5299e2===_0x55fd87(0x2d5)||_0x5299e2==='String'||_0x5299e2===_0x55fd87(0x245);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x223)]=function(_0x157555,_0x1174b0,_0x2697a9,_0x20ea02,_0x1e29d4,_0x5f3380){var _0x174700=this;return function(_0x3816dd){var _0x4b6516=_0x4187,_0x57f376=_0x1e29d4[_0x4b6516(0x286)][_0x4b6516(0x200)],_0xed0e7b=_0x1e29d4[_0x4b6516(0x286)]['index'],_0x57849c=_0x1e29d4['node'][_0x4b6516(0x261)];_0x1e29d4['node']['parent']=_0x57f376,_0x1e29d4[_0x4b6516(0x286)]['index']=typeof _0x20ea02==_0x4b6516(0x2e8)?_0x20ea02:_0x3816dd,_0x157555[_0x4b6516(0x2e0)](_0x174700[_0x4b6516(0x208)](_0x1174b0,_0x2697a9,_0x20ea02,_0x1e29d4,_0x5f3380)),_0x1e29d4[_0x4b6516(0x286)]['parent']=_0x57849c,_0x1e29d4['node'][_0x4b6516(0x2b4)]=_0xed0e7b;};},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x1dd)]=function(_0x16666b,_0x37b24a,_0xca6b76,_0x5eaca8,_0x47f24d,_0x518bd1,_0x3aad4c){var _0x5a59c9=_0x1f5d44,_0x5d7f32=this;return _0x37b24a[typeof _0x47f24d!=_0x5a59c9(0x2ca)?_0x5a59c9(0x2ba)+_0x47f24d['toString']():_0x47f24d]=!0x0,function(_0x186abb){var _0x227537=_0x5a59c9,_0x93753=_0x518bd1[_0x227537(0x286)]['current'],_0x3a8b46=_0x518bd1[_0x227537(0x286)][_0x227537(0x2b4)],_0x5cf7ec=_0x518bd1[_0x227537(0x286)]['parent'];_0x518bd1[_0x227537(0x286)]['parent']=_0x93753,_0x518bd1['node'][_0x227537(0x2b4)]=_0x186abb,_0x16666b[_0x227537(0x2e0)](_0x5d7f32[_0x227537(0x208)](_0xca6b76,_0x5eaca8,_0x47f24d,_0x518bd1,_0x3aad4c)),_0x518bd1[_0x227537(0x286)][_0x227537(0x261)]=_0x5cf7ec,_0x518bd1[_0x227537(0x286)]['index']=_0x3a8b46;};},_0x39602c[_0x1f5d44(0x27c)]['_property']=function(_0x1e9096,_0x2437b1,_0x5a258e,_0x306875,_0xeb1ab2){var _0x2e8b77=_0x1f5d44,_0x1ab203=this;_0xeb1ab2||(_0xeb1ab2=function(_0x2125a7,_0x5a8e51){return _0x2125a7[_0x5a8e51];});var _0x1a70b4=_0x5a258e[_0x2e8b77(0x269)](),_0x4a3b80=_0x306875[_0x2e8b77(0x27f)]||{},_0x4ec463=_0x306875[_0x2e8b77(0x2d4)],_0x436a10=_0x306875['isExpressionToEvaluate'];try{var _0x4a65f6=this[_0x2e8b77(0x2ea)](_0x1e9096),_0x14070f=_0x1a70b4;_0x4a65f6&&_0x14070f[0x0]==='\\x27'&&(_0x14070f=_0x14070f[_0x2e8b77(0x24a)](0x1,_0x14070f['length']-0x2));var _0x33f2fd=_0x306875[_0x2e8b77(0x27f)]=_0x4a3b80[_0x2e8b77(0x2ba)+_0x14070f];_0x33f2fd&&(_0x306875['depth']=_0x306875[_0x2e8b77(0x2d4)]+0x1),_0x306875['isExpressionToEvaluate']=!!_0x33f2fd;var _0x761c47=typeof _0x5a258e==_0x2e8b77(0x2ca),_0x2a07c1={'name':_0x761c47||_0x4a65f6?_0x1a70b4:this['_propertyName'](_0x1a70b4)};if(_0x761c47&&(_0x2a07c1[_0x2e8b77(0x2ca)]=!0x0),!(_0x2437b1===_0x2e8b77(0x260)||_0x2437b1===_0x2e8b77(0x2e7))){var _0x336b0f=this[_0x2e8b77(0x212)](_0x1e9096,_0x5a258e);if(_0x336b0f&&(_0x336b0f[_0x2e8b77(0x257)]&&(_0x2a07c1['setter']=!0x0),_0x336b0f[_0x2e8b77(0x1eb)]&&!_0x33f2fd&&!_0x306875[_0x2e8b77(0x226)]))return _0x2a07c1['getter']=!0x0,this[_0x2e8b77(0x237)](_0x2a07c1,_0x306875),_0x2a07c1;}var _0x42b0f3;try{_0x42b0f3=_0xeb1ab2(_0x1e9096,_0x5a258e);}catch(_0x470aa0){return _0x2a07c1={'name':_0x1a70b4,'type':_0x2e8b77(0x2a8),'error':_0x470aa0[_0x2e8b77(0x1ff)]},this[_0x2e8b77(0x237)](_0x2a07c1,_0x306875),_0x2a07c1;}var _0x3f69d6=this[_0x2e8b77(0x297)](_0x42b0f3),_0x26ec12=this[_0x2e8b77(0x1fc)](_0x3f69d6);if(_0x2a07c1['type']=_0x3f69d6,_0x26ec12)this['_processTreeNodeResult'](_0x2a07c1,_0x306875,_0x42b0f3,function(){var _0x27d61e=_0x2e8b77;_0x2a07c1[_0x27d61e(0x2e9)]=_0x42b0f3[_0x27d61e(0x2b8)](),!_0x33f2fd&&_0x1ab203[_0x27d61e(0x298)](_0x3f69d6,_0x2a07c1,_0x306875,{});});else{var _0x353800=_0x306875[_0x2e8b77(0x2bf)]&&_0x306875[_0x2e8b77(0x2c9)]<_0x306875[_0x2e8b77(0x21f)]&&_0x306875[_0x2e8b77(0x1e2)][_0x2e8b77(0x229)](_0x42b0f3)<0x0&&_0x3f69d6!==_0x2e8b77(0x230)&&_0x306875['autoExpandPropertyCount']<_0x306875[_0x2e8b77(0x28a)];_0x353800||_0x306875[_0x2e8b77(0x2c9)]<_0x4ec463||_0x33f2fd?this['serialize'](_0x2a07c1,_0x42b0f3,_0x306875,_0x33f2fd||{}):this[_0x2e8b77(0x237)](_0x2a07c1,_0x306875,_0x42b0f3,function(){var _0x26b4af=_0x2e8b77;_0x3f69d6==='null'||_0x3f69d6===_0x26b4af(0x2cd)||(delete _0x2a07c1[_0x26b4af(0x2e9)],_0x2a07c1[_0x26b4af(0x20c)]=!0x0);});}return _0x2a07c1;}finally{_0x306875[_0x2e8b77(0x27f)]=_0x4a3b80,_0x306875[_0x2e8b77(0x2d4)]=_0x4ec463,_0x306875[_0x2e8b77(0x2af)]=_0x436a10;}},_0x39602c[_0x1f5d44(0x27c)]['_capIfString']=function(_0x400724,_0x56f824,_0x52035a,_0x2a5d1b){var _0x1c76fb=_0x1f5d44,_0x5d1231=_0x2a5d1b[_0x1c76fb(0x23c)]||_0x52035a[_0x1c76fb(0x23c)];if((_0x400724===_0x1c76fb(0x1f2)||_0x400724===_0x1c76fb(0x23b))&&_0x56f824[_0x1c76fb(0x2e9)]){let _0x1dff43=_0x56f824[_0x1c76fb(0x2e9)][_0x1c76fb(0x1ee)];_0x52035a[_0x1c76fb(0x2b7)]+=_0x1dff43,_0x52035a[_0x1c76fb(0x2b7)]>_0x52035a[_0x1c76fb(0x1de)]?(_0x56f824[_0x1c76fb(0x20c)]='',delete _0x56f824[_0x1c76fb(0x2e9)]):_0x1dff43>_0x5d1231&&(_0x56f824[_0x1c76fb(0x20c)]=_0x56f824['value'][_0x1c76fb(0x24a)](0x0,_0x5d1231),delete _0x56f824[_0x1c76fb(0x2e9)]);}},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2ea)]=function(_0x2b582){var _0x4f59b4=_0x1f5d44;return!!(_0x2b582&&_0x1b046d[_0x4f59b4(0x283)]&&this[_0x4f59b4(0x2a0)](_0x2b582)===_0x4f59b4(0x2d2)&&_0x2b582[_0x4f59b4(0x2c8)]);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x1ed)]=function(_0xd0769c){var _0x56daad=_0x1f5d44;if(_0xd0769c[_0x56daad(0x207)](/^\\d+$/))return _0xd0769c;var _0x44321c;try{_0x44321c=JSON[_0x56daad(0x274)](''+_0xd0769c);}catch{_0x44321c='\\x22'+this[_0x56daad(0x2a0)](_0xd0769c)+'\\x22';}return _0x44321c[_0x56daad(0x207)](/^"([a-zA-Z_][a-zA-Z_0-9]*)"$/)?_0x44321c=_0x44321c[_0x56daad(0x24a)](0x1,_0x44321c[_0x56daad(0x1ee)]-0x2):_0x44321c=_0x44321c[_0x56daad(0x2c4)](/'/g,'\\x5c\\x27')[_0x56daad(0x2c4)](/\\\\"/g,'\\x22')[_0x56daad(0x2c4)](/(^"|"$)/g,'\\x27'),_0x44321c;},_0x39602c[_0x1f5d44(0x27c)]['_processTreeNodeResult']=function(_0x35d4de,_0x18bf2b,_0x4b4ba8,_0x5e4ad4){var _0x3ae3b4=_0x1f5d44;this[_0x3ae3b4(0x24f)](_0x35d4de,_0x18bf2b),_0x5e4ad4&&_0x5e4ad4(),this[_0x3ae3b4(0x2c7)](_0x4b4ba8,_0x35d4de),this['_treeNodePropertiesAfterFullValue'](_0x35d4de,_0x18bf2b);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x24f)]=function(_0x3fef10,_0x16c344){var _0x25886e=_0x1f5d44;this[_0x25886e(0x275)](_0x3fef10,_0x16c344),this[_0x25886e(0x2d1)](_0x3fef10,_0x16c344),this[_0x25886e(0x239)](_0x3fef10,_0x16c344),this['_setNodePermissions'](_0x3fef10,_0x16c344);},_0x39602c['prototype'][_0x1f5d44(0x275)]=function(_0x4a95cf,_0x5175f9){},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2d1)]=function(_0x4dd70e,_0x1d0a77){},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x250)]=function(_0x2add9b,_0x21294a){},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x241)]=function(_0x57f907){return _0x57f907===this['_undefined'];},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2e5)]=function(_0x47895e,_0x5ee6d0){var _0x3bb2e6=_0x1f5d44;this[_0x3bb2e6(0x250)](_0x47895e,_0x5ee6d0),this['_setNodeExpandableState'](_0x47895e),_0x5ee6d0[_0x3bb2e6(0x2c3)]&&this[_0x3bb2e6(0x288)](_0x47895e),this[_0x3bb2e6(0x2db)](_0x47895e,_0x5ee6d0),this[_0x3bb2e6(0x23e)](_0x47895e,_0x5ee6d0),this[_0x3bb2e6(0x2ab)](_0x47895e);},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x2c7)]=function(_0x406f89,_0x5dc600){var _0x3d052f=_0x1f5d44;try{_0x406f89&&typeof _0x406f89[_0x3d052f(0x1ee)]==_0x3d052f(0x2e8)&&(_0x5dc600[_0x3d052f(0x1ee)]=_0x406f89['length']);}catch{}if(_0x5dc600[_0x3d052f(0x27b)]===_0x3d052f(0x2e8)||_0x5dc600[_0x3d052f(0x27b)]===_0x3d052f(0x245)){if(isNaN(_0x5dc600['value']))_0x5dc600[_0x3d052f(0x299)]=!0x0,delete _0x5dc600[_0x3d052f(0x2e9)];else switch(_0x5dc600['value']){case Number[_0x3d052f(0x1f9)]:_0x5dc600['positiveInfinity']=!0x0,delete _0x5dc600['value'];break;case Number['NEGATIVE_INFINITY']:_0x5dc600[_0x3d052f(0x25c)]=!0x0,delete _0x5dc600[_0x3d052f(0x2e9)];break;case 0x0:this[_0x3d052f(0x247)](_0x5dc600['value'])&&(_0x5dc600['negativeZero']=!0x0);break;}}else _0x5dc600[_0x3d052f(0x27b)]===_0x3d052f(0x230)&&typeof _0x406f89[_0x3d052f(0x273)]=='string'&&_0x406f89[_0x3d052f(0x273)]&&_0x5dc600[_0x3d052f(0x273)]&&_0x406f89[_0x3d052f(0x273)]!==_0x5dc600['name']&&(_0x5dc600[_0x3d052f(0x218)]=_0x406f89[_0x3d052f(0x273)]);},_0x39602c['prototype'][_0x1f5d44(0x247)]=function(_0x58bf0d){var _0x1eeae2=_0x1f5d44;return 0x1/_0x58bf0d===Number[_0x1eeae2(0x210)];},_0x39602c[_0x1f5d44(0x27c)]['_sortProps']=function(_0x4d7dd2){var _0x5c6f19=_0x1f5d44;!_0x4d7dd2['props']||!_0x4d7dd2[_0x5c6f19(0x1ef)]['length']||_0x4d7dd2['type']===_0x5c6f19(0x260)||_0x4d7dd2[_0x5c6f19(0x27b)]===_0x5c6f19(0x283)||_0x4d7dd2[_0x5c6f19(0x27b)]===_0x5c6f19(0x22b)||_0x4d7dd2[_0x5c6f19(0x1ef)][_0x5c6f19(0x1e3)](function(_0xb25f8,_0x3feabb){var _0x34181c=_0x5c6f19,_0x30ed1b=_0xb25f8[_0x34181c(0x273)][_0x34181c(0x2b3)](),_0x28978d=_0x3feabb['name'][_0x34181c(0x2b3)]();return _0x30ed1b<_0x28978d?-0x1:_0x30ed1b>_0x28978d?0x1:0x0;});},_0x39602c[_0x1f5d44(0x27c)]['_addFunctionsNode']=function(_0x5294e5,_0x377958){var _0x476737=_0x1f5d44;if(!(_0x377958[_0x476737(0x1f5)]||!_0x5294e5[_0x476737(0x1ef)]||!_0x5294e5['props'][_0x476737(0x1ee)])){for(var _0x23c633=[],_0x1cff31=[],_0x44160d=0x0,_0x4684cd=_0x5294e5['props'][_0x476737(0x1ee)];_0x44160d<_0x4684cd;_0x44160d++){var _0x36796e=_0x5294e5['props'][_0x44160d];_0x36796e[_0x476737(0x27b)]===_0x476737(0x230)?_0x23c633[_0x476737(0x2e0)](_0x36796e):_0x1cff31[_0x476737(0x2e0)](_0x36796e);}if(!(!_0x1cff31[_0x476737(0x1ee)]||_0x23c633[_0x476737(0x1ee)]<=0x1)){_0x5294e5[_0x476737(0x1ef)]=_0x1cff31;var _0x1e6ca0={'functionsNode':!0x0,'props':_0x23c633};this[_0x476737(0x275)](_0x1e6ca0,_0x377958),this[_0x476737(0x250)](_0x1e6ca0,_0x377958),this[_0x476737(0x2df)](_0x1e6ca0),this[_0x476737(0x1e4)](_0x1e6ca0,_0x377958),_0x1e6ca0['id']+='\\x20f',_0x5294e5[_0x476737(0x1ef)][_0x476737(0x21b)](_0x1e6ca0);}}},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x23e)]=function(_0xc708e1,_0x1404ba){},_0x39602c['prototype']['_setNodeExpandableState']=function(_0x44d604){},_0x39602c[_0x1f5d44(0x27c)][_0x1f5d44(0x22d)]=function(_0x3c17fb){var _0x14eb98=_0x1f5d44;return Array[_0x14eb98(0x2a1)](_0x3c17fb)||typeof _0x3c17fb==_0x14eb98(0x26a)&&this['_objectToString'](_0x3c17fb)===_0x14eb98(0x21c);},_0x39602c[_0x1f5d44(0x27c)]['_setNodePermissions']=function(_0x1360b0,_0x443f96){},_0x39602c[_0x1f5d44(0x27c)]['_cleanNode']=function(_0x26f307){var _0x360d43=_0x1f5d44;delete _0x26f307[_0x360d43(0x1f0)],delete _0x26f307['_hasSetOnItsPath'],delete _0x26f307[_0x360d43(0x2de)];},_0x39602c['prototype'][_0x1f5d44(0x239)]=function(_0x21594a,_0x1ea38a){};let _0x4fccde=new _0x39602c(),_0x5aef3e={'props':_0x39e136['defaultLimits'][_0x1f5d44(0x1ef)]||0x64,'elements':_0x39e136['defaultLimits']['elements']||0x64,'strLength':_0x39e136[_0x1f5d44(0x1dc)][_0x1f5d44(0x23c)]||0x400*0x32,'totalStrLength':_0x39e136['defaultLimits'][_0x1f5d44(0x1de)]||0x400*0x32,'autoExpandLimit':_0x39e136['defaultLimits'][_0x1f5d44(0x28a)]||0x1388,'autoExpandMaxDepth':_0x39e136['defaultLimits'][_0x1f5d44(0x21f)]||0xa},_0x374151={'props':_0x39e136[_0x1f5d44(0x225)][_0x1f5d44(0x1ef)]||0x5,'elements':_0x39e136[_0x1f5d44(0x225)][_0x1f5d44(0x1f7)]||0x5,'strLength':_0x39e136[_0x1f5d44(0x225)]['strLength']||0x100,'totalStrLength':_0x39e136[_0x1f5d44(0x225)][_0x1f5d44(0x1de)]||0x100*0x3,'autoExpandLimit':_0x39e136['reducedLimits'][_0x1f5d44(0x28a)]||0x1e,'autoExpandMaxDepth':_0x39e136['reducedLimits']['autoExpandMaxDepth']||0x2};if(_0x5d8b23){let _0x275f95=_0x4fccde['serialize'][_0x1f5d44(0x262)](_0x4fccde);_0x4fccde[_0x1f5d44(0x2b2)]=function(_0x1c90b2,_0x4276f3,_0x30aacd,_0x55932d){return _0x275f95(_0x1c90b2,_0x5d8b23(_0x4276f3),_0x30aacd,_0x55932d);};}function _0x1a7762(_0x577f01,_0x418059,_0x269690,_0x32321b,_0x4cd5b2,_0x52912d){var _0x4ce86f=_0x1f5d44;let _0x3eb726,_0xb700fa;try{_0xb700fa=_0x5553e9(),_0x3eb726=_0x5b51f5[_0x418059],!_0x3eb726||_0xb700fa-_0x3eb726['ts']>_0x4756a1[_0x4ce86f(0x291)][_0x4ce86f(0x264)]&&_0x3eb726['count']&&_0x3eb726[_0x4ce86f(0x255)]/_0x3eb726[_0x4ce86f(0x238)]<_0x4756a1['perLogpoint']['resetOnProcessingTimeAverageMs']?(_0x5b51f5[_0x418059]=_0x3eb726={'count':0x0,'time':0x0,'ts':_0xb700fa},_0x5b51f5[_0x4ce86f(0x206)]={}):_0xb700fa-_0x5b51f5['hits']['ts']>_0x4756a1['global']['resetWhenQuietMs']&&_0x5b51f5['hits']['count']&&_0x5b51f5[_0x4ce86f(0x206)]['time']/_0x5b51f5['hits'][_0x4ce86f(0x238)]<_0x4756a1['global'][_0x4ce86f(0x231)]&&(_0x5b51f5[_0x4ce86f(0x206)]={});let _0x41ced7=[],_0x1fbc3d=_0x3eb726['reduceLimits']||_0x5b51f5['hits']['reduceLimits']?_0x374151:_0x5aef3e,_0x2da3f7=_0x3d6b99=>{var _0x44db24=_0x4ce86f;let _0x4c46fe={};return _0x4c46fe[_0x44db24(0x1ef)]=_0x3d6b99[_0x44db24(0x1ef)],_0x4c46fe['elements']=_0x3d6b99[_0x44db24(0x1f7)],_0x4c46fe[_0x44db24(0x23c)]=_0x3d6b99[_0x44db24(0x23c)],_0x4c46fe['totalStrLength']=_0x3d6b99[_0x44db24(0x1de)],_0x4c46fe[_0x44db24(0x28a)]=_0x3d6b99[_0x44db24(0x28a)],_0x4c46fe[_0x44db24(0x21f)]=_0x3d6b99[_0x44db24(0x21f)],_0x4c46fe[_0x44db24(0x2c3)]=!0x1,_0x4c46fe[_0x44db24(0x1f5)]=!_0x3af781,_0x4c46fe[_0x44db24(0x2d4)]=0x1,_0x4c46fe['level']=0x0,_0x4c46fe[_0x44db24(0x1fb)]=_0x44db24(0x29b),_0x4c46fe[_0x44db24(0x296)]='root_exp',_0x4c46fe[_0x44db24(0x2bf)]=!0x0,_0x4c46fe[_0x44db24(0x1e2)]=[],_0x4c46fe[_0x44db24(0x28f)]=0x0,_0x4c46fe[_0x44db24(0x226)]=_0x39e136[_0x44db24(0x226)],_0x4c46fe[_0x44db24(0x2b7)]=0x0,_0x4c46fe[_0x44db24(0x286)]={'current':void 0x0,'parent':void 0x0,'index':0x0},_0x4c46fe;};for(var _0x42e392=0x0;_0x42e392<_0x4cd5b2[_0x4ce86f(0x1ee)];_0x42e392++)_0x41ced7[_0x4ce86f(0x2e0)](_0x4fccde[_0x4ce86f(0x2b2)]({'timeNode':_0x577f01==='time'||void 0x0},_0x4cd5b2[_0x42e392],_0x2da3f7(_0x1fbc3d),{}));if(_0x577f01===_0x4ce86f(0x29f)||_0x577f01===_0x4ce86f(0x29e)){let _0x4f7582=Error['stackTraceLimit'];try{Error[_0x4ce86f(0x221)]=0x1/0x0,_0x41ced7['push'](_0x4fccde[_0x4ce86f(0x2b2)]({'stackNode':!0x0},new Error()[_0x4ce86f(0x22e)],_0x2da3f7(_0x1fbc3d),{'strLength':0x1/0x0}));}finally{Error[_0x4ce86f(0x221)]=_0x4f7582;}}return{'method':_0x4ce86f(0x2d3),'version':_0x4cee6a,'args':[{'ts':_0x269690,'session':_0x32321b,'args':_0x41ced7,'id':_0x418059,'context':_0x52912d}]};}catch(_0x2a8c31){return{'method':_0x4ce86f(0x2d3),'version':_0x4cee6a,'args':[{'ts':_0x269690,'session':_0x32321b,'args':[{'type':_0x4ce86f(0x2a8),'error':_0x2a8c31&&_0x2a8c31['message']}],'id':_0x418059,'context':_0x52912d}]};}finally{try{if(_0x3eb726&&_0xb700fa){let _0x28b06b=_0x5553e9();_0x3eb726[_0x4ce86f(0x238)]++,_0x3eb726['time']+=_0x13f85b(_0xb700fa,_0x28b06b),_0x3eb726['ts']=_0x28b06b,_0x5b51f5[_0x4ce86f(0x206)]['count']++,_0x5b51f5[_0x4ce86f(0x206)][_0x4ce86f(0x255)]+=_0x13f85b(_0xb700fa,_0x28b06b),_0x5b51f5[_0x4ce86f(0x206)]['ts']=_0x28b06b,(_0x3eb726['count']>_0x4756a1['perLogpoint'][_0x4ce86f(0x1e8)]||_0x3eb726[_0x4ce86f(0x255)]>_0x4756a1[_0x4ce86f(0x291)][_0x4ce86f(0x281)])&&(_0x3eb726[_0x4ce86f(0x201)]=!0x0),(_0x5b51f5[_0x4ce86f(0x206)][_0x4ce86f(0x238)]>_0x4756a1[_0x4ce86f(0x2d7)][_0x4ce86f(0x1e8)]||_0x5b51f5[_0x4ce86f(0x206)][_0x4ce86f(0x255)]>_0x4756a1[_0x4ce86f(0x2d7)]['reduceOnAccumulatedProcessingTimeMs'])&&(_0x5b51f5[_0x4ce86f(0x206)]['reduceLimits']=!0x0);}}catch{}}}return _0x1a7762;}function G(_0x372717){var _0x766cc9=_0x3890c8;if(_0x372717&&typeof _0x372717=='object'&&_0x372717[_0x766cc9(0x277)])switch(_0x372717[_0x766cc9(0x277)]['name']){case _0x766cc9(0x256):return _0x372717[_0x766cc9(0x21a)](Symbol['iterator'])?Promise['resolve']():_0x372717;case _0x766cc9(0x1fe):return Promise[_0x766cc9(0x25e)]();}return _0x372717;}((_0xc5752,_0xa30047,_0x3f3995,_0x363a2d,_0x27a42d,_0x5b6f79,_0x45d099,_0x2bc6fb,_0x126cff,_0x1d3c75,_0x2e3f19,_0x464da7)=>{var _0xd5f224=_0x3890c8;if(_0xc5752[_0xd5f224(0x289)])return _0xc5752[_0xd5f224(0x289)];let _0x41b2d1={'consoleLog':()=>{},'consoleTrace':()=>{},'consoleTime':()=>{},'consoleTimeEnd':()=>{},'autoLog':()=>{},'autoLogMany':()=>{},'autoTraceMany':()=>{},'coverage':()=>{},'autoTrace':()=>{},'autoTime':()=>{},'autoTimeEnd':()=>{}};if(!X(_0xc5752,_0x2bc6fb,_0x27a42d))return _0xc5752[_0xd5f224(0x289)]=_0x41b2d1,_0xc5752['_console_ninja'];let _0x3886d2=b(_0xc5752),_0x2794c3=_0x3886d2[_0xd5f224(0x276)],_0x44129f=_0x3886d2[_0xd5f224(0x2be)],_0x277b60=_0x3886d2[_0xd5f224(0x2b0)],_0x5b8e52={'hits':{},'ts':{}},_0x1f8b30=J(_0xc5752,_0x126cff,_0x5b8e52,_0x5b6f79,_0x464da7,_0x27a42d===_0xd5f224(0x244)?G:void 0x0),_0x46c143=(_0x82e8dd,_0x59b610,_0x51fdcc,_0x5c78c9,_0x42589f,_0x28db7b)=>{var _0xf273d1=_0xd5f224;let _0x39c71d=_0xc5752[_0xf273d1(0x289)];try{return _0xc5752['_console_ninja']=_0x41b2d1,_0x1f8b30(_0x82e8dd,_0x59b610,_0x51fdcc,_0x5c78c9,_0x42589f,_0x28db7b);}finally{_0xc5752[_0xf273d1(0x289)]=_0x39c71d;}},_0x186fbf=_0x4900f9=>{_0x5b8e52['ts'][_0x4900f9]=_0x44129f();},_0x21fa3c=(_0x242207,_0x1074db)=>{var _0x67dc13=_0xd5f224;let _0x44431a=_0x5b8e52['ts'][_0x1074db];if(delete _0x5b8e52['ts'][_0x1074db],_0x44431a){let _0x41f6fe=_0x2794c3(_0x44431a,_0x44129f());_0x13354f(_0x46c143(_0x67dc13(0x255),_0x242207,_0x277b60(),_0x728f74,[_0x41f6fe],_0x1074db));}},_0x341135=_0x55d522=>{var _0x594af4=_0xd5f224,_0x22d04b;return _0x27a42d==='next.js'&&_0xc5752[_0x594af4(0x224)]&&((_0x22d04b=_0x55d522==null?void 0x0:_0x55d522[_0x594af4(0x2d9)])==null?void 0x0:_0x22d04b[_0x594af4(0x1ee)])&&(_0x55d522[_0x594af4(0x2d9)][0x0][_0x594af4(0x224)]=_0xc5752['origin']),_0x55d522;};_0xc5752['_console_ninja']={'consoleLog':(_0x18a087,_0x257091)=>{var _0x240148=_0xd5f224;_0xc5752[_0x240148(0x1e7)]['log'][_0x240148(0x273)]!==_0x240148(0x227)&&_0x13354f(_0x46c143(_0x240148(0x2d3),_0x18a087,_0x277b60(),_0x728f74,_0x257091));},'consoleTrace':(_0x16338a,_0x54e3f4)=>{var _0x1399d8=_0xd5f224,_0x26a166,_0x49fc60;_0xc5752[_0x1399d8(0x1e7)]['log'][_0x1399d8(0x273)]!==_0x1399d8(0x1e6)&&((_0x49fc60=(_0x26a166=_0xc5752[_0x1399d8(0x266)])==null?void 0x0:_0x26a166[_0x1399d8(0x2a9)])!=null&&_0x49fc60[_0x1399d8(0x286)]&&(_0xc5752[_0x1399d8(0x2a2)]=!0x0),_0x13354f(_0x341135(_0x46c143(_0x1399d8(0x29f),_0x16338a,_0x277b60(),_0x728f74,_0x54e3f4))));},'consoleError':(_0x19664d,_0x4a89b4)=>{var _0x53d07d=_0xd5f224;_0xc5752[_0x53d07d(0x2a2)]=!0x0,_0x13354f(_0x341135(_0x46c143(_0x53d07d(0x29e),_0x19664d,_0x277b60(),_0x728f74,_0x4a89b4)));},'consoleTime':_0x4b8fda=>{_0x186fbf(_0x4b8fda);},'consoleTimeEnd':(_0x53faf9,_0x3ec558)=>{_0x21fa3c(_0x3ec558,_0x53faf9);},'autoLog':(_0x5aeaac,_0x2074bc)=>{_0x13354f(_0x46c143('log',_0x2074bc,_0x277b60(),_0x728f74,[_0x5aeaac]));},'autoLogMany':(_0x3634a2,_0x3fd372)=>{var _0x24da29=_0xd5f224;_0x13354f(_0x46c143(_0x24da29(0x2d3),_0x3634a2,_0x277b60(),_0x728f74,_0x3fd372));},'autoTrace':(_0x5bfb94,_0xee276a)=>{var _0xc67014=_0xd5f224;_0x13354f(_0x341135(_0x46c143(_0xc67014(0x29f),_0xee276a,_0x277b60(),_0x728f74,[_0x5bfb94])));},'autoTraceMany':(_0x29b396,_0x5dc6f1)=>{var _0x6097b4=_0xd5f224;_0x13354f(_0x341135(_0x46c143(_0x6097b4(0x29f),_0x29b396,_0x277b60(),_0x728f74,_0x5dc6f1)));},'autoTime':(_0x1ec463,_0x159318,_0xf6b2dc)=>{_0x186fbf(_0xf6b2dc);},'autoTimeEnd':(_0x3f6263,_0x4ce919,_0x1e750a)=>{_0x21fa3c(_0x4ce919,_0x1e750a);},'coverage':_0x25e683=>{_0x13354f({'method':'coverage','version':_0x5b6f79,'args':[{'id':_0x25e683}]});}};let _0x13354f=H(_0xc5752,_0xa30047,_0x3f3995,_0x363a2d,_0x27a42d,_0x1d3c75,_0x2e3f19),_0x728f74=_0xc5752[_0xd5f224(0x29d)];return _0xc5752[_0xd5f224(0x289)];})(globalThis,'127.0.0.1',_0x3890c8(0x253),_0x3890c8(0x27a),'vite',_0x3890c8(0x2ac),_0x3890c8(0x2c0),_0x3890c8(0x2e1),_0x3890c8(0x259),_0x3890c8(0x2e4),'1',_0x3890c8(0x211));`);
+  } catch (e) {
+    console.error(e);
+  }
+}
+function oo_oo(i, ...v) {
+  try {
+    oo_cm().consoleLog(i, v);
+  } catch (e) {
+  }
+  return v;
+}
+let win = null;
+function createWindow() {
+  win = new BrowserWindow({
     width: 1200,
     height: 800,
     webPreferences: {
-      preload: v(S.getAppPath(), "dist-electron", "preload.mjs"),
-      contextIsolation: !0,
-      nodeIntegration: !1
+      preload: join(app.getAppPath(), "dist-electron", "preload.mjs"),
+      contextIsolation: true,
+      nodeIntegration: false
     }
-  }), process.env.VITE_DEV_SERVER_URL ? (h.loadURL(process.env.VITE_DEV_SERVER_URL), h.webContents.openDevTools()) : h.loadFile(v(S.getAppPath(), "dist", "index.html"));
+  });
+  if (process.env.VITE_DEV_SERVER_URL) {
+    win.loadURL(process.env.VITE_DEV_SERVER_URL);
+    win.webContents.openDevTools();
+  } else {
+    win.loadFile(join(app.getAppPath(), "dist", "index.html"));
+  }
 }
-S.whenReady().then(() => {
-  it(), k();
+app.whenReady().then(() => {
+  bootstrap();
+  createWindow();
 });
-S.on("window-all-closed", () => {
-  process.platform !== "darwin" && S.quit();
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
 });
-S.on("activate", () => {
-  X.getAllWindows().length === 0 && k();
+app.on("activate", () => {
+  if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });

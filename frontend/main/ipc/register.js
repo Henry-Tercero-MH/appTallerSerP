@@ -43,6 +43,18 @@ import { createQuotesRepository } from '../modules/quotes/quotes.repository.js'
 import { createQuotesService }    from '../modules/quotes/quotes.service.js'
 import { registerQuotesIpc }      from '../modules/quotes/quotes.ipc.js'
 
+import { createExpensesRepository } from '../modules/expenses/expenses.repository.js'
+import { createExpensesService }    from '../modules/expenses/expenses.service.js'
+import { registerExpensesIpc }      from '../modules/expenses/expenses.ipc.js'
+
+import { createReturnsRepository } from '../modules/returns/returns.repository.js'
+import { createReturnsService }    from '../modules/returns/returns.service.js'
+import { registerReturnsIpc }      from '../modules/returns/returns.ipc.js'
+
+import { createInventoryRepository } from '../modules/inventory/inventory.repository.js'
+import { createInventoryService }    from '../modules/inventory/inventory.service.js'
+import { registerInventoryIpc }      from '../modules/inventory/inventory.ipc.js'
+
 const migrationModules = import.meta.glob('../database/migrations/*.sql', {
   query: '?raw',
   import: 'default',
@@ -104,6 +116,15 @@ export function bootstrap() {
   const quotesRepo = createQuotesRepository(db)
   const quotes     = createQuotesService(quotesRepo, settings, sales, receivables)
 
+  const expensesRepo = createExpensesRepository(db)
+  const expenses     = createExpensesService(expensesRepo)
+
+  const returnsRepo = createReturnsRepository(db)
+  const returns_    = createReturnsService(returnsRepo, salesRepo)
+
+  const inventoryRepo = createInventoryRepository(db)
+  const inventory     = createInventoryService(inventoryRepo)
+
   registerSettingsIpc(settings)
   registerProductsIpc(products)
   registerCustomersIpc(customers)
@@ -114,6 +135,9 @@ export function bootstrap() {
   registerPurchasesIpc(purchases)
   registerReceivablesIpc(receivables)
   registerQuotesIpc(quotes)
+  registerExpensesIpc(expenses)
+  registerReturnsIpc(returns_)
+  registerInventoryIpc(inventory)
 
   // ── Backup / restore ────────────────────────────────────────
   const dbPath = path.join(app.getPath('userData'), 'taller_pos.sqlite')

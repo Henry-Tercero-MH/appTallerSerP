@@ -17,7 +17,7 @@ import { CustomerCombobox } from '@/components/shared/CustomerCombobox'
 
 import { useSearchProducts, useCreateSale } from '@/hooks/useProducts'
 import { useTaxSettings, useCurrencySettings } from '@/hooks/useSettings'
-import { useCartStore, selectSubtotal, selectItemCount } from '@/stores/cartStore'
+import { useCartStore, selectSubtotal, selectItemCount, selectDiscount } from '@/stores/cartStore'
 import { computeBreakdown } from '@/lib/pricing'
 
 const DEFAULT_CUSTOMER_ID = 1
@@ -80,17 +80,19 @@ function POSInner() {
 
   const { data: products = [], isLoading, isError, error, refetch } = useSearchProducts(query)
 
-  const items      = useCartStore((s) => s.items)
-  const addItem    = useCartStore((s) => s.addItem)
-  const removeItem = useCartStore((s) => s.removeItem)
-  const updateQty  = useCartStore((s) => s.updateQuantity)
-  const clearCart  = useCartStore((s) => s.clear)
-  const itemCount  = useCartStore(selectItemCount)
-  const rawSum     = useCartStore(selectSubtotal)
+  const items       = useCartStore((s) => s.items)
+  const addItem     = useCartStore((s) => s.addItem)
+  const removeItem  = useCartStore((s) => s.removeItem)
+  const updateQty   = useCartStore((s) => s.updateQuantity)
+  const clearCart   = useCartStore((s) => s.clear)
+  const setDiscount = useCartStore((s) => s.setDiscount)
+  const itemCount   = useCartStore(selectItemCount)
+  const rawSum      = useCartStore(selectSubtotal)
+  const discount    = useCartStore(selectDiscount)
 
   const { rate: taxRate, included: taxIncluded } = useTaxSettings()
   const { decimals } = useCurrencySettings()
-  const breakdown = computeBreakdown(rawSum, taxRate, taxIncluded, decimals)
+  const breakdown = computeBreakdown(rawSum, taxRate, taxIncluded, decimals, discount.type, discount.value)
 
   const createSale = useCreateSale()
 
@@ -105,9 +107,11 @@ function POSInner() {
     createSale.mutate(
       {
         items: items.map((i) => ({ id: i.productId, qty: i.qty, price: i.price })),
-        customerId: customerId ?? DEFAULT_CUSTOMER_ID,
+        customerId:    customerId ?? DEFAULT_CUSTOMER_ID,
         paymentMethod: /** @type {'cash'|'credit'|'card'|'transfer'} */ (paymentMethod),
         clientType:    /** @type {'cf'|'registered'|'company'} */ (clientType),
+        discountType:  discount.type,
+        discountValue: discount.value,
       },
       {
         onSuccess: () => {
@@ -265,9 +269,54 @@ function POSInner() {
           )}
         </div>
 
+        {/* Descuento */}
+        <Separator />
+        <div className="pos-discount">
+          <span className="text-xs font-medium text-muted-foreground">Descuento</span>
+          <div className="flex gap-1 mt-1">
+            {[
+              { v: 'none',    l: 'Ninguno' },
+              { v: 'percent', l: '%' },
+              { v: 'fixed',   l: 'Q fijo' },
+            ].map(({ v, l }) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setDiscount(v, v === 'none' ? 0 : discount.value)}
+                className={[
+                  'flex-1 rounded border py-1 text-xs font-medium transition-colors',
+                  discount.type === v ? 'border-primary bg-primary text-white' : 'border-border hover:bg-muted',
+                ].join(' ')}
+              >{l}</button>
+            ))}
+          </div>
+          {discount.type !== 'none' && (
+            <input
+              type="number"
+              min="0"
+              step={discount.type === 'percent' ? '1' : '0.01'}
+              max={discount.type === 'percent' ? '100' : undefined}
+              placeholder={discount.type === 'percent' ? 'Ej. 10 (%)' : 'Ej. 25.00'}
+              value={discount.value || ''}
+              onChange={e => setDiscount(discount.type, parseFloat(e.target.value) || 0)}
+              className="mt-1 w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
+            />
+          )}
+        </div>
+
         {/* Totales */}
         <Separator />
         <div className="pos-totals">
+          <div className="pos-total-row text-xs text-muted-foreground">
+            <span>Bruto</span>
+            <MoneyDisplay amount={rawSum} />
+          </div>
+          {breakdown.discountAmount > 0 && (
+            <div className="pos-total-row text-xs text-emerald-600">
+              <span>Descuento</span>
+              <span>- <MoneyDisplay amount={breakdown.discountAmount} /></span>
+            </div>
+          )}
           <div className="pos-total-row">
             <span>Subtotal</span>
             <MoneyDisplay amount={breakdown.subtotal} />

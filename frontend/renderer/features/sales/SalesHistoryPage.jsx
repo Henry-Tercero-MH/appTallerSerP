@@ -1,10 +1,12 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   ChevronLeft, ChevronRight, Eye,
-  TrendingUp, ShoppingBag, RefreshCw, Ban,
+  TrendingUp, ShoppingBag, RefreshCw, Ban, Undo2,
+  Search, X, Calendar,
 } from 'lucide-react'
 
 import { Button }   from '@/components/ui/button'
+import { Input }    from '@/components/ui/input'
 
 import { PageHeader }     from '@/components/shared/PageHeader'
 import { EmptyState }     from '@/components/shared/EmptyState'
@@ -14,6 +16,7 @@ import { MoneyDisplay }   from '@/components/shared/MoneyDisplay'
 import { useSales } from '@/hooks/useSales'
 import { SaleDetailDialog } from './SaleDetailDialog'
 import { VoidSaleDialog }   from './VoidSaleDialog'
+import { ReturnDialog }     from './ReturnDialog'
 
 const PAGE_SIZE = 25
 
@@ -40,21 +43,52 @@ const CLIENT_LABELS = {
   company:    'Empresa',
 }
 
+const STATUS_OPTS = [
+  { value: '',       label: 'Todas'   },
+  { value: 'active', label: 'Activas' },
+  { value: 'voided', label: 'Anuladas'},
+]
+
 export default function SalesHistoryPage() {
-  const [page, setPage]             = useState(1)
-  const [openSaleId, setOpenSaleId] = useState(/** @type {number | null} */ (null))
-  const [voidSale,   setVoidSale]   = useState(/** @type {import('@/schemas/sale.schema').Sale | null} */ (null))
+  const [page,          setPage]          = useState(1)
+  const [openSaleId,    setOpenSaleId]    = useState(/** @type {number | null} */ (null))
+  const [voidSale,      setVoidSale]      = useState(/** @type {any} */ (null))
+  const [returnSaleId,  setReturnSaleId]  = useState(/** @type {number | null} */ (null))
+
+  // filtros
+  const [search,  setSearch]  = useState('')
+  const [from,    setFrom]    = useState('')
+  const [to,      setTo]      = useState('')
+  const [status,  setStatus]  = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(t)
+  }, [search])
+
+  // resetear página cuando cambia cualquier filtro
+  useEffect(() => { setPage(1) }, [debouncedSearch, from, to, status])
+
+  const hasFilters = !!(debouncedSearch || from || to || status)
+
+  function clearFilters() {
+    setSearch(''); setFrom(''); setTo(''); setStatus('')
+  }
 
   const { data, isLoading, isError, error, refetch, isFetching } = useSales({
     page,
     pageSize: PAGE_SIZE,
+    search:  debouncedSearch || undefined,
+    from:    from  || undefined,
+    to:      to    || undefined,
+    status:  status || undefined,
   })
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1
   const canPrev    = page > 1
   const canNext    = data ? page < totalPages : false
 
-  // Totales de la página actual
   const pageTotals = (data?.data ?? []).reduce(
     (acc, s) => ({ subtotal: acc.subtotal + s.subtotal, tax: acc.tax + s.tax_amount, total: acc.total + s.total }),
     { subtotal: 0, tax: 0, total: 0 }
@@ -65,18 +99,71 @@ export default function SalesHistoryPage() {
       <div className="sh-header-row">
         <PageHeader
           title="Historial de ventas"
-          subtitle="Registro de todas las transacciones. Los datos son los snapshotados al momento de cobrar."
+          subtitle="Registro de todas las transacciones."
         />
         <Button
-          variant="outline"
-          size="sm"
-          onClick={() => refetch()}
-          disabled={isFetching}
+          variant="outline" size="sm"
+          onClick={() => refetch()} disabled={isFetching}
           className="shrink-0 self-start mt-1"
         >
           <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${isFetching ? 'animate-spin' : ''}`} />
           Actualizar
         </Button>
+      </div>
+
+      {/* ── Barra de filtros ── */}
+      <div className="flex flex-wrap items-center gap-2 pb-1">
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+          <Input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Buscar folio, cliente o NIT..."
+            className="pl-8 h-8 text-xs w-56"
+          />
+          {search && (
+            <button onClick={() => setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1">
+          <Calendar className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          <input
+            type="date" value={from}
+            onChange={e => setFrom(e.target.value)}
+            className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+          />
+          <span className="text-xs text-muted-foreground">—</span>
+          <input
+            type="date" value={to}
+            onChange={e => setTo(e.target.value)}
+            className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+          />
+        </div>
+
+        <div className="flex rounded-md border border-input overflow-hidden text-xs">
+          {STATUS_OPTS.map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => setStatus(opt.value)}
+              className={`px-3 h-8 transition-colors ${
+                status === opt.value
+                  ? 'bg-primary text-primary-foreground font-medium'
+                  : 'bg-background text-muted-foreground hover:bg-muted'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
+        {hasFilters && (
+          <Button variant="ghost" size="sm" onClick={clearFilters} className="h-8 px-2 text-xs text-muted-foreground">
+            <X className="mr-1 h-3 w-3" /> Limpiar filtros
+          </Button>
+        )}
       </div>
 
       {/* ── Cuerpo ── */}
@@ -94,15 +181,18 @@ export default function SalesHistoryPage() {
 
       {!isLoading && !isError && data?.data.length === 0 && (
         <EmptyState
-          title="Sin ventas registradas"
-          description="Cuando proceses una venta en Facturar aparecerá aquí."
+          title={hasFilters ? 'Sin resultados para los filtros aplicados' : 'Sin ventas registradas'}
+          description={hasFilters ? 'Prueba ajustando la búsqueda o el rango de fechas.' : 'Cuando proceses una venta en Facturar aparecerá aquí.'}
           icon={<ShoppingBag className="h-10 w-10 opacity-25" />}
+          action={hasFilters
+            ? <Button variant="outline" size="sm" onClick={clearFilters}><X className="mr-1 h-3.5 w-3.5" />Limpiar filtros</Button>
+            : undefined
+          }
         />
       )}
 
       {!isLoading && !isError && data && data.data.length > 0 && (
         <div className="sh-table-card">
-          {/* Tabla */}
           <div className="sh-table-scroll">
             <table className="sh-table">
               <thead>
@@ -163,21 +253,18 @@ export default function SalesHistoryPage() {
                       </td>
                       <td className="sh-td text-right">
                         <div className="flex items-center justify-end gap-0.5">
-                          <button
-                            className="sh-eye-btn"
-                            title="Ver detalle"
-                            onClick={() => setOpenSaleId(sale.id)}
-                          >
+                          <button className="sh-eye-btn" title="Ver detalle" onClick={() => setOpenSaleId(sale.id)}>
                             <Eye className="h-3.5 w-3.5" />
                           </button>
                           {!isVoided && (
-                            <button
-                              className="sh-void-btn"
-                              title="Anular venta"
-                              onClick={() => setVoidSale(sale)}
-                            >
-                              <Ban className="h-3.5 w-3.5" />
-                            </button>
+                            <>
+                              <button className="sh-void-btn" title="Devolver productos" onClick={() => setReturnSaleId(sale.id)}>
+                                <Undo2 className="h-3.5 w-3.5" />
+                              </button>
+                              <button className="sh-void-btn" title="Anular venta" onClick={() => setVoidSale(sale)}>
+                                <Ban className="h-3.5 w-3.5" />
+                              </button>
+                            </>
                           )}
                         </div>
                       </td>
@@ -185,21 +272,15 @@ export default function SalesHistoryPage() {
                   )
                 })}
               </tbody>
-              {/* Fila de totales de página */}
               <tfoot>
                 <tr>
                   <td colSpan={6} className="sh-tf-label">
-                    Subtotales de esta página ({data.data.length} registros)
+                    Subtotales de esta página ({data.data.length} registros
+                    {hasFilters && ` · filtrado de ${data.total} total`})
                   </td>
-                  <td className="sh-tf sh-num">
-                    <MoneyDisplay amount={pageTotals.subtotal} />
-                  </td>
-                  <td className="sh-tf sh-num">
-                    <MoneyDisplay amount={pageTotals.tax} />
-                  </td>
-                  <td className="sh-tf sh-num sh-tf-total">
-                    <MoneyDisplay amount={pageTotals.total} />
-                  </td>
+                  <td className="sh-tf sh-num"><MoneyDisplay amount={pageTotals.subtotal} /></td>
+                  <td className="sh-tf sh-num"><MoneyDisplay amount={pageTotals.tax} /></td>
+                  <td className="sh-tf sh-num sh-tf-total"><MoneyDisplay amount={pageTotals.total} /></td>
                   <td className="sh-tf" />
                 </tr>
               </tfoot>
@@ -213,42 +294,30 @@ export default function SalesHistoryPage() {
               <span>
                 Página <strong>{data.page}</strong> de <strong>{totalPages}</strong>
                 &nbsp;·&nbsp;
-                <strong>{data.total}</strong> venta{data.total === 1 ? '' : 's'} en total
+                <strong>{data.total}</strong> venta{data.total === 1 ? '' : 's'}
+                {hasFilters && ' (filtradas)'}
               </span>
               {isFetching && <span className="sh-pag-updating">actualizando…</span>}
             </div>
             <div className="flex gap-1.5">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={!canPrev || isFetching}
-                className="h-7 px-2.5 text-xs"
-              >
+              <Button variant="outline" size="sm"
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={!canPrev || isFetching} className="h-7 px-2.5 text-xs">
                 <ChevronLeft className="mr-1 h-3.5 w-3.5" /> Anterior
               </Button>
-              {/* Números de página (máx 5 visibles) */}
               {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
                 const start = Math.max(1, Math.min(page - 2, totalPages - 4))
                 const p     = start + i
                 return (
-                  <button
-                    key={p}
-                    onClick={() => setPage(p)}
-                    disabled={isFetching}
-                    className={`sh-pag-num ${p === page ? 'sh-pag-active' : ''}`}
-                  >
+                  <button key={p} onClick={() => setPage(p)} disabled={isFetching}
+                    className={`sh-pag-num ${p === page ? 'sh-pag-active' : ''}`}>
                     {p}
                   </button>
                 )
               })}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setPage((p) => p + 1)}
-                disabled={!canNext || isFetching}
-                className="h-7 px-2.5 text-xs"
-              >
+              <Button variant="outline" size="sm"
+                onClick={() => setPage(p => p + 1)}
+                disabled={!canNext || isFetching} className="h-7 px-2.5 text-xs">
                 Siguiente <ChevronRight className="ml-1 h-3.5 w-3.5" />
               </Button>
             </div>
@@ -258,14 +327,17 @@ export default function SalesHistoryPage() {
 
       <SaleDetailDialog
         open={openSaleId != null}
-        onOpenChange={(open) => { if (!open) setOpenSaleId(null) }}
+        onOpenChange={open => { if (!open) setOpenSaleId(null) }}
         saleId={openSaleId}
       />
-
       <VoidSaleDialog
         open={voidSale != null}
-        onOpenChange={(open) => { if (!open) setVoidSale(null) }}
+        onOpenChange={open => { if (!open) setVoidSale(null) }}
         sale={voidSale}
+      />
+      <ReturnDialog
+        saleId={returnSaleId}
+        onClose={() => setReturnSaleId(null)}
       />
     </div>
   )

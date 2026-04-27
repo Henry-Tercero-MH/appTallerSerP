@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom'
 import {
   ShoppingCart, ClipboardList, Package, Users,
-  TrendingUp, AlertTriangle, Landmark, Wallet,
+  TrendingUp, TrendingDown, AlertTriangle, Landmark, Wallet,
   CreditCard, ArrowUpRight, ArrowDownRight, Box,
 } from 'lucide-react'
 
@@ -15,6 +15,7 @@ import { useInventoryProducts }  from '@/features/warehouses/inventoryStore'
 import { useOpenSession }        from '@/hooks/useCash'
 import { useReceivables, useReceivablesSummary } from '@/hooks/useReceivables'
 import { usePurchaseOrders }     from '@/hooks/usePurchases'
+import { useExpenseSummary }     from '@/hooks/useExpenses'
 import { ROUTES }                from '@/lib/constants'
 
 const dateFmt  = new Intl.DateTimeFormat('es-GT', { dateStyle: 'full' })
@@ -23,6 +24,7 @@ const fmtDate  = (s) => s ? new Intl.DateTimeFormat('es-GT', { dateStyle: 'short
 
 export default function SystemDashboard() {
   const navigate = useNavigate()
+  const today    = new Date().toISOString().slice(0, 10)
 
   const { data: report,    isLoading: loadingReport }  = useDailyReport()
   const { data: products = [] }                        = useInventoryProducts()
@@ -30,12 +32,11 @@ export default function SystemDashboard() {
   const { data: recvList = [] }                        = useReceivables()
   const { data: recvSummary }                          = useReceivablesSummary()
   const { data: orders = [] }                          = usePurchaseOrders()
+  const { data: expSummary }                           = useExpenseSummary(today, today)
 
   const summary     = report?.summary ?? null
   const lowStock    = products.filter(p => p.is_active === 1 && p.stock <= p.min_stock)
   const activeProds = products.filter(p => p.is_active === 1).length
-
-  const today       = new Date().toISOString().slice(0, 10)
   const overdueRecv = recvList.filter(r => ['pending','partial'].includes(r.status) && r.due_date && r.due_date < today)
   const pendingOrders = orders.filter(o => ['draft','sent'].includes(o.status))
 
@@ -101,8 +102,8 @@ export default function SystemDashboard() {
             <div className="db-kpi-grid">
               <KpiCard label="Transacciones"    value={summary?.sale_count ?? 0}             suffix="ventas"  icon={<ShoppingCart className="db-kpi-icon" />} />
               <KpiCard label="Subtotal"         value={fmtMoney(summary?.subtotal ?? 0)}                      icon={<TrendingUp className="db-kpi-icon text-blue-500" />} />
-              <KpiCard label="Impuesto (IVA)"   value={fmtMoney(summary?.tax_amount ?? 0)}                    icon={<ArrowUpRight className="db-kpi-icon text-slate-400" />} />
               <KpiCard label="Total cobrado"    value={fmtMoney(summary?.total ?? 0)}                         icon={<TrendingUp className="db-kpi-icon text-emerald-600" />} highlight />
+              <KpiCard label="Gastos del día"   value={fmtMoney(expSummary?.today ?? 0)}                      icon={<TrendingDown className="db-kpi-icon text-red-500" />} danger />
             </div>
           )
         }
@@ -316,15 +317,15 @@ export default function SystemDashboard() {
   )
 }
 
-function KpiCard({ label, value, suffix, icon, highlight = false }) {
+function KpiCard({ label, value, suffix, icon, highlight = false, danger = false }) {
   return (
-    <Card className={highlight ? 'border-primary/40 bg-primary/5' : undefined}>
+    <Card className={highlight ? 'border-primary/40 bg-primary/5' : danger ? 'border-red-200 bg-red-50/50' : undefined}>
       <CardContent className="p-4">
         <div className="flex items-center gap-2 mb-2">
           {icon}
           <span className="text-xs text-muted-foreground">{label}</span>
         </div>
-        <div className={`text-xl font-bold ${highlight ? 'text-primary' : ''}`}>{value}</div>
+        <div className={`text-xl font-bold ${highlight ? 'text-primary' : danger ? 'text-red-600' : ''}`}>{value}</div>
         {suffix && <p className="text-xs text-muted-foreground mt-0.5">{suffix}</p>}
       </CardContent>
     </Card>
