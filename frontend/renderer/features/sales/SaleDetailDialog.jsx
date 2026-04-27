@@ -14,6 +14,7 @@ import {
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { MoneyDisplay } from '@/components/shared/MoneyDisplay'
 import { useSale } from '@/hooks/useSales'
+import { useBusinessSettings } from '@/hooks/useSettings'
 
 const dateFmt = new Intl.DateTimeFormat('es-GT', {
   dateStyle: 'medium',
@@ -94,6 +95,7 @@ export function SaleDetailDialog({ open, onOpenChange, saleId }) {
 function Ticket({ sale }) {
   const taxPct   = Math.round(sale.tax_rate_applied * 100)
   const isVoided = sale.status === 'voided'
+  const { name: bizName, logo: bizLogo } = useBusinessSettings()
 
   return (
     <div className="print-friendly space-y-4 text-sm relative overflow-hidden">
@@ -135,7 +137,9 @@ function Ticket({ sale }) {
       )}
 
       <header className="space-y-1 text-center">
-        <p className="text-base font-semibold">Comprobante de venta</p>
+        {bizLogo && <img src={bizLogo} alt={bizName} style={{ height: 48, margin: '0 auto 4px' }} />}
+        <p className="text-base font-bold">{bizName}</p>
+        <p className="text-sm font-semibold text-muted-foreground">Comprobante de venta</p>
         <p className="text-xs text-muted-foreground">
           {dateFmt.format(new Date(sale.date.replace(' ', 'T')))} · Folio interno #{sale.id}
         </p>

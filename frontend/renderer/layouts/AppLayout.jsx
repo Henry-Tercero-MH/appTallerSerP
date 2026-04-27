@@ -18,23 +18,25 @@ import {
   MdChevronRight,
   MdShield,
 } from 'react-icons/md';
-import { Landmark } from 'lucide-react';
+import { Landmark, ShoppingCart, Wallet, FileText } from 'lucide-react';
 
 const NAV = [
   { to: ROUTES.DASHBOARD, label: 'Dashboard',         icon: MdDashboard },
   { to: ROUTES.POS,       label: 'Facturar',          icon: MdPointOfSale },
   { to: ROUTES.HISTORY,   label: 'Historial',         icon: MdReceiptLong },
-  { to: ROUTES.WORKSHOP,  label: 'Taller',            icon: MdBuild },
   { to: ROUTES.INVENTORY, label: 'Productos / Stock', icon: MdInventory },
   { to: ROUTES.CLIENTS,   label: 'Clientes',          icon: MdPeopleOutline },
   { to: ROUTES.REPORTS,   label: 'Reportes',          icon: MdInsertChartOutlined },
 ];
 
 const ADMIN_NAV = [
-  { to: ROUTES.CASH,     label: 'Caja',           icon: Landmark },
-  { to: ROUTES.USERS,    label: 'Usuarios',       icon: MdManageAccounts },
-  { to: ROUTES.SETTINGS, label: 'Configuración',  icon: MdSettings },
-  { to: ROUTES.AUDIT,    label: 'Bitácora',       icon: MdShield },
+  { to: ROUTES.CASH,      label: 'Caja',           icon: Landmark },
+  { to: ROUTES.PURCHASES,   label: 'Compras',            icon: ShoppingCart },
+  { to: ROUTES.RECEIVABLES, label: 'Cuentas por Cobrar', icon: Wallet },
+  { to: ROUTES.QUOTES,      label: 'Cotizaciones',       icon: FileText },
+  { to: ROUTES.USERS,     label: 'Usuarios',        icon: MdManageAccounts },
+  { to: ROUTES.SETTINGS,  label: 'Configuración',   icon: MdSettings },
+  { to: ROUTES.AUDIT,     label: 'Bitácora',        icon: MdShield },
 ];
 
 /** @returns {[boolean, () => void]} */

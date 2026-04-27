@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
-import { Building2, Check, Palette, Printer, ShieldCheck } from 'lucide-react'
+import { Building2, Check, Palette, Printer, ShieldCheck, Database, Download } from 'lucide-react'
 
 import { Button }   from '@/components/ui/button'
 import { Input }    from '@/components/ui/input'
@@ -429,7 +429,47 @@ export default function SettingsPage() {
           ]}
         />
 
+        <BackupSection />
+
       </div>
     </div>
+  )
+}
+
+// ── Sección: Respaldo de base de datos ───────────────────────────────────────
+function BackupSection() {
+  const [loading, setLoading] = useState(false)
+
+  async function handleBackup() {
+    setLoading(true)
+    try {
+      const res = await window.api.db.backup()
+      if (!res.ok) { toast.error(res.error.message); return }
+      if (res.data) toast.success(`Respaldo guardado en:\n${res.data}`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error al crear respaldo')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Database className="h-4 w-4" /> Respaldo de datos
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Exporta una copia de la base de datos SQLite. Guárdala en un lugar seguro para recuperar
+          todos tus datos en caso de pérdida.
+        </p>
+        <Button variant="outline" size="sm" onClick={handleBackup} disabled={loading}>
+          <Download className="mr-1.5 h-4 w-4" />
+          {loading ? 'Generando respaldo...' : 'Descargar respaldo (.sqlite)'}
+        </Button>
+      </CardContent>
+    </Card>
   )
 }

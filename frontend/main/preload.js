@@ -55,6 +55,7 @@ const api = {
     list:        (opts)     => ipcRenderer.invoke('sales:list', opts),
     dailyReport: ()         => ipcRenderer.invoke('sales:daily-report'),
     void:        (input)    => ipcRenderer.invoke('sales:void', input),
+    rangeReport: (range)    => ipcRenderer.invoke('sales:range-report', range),
   },
 
   audit: {
@@ -85,6 +86,32 @@ const api = {
     open:         (input)  => ipcRenderer.invoke('cash:open', input),
     close:        (input)  => ipcRenderer.invoke('cash:close', input),
     addMovement:  (input)  => ipcRenderer.invoke('cash:add-movement', input),
+  },
+
+  quotes: {
+    list:       ()          => ipcRenderer.invoke('quotes:list'),
+    get:        (id)        => ipcRenderer.invoke('quotes:get', id),
+    create:     (input)     => ipcRenderer.invoke('quotes:create', input),
+    update:     (id, input) => ipcRenderer.invoke('quotes:update', id, input),
+    markSent:   (id)        => ipcRenderer.invoke('quotes:mark-sent', id),
+    accept:     (id)        => ipcRenderer.invoke('quotes:accept', id),
+    reject:     (id)        => ipcRenderer.invoke('quotes:reject', id),
+    convert:            (input) => ipcRenderer.invoke('quotes:convert', input),
+    convertReceivable:  (input) => ipcRenderer.invoke('quotes:convert-receivable', input),
+  },
+
+  db: {
+    backup:  () => ipcRenderer.invoke('db:backup'),
+    getPath: () => ipcRenderer.invoke('db:get-path'),
+  },
+
+  receivables: {
+    list:         ()       => ipcRenderer.invoke('receivables:list'),
+    get:          (id)     => ipcRenderer.invoke('receivables:get', id),
+    summary:      ()       => ipcRenderer.invoke('receivables:summary'),
+    create:       (input)  => ipcRenderer.invoke('receivables:create', input),
+    applyPayment: (input)  => ipcRenderer.invoke('receivables:apply-payment', input),
+    cancel:       (id)     => ipcRenderer.invoke('receivables:cancel', id),
   },
 }
 

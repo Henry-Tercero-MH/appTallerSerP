@@ -15,6 +15,9 @@ import UsersPage from '../features/users/UsersPage';
 import SettingsPage from '../features/settings/SettingsPage';
 import AuditLogPage from '../features/audit/AuditLogPage';
 import CashRegisterPage from '../features/cash/CashRegisterPage';
+import PurchasesPage from '../features/purchases/PurchasesPage';
+import ReceivablesPage from '../features/receivables/ReceivablesPage';
+import QuotesPage from '../features/quotes/QuotesPage';
 import AdminRoute from '../layouts/AdminRoute';
 
 import { ROUTES } from '../lib/constants';
@@ -44,7 +47,10 @@ export const router = createHashRouter([
               { path: ROUTES.USERS,    element: <UsersPage /> },
               { path: ROUTES.SETTINGS, element: <SettingsPage /> },
               { path: ROUTES.AUDIT,    element: <AuditLogPage /> },
-              { path: ROUTES.CASH,     element: <CashRegisterPage /> },
+              { path: ROUTES.CASH,      element: <CashRegisterPage /> },
+              { path: ROUTES.PURCHASES,   element: <PurchasesPage /> },
+              { path: ROUTES.RECEIVABLES, element: <ReceivablesPage /> },
+              { path: ROUTES.QUOTES,      element: <QuotesPage /> },
             ],
           },
           { path: '*', element: <Navigate to={ROUTES.DASHBOARD} replace /> },

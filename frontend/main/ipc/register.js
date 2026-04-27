@@ -1,3 +1,5 @@
+import { ipcMain, dialog, app } from 'electron'
+import path from 'path'
 import { getDb } from '../database/connection.js'
 import { runMigrations } from '../database/migrator.js'
 
@@ -32,6 +34,14 @@ import { registerCashIpc }      from '../modules/cash/cash.ipc.js'
 import { createPurchasesRepository } from '../modules/purchases/purchases.repository.js'
 import { createPurchasesService }    from '../modules/purchases/purchases.service.js'
 import { registerPurchasesIpc }      from '../modules/purchases/purchases.ipc.js'
+
+import { createReceivablesRepository } from '../modules/receivables/receivables.repository.js'
+import { createReceivablesService }    from '../modules/receivables/receivables.service.js'
+import { registerReceivablesIpc }      from '../modules/receivables/receivables.ipc.js'
+
+import { createQuotesRepository } from '../modules/quotes/quotes.repository.js'
+import { createQuotesService }    from '../modules/quotes/quotes.service.js'
+import { registerQuotesIpc }      from '../modules/quotes/quotes.ipc.js'
 
 const migrationModules = import.meta.glob('../database/migrations/*.sql', {
   query: '?raw',
@@ -88,6 +98,12 @@ export function bootstrap() {
   const purchasesRepo = createPurchasesRepository(db)
   const purchases     = createPurchasesService(purchasesRepo)
 
+  const receivablesRepo = createReceivablesRepository(db)
+  const receivables     = createReceivablesService(receivablesRepo)
+
+  const quotesRepo = createQuotesRepository(db)
+  const quotes     = createQuotesService(quotesRepo, settings, sales, receivables)
+
   registerSettingsIpc(settings)
   registerProductsIpc(products)
   registerCustomersIpc(customers)
@@ -96,4 +112,26 @@ export function bootstrap() {
   registerAuditIpc(audit)
   registerCashIpc(cash)
   registerPurchasesIpc(purchases)
+  registerReceivablesIpc(receivables)
+  registerQuotesIpc(quotes)
+
+  // ── Backup / restore ────────────────────────────────────────
+  const dbPath = path.join(app.getPath('userData'), 'taller_pos.sqlite')
+
+  ipcMain.handle('db:backup', async () => {
+    try {
+      const { filePath, canceled } = await dialog.showSaveDialog({
+        title: 'Guardar respaldo de base de datos',
+        defaultPath: `backup_${new Date().toISOString().slice(0,10)}.sqlite`,
+        filters: [{ name: 'SQLite', extensions: ['sqlite'] }],
+      })
+      if (canceled || !filePath) return { ok: true, data: null }
+      db.backup(filePath)
+      return { ok: true, data: filePath }
+    } catch (err) {
+      return { ok: false, error: { code: 'BACKUP_ERROR', message: err.message } }
+    }
+  })
+
+  ipcMain.handle('db:get-path', () => ({ ok: true, data: dbPath }))
 }

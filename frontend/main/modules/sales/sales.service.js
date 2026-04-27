@@ -249,5 +249,23 @@ export function createSalesService(repo, settings, customers, audit) {
         topProducts: repo.getTopProducts(),
       }
     },
+
+    /**
+     * Reporte de ventas por rango de fechas: serie diaria, top productos,
+     * horarios concurridos, días de semana y métodos de pago.
+     * @param {{ from: string, to: string }} range  Formato YYYY-MM-DD
+     */
+    rangeReport({ from, to }) {
+      if (!from || !to || from > to) {
+        throw Object.assign(new Error('Rango de fechas inválido'), { code: 'INVALID_DATE_RANGE' })
+      }
+      return {
+        series:         repo.getSalesByDate({ from, to }),
+        topProducts:    repo.getTopProductsRange({ from, to }),
+        byHour:         repo.getSalesByHour({ from, to }),
+        byWeekday:      repo.getSalesByWeekday({ from, to }),
+        byPaymentMethod: repo.getSalesByPaymentMethod({ from, to }),
+      }
+    },
   }
 }

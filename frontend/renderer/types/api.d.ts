@@ -292,6 +292,70 @@ export interface CashMovementInput {
   concept: string
 }
 
+export interface ReceivableRow {
+  id: number
+  customer_id: number | null
+  customer_name: string
+  customer_nit: string | null
+  description: string
+  amount: number
+  amount_paid: number
+  due_date: string | null
+  status: 'pending' | 'partial' | 'paid' | 'cancelled'
+  notes: string | null
+  created_by: number | null
+  created_by_name: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ReceivablePaymentRow {
+  id: number
+  receivable_id: number
+  amount: number
+  payment_method: string
+  notes: string | null
+  created_by: number | null
+  created_by_name: string | null
+  created_at: string
+}
+
+export interface ReceivableDetail {
+  receivable: ReceivableRow
+  payments: ReceivablePaymentRow[]
+}
+
+export interface ReceivableSummary {
+  total_count: number
+  total_amount: number
+  total_paid: number
+  total_balance: number
+  pending_balance: number
+  partial_balance: number
+  overdue_balance: number
+}
+
+export interface ReceivableCreateInput {
+  customerId?: number
+  customerName: string
+  customerNit?: string
+  description: string
+  amount: number
+  dueDate?: string
+  notes?: string
+  userId: number
+  userName: string
+}
+
+export interface ApplyPaymentInput {
+  receivableId: number
+  amount: number
+  paymentMethod?: string
+  notes?: string
+  userId: number
+  userName: string
+}
+
 export interface RendererApi {
   settings: {
     getAll():                                        Promise<IpcResponse<SettingsByCategory>>
@@ -361,6 +425,16 @@ export interface RendererApi {
     open(input: CashOpenInput):                      Promise<IpcResponse<CashSessionRow>>
     close(input: CashCloseInput):                    Promise<IpcResponse<CashSessionRow>>
     addMovement(input: CashMovementInput):           Promise<IpcResponse<CashMovementRow>>
+  }
+}
+
+  receivables: {
+    list():                                              Promise<IpcResponse<ReceivableRow[]>>
+    get(id: number):                                     Promise<IpcResponse<ReceivableDetail>>
+    summary():                                           Promise<IpcResponse<ReceivableSummary>>
+    create(input: ReceivableCreateInput):                Promise<IpcResponse<ReceivableRow>>
+    applyPayment(input: ApplyPaymentInput):              Promise<IpcResponse<ReceivableRow>>
+    cancel(id: number):                                  Promise<IpcResponse<ReceivableRow>>
   }
 }
 

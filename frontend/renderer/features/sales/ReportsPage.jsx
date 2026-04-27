@@ -1,9 +1,14 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import {
   BarChart3, RefreshCw, ShoppingCart, TrendingUp, Package,
   FileSpreadsheet, FileText, Download, AlertTriangle, Users,
-  CalendarDays, ClipboardList,
+  CalendarDays, ClipboardList, Clock, CreditCard,
 } from 'lucide-react'
+import {
+  BarChart, Bar, LineChart, Line,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  Cell, PieChart, Pie, Legend,
+} from 'recharts'
 
 import { Button }       from '@/components/ui/button'
 import { PageHeader }   from '@/components/shared/PageHeader'
@@ -11,7 +16,7 @@ import { EmptyState }   from '@/components/shared/EmptyState'
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { MoneyDisplay } from '@/components/shared/MoneyDisplay'
 
-import { useDailyReport }     from '@/hooks/useSales'
+import { useDailyReport, useRangeReport } from '@/hooks/useSales'
 import { useProducts }        from '@/hooks/useProducts'
 import { useSearchCustomers } from '@/hooks/useCustomers'
 
@@ -38,9 +43,15 @@ export default function ReportsPage() {
     from: new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10),
     to:   new Date().toISOString().slice(0, 10),
   })
+  const [chartRange, setChartRange] = useState({
+    from: new Date(Date.now() - 29 * 86400_000).toISOString().slice(0, 10),
+    to:   new Date().toISOString().slice(0, 10),
+  })
+  const [chartType, setChartType] = useState(/** @type {'bar'|'line'} */ ('bar'))
   const [loadingReport, setLoadingReport] = useState(/** @type {string|null} */ (null))
 
   const { data: dailyData, isLoading: dailyLoading, isError: dailyError, refetch, isFetching } = useDailyReport()
+  const { data: rangeData, isLoading: rangeLoading } = useRangeReport(chartRange)
   const { data: products = [] } = useProducts()
   const { data: customers = [] } = useSearchCustomers('', { includeInactive: true })
 
@@ -131,6 +142,9 @@ export default function ReportsPage() {
           )}
         </>
       )}
+
+      {/* ── Análisis por rango ────────────────────────────────────────────── */}
+      <AnalyticsSection chartRange={chartRange} setChartRange={setChartRange} rangeData={rangeData} rangeLoading={rangeLoading} />
 
       {/* ── Sección de reportes descargables ──────────────────────────────── */}
       <div className="rp-downloads-title">
@@ -296,6 +310,238 @@ export default function ReportsPage() {
 }
 
 // ─── Componentes internos ────────────────────────────────────────────────────
+
+const WEEKDAY_LABELS = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb']
+const PAYMENT_LABELS = { cash: 'Efectivo', card: 'Tarjeta', transfer: 'Transferencia', check: 'Cheque' }
+const PIE_COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#3b82f6', '#ec4899']
+
+function fmtMoney(v) {
+  return `Q${Number(v).toLocaleString('es-GT', { minimumFractionDigits: 2 })}`
+}
+
+function buildHourData(byHour) {
+  return Array.from({ length: 24 }, (_, h) => {
+    const found = byHour.find(r => r.hour === h)
+    return { hour: `${String(h).padStart(2,'0')}:00`, sale_count: found?.sale_count ?? 0, total: found?.total ?? 0 }
+  })
+}
+
+function buildWeekdayData(byWeekday) {
+  return WEEKDAY_LABELS.map((label, i) => {
+    const found = byWeekday.find(r => r.weekday === i)
+    return { weekday: label, sale_count: found?.sale_count ?? 0, total: found?.total ?? 0 }
+  })
+}
+
+function AnalyticsSection({ chartRange, setChartRange, rangeData, rangeLoading }) {
+  const [chartType, setChartType] = useState(/** @type {'bar'|'line'} */ ('bar'))
+
+  const hourData    = useMemo(() => rangeData ? buildHourData(rangeData.byHour) : [], [rangeData])
+  const weekdayData = useMemo(() => rangeData ? buildWeekdayData(rangeData.byWeekday) : [], [rangeData])
+  const pieData     = useMemo(() => rangeData
+    ? rangeData.byPaymentMethod.map(r => ({ name: PAYMENT_LABELS[r.method] ?? r.method, value: r.sale_count, total: r.total }))
+    : [], [rangeData])
+
+  const peakHour    = useMemo(() => hourData.reduce((a, b) => b.sale_count > a.sale_count ? b : a, hourData[0]), [hourData])
+  const peakDay     = useMemo(() => weekdayData.reduce((a, b) => b.sale_count > a.sale_count ? b : a, weekdayData[0]), [weekdayData])
+  const totalSales  = rangeData?.series.reduce((s, r) => s + r.sale_count, 0) ?? 0
+  const totalRev    = rangeData?.series.reduce((s, r) => s + r.total, 0) ?? 0
+
+  return (
+    <div className="rp-chart-section">
+      {/* Header con controles */}
+      <div className="rp-chart-header">
+        <div className="rp-section-header">
+          <BarChart3 className="h-4 w-4 text-primary" />
+          <span>Análisis de ventas</span>
+        </div>
+        <div className="rp-chart-controls">
+          <div className="rp-date-range">
+            <div className="rp-date-field">
+              <label>Desde</label>
+              <input type="date" value={chartRange.from}
+                onChange={e => setChartRange(r => ({ ...r, from: e.target.value }))}
+                className="al-filter-input" />
+            </div>
+            <div className="rp-date-field">
+              <label>Hasta</label>
+              <input type="date" value={chartRange.to}
+                onChange={e => setChartRange(r => ({ ...r, to: e.target.value }))}
+                className="al-filter-input" />
+            </div>
+          </div>
+          <div className="rp-chart-type-btns">
+            <button className={`rp-type-btn ${chartType === 'bar'  ? 'rp-type-btn-active' : ''}`} onClick={() => setChartType('bar')}>Barras</button>
+            <button className={`rp-type-btn ${chartType === 'line' ? 'rp-type-btn-active' : ''}`} onClick={() => setChartType('line')}>Línea</button>
+          </div>
+        </div>
+      </div>
+
+      {rangeLoading && <LoadingSpinner label="Cargando análisis..." className="justify-center py-10" />}
+
+      {!rangeLoading && rangeData && rangeData.series.length === 0 && (
+        <EmptyState title="Sin ventas en este período" description="Ajusta el rango de fechas." />
+      )}
+
+      {!rangeLoading && rangeData && rangeData.series.length > 0 && (
+        <>
+          {/* KPIs del período */}
+          <div className="rp-analytics-kpis">
+            <div className="rp-an-kpi">
+              <ShoppingCart className="h-4 w-4 text-primary" />
+              <div>
+                <p className="rp-an-val">{totalSales}</p>
+                <p className="rp-an-lbl">Ventas totales</p>
+              </div>
+            </div>
+            <div className="rp-an-kpi">
+              <TrendingUp className="h-4 w-4 text-emerald-500" />
+              <div>
+                <p className="rp-an-val">{fmtMoney(totalRev)}</p>
+                <p className="rp-an-lbl">Ingresos totales</p>
+              </div>
+            </div>
+            <div className="rp-an-kpi">
+              <Clock className="h-4 w-4 text-blue-500" />
+              <div>
+                <p className="rp-an-val">{peakHour?.hour ?? '—'}</p>
+                <p className="rp-an-lbl">Hora pico ({peakHour?.sale_count ?? 0} ventas)</p>
+              </div>
+            </div>
+            <div className="rp-an-kpi">
+              <CalendarDays className="h-4 w-4 text-violet-500" />
+              <div>
+                <p className="rp-an-val">{peakDay?.weekday ?? '—'}</p>
+                <p className="rp-an-lbl">Día más activo ({peakDay?.sale_count ?? 0} ventas)</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="rp-charts-grid">
+
+            {/* Tendencia diaria */}
+            <div className="rp-chart-card rp-chart-card-wide">
+              <p className="rp-chart-title">Ingresos por día</p>
+              <ResponsiveContainer width="100%" height={200}>
+                {chartType === 'bar' ? (
+                  <BarChart data={rangeData.series} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <XAxis dataKey="day" tick={{ fontSize: 11 }} tickFormatter={d => d.slice(5)} />
+                    <YAxis tick={{ fontSize: 11 }} width={64} tickFormatter={v => `Q${(v/1000).toFixed(0)}k`} />
+                    <Tooltip formatter={v => [fmtMoney(v), 'Total']} labelFormatter={l => `Fecha: ${l}`} />
+                    <Bar dataKey="total" fill="var(--primary)" radius={[3,3,0,0]} />
+                  </BarChart>
+                ) : (
+                  <LineChart data={rangeData.series} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <XAxis dataKey="day" tick={{ fontSize: 11 }} tickFormatter={d => d.slice(5)} />
+                    <YAxis tick={{ fontSize: 11 }} width={64} tickFormatter={v => `Q${(v/1000).toFixed(0)}k`} />
+                    <Tooltip formatter={v => [fmtMoney(v), 'Total']} labelFormatter={l => `Fecha: ${l}`} />
+                    <Line type="monotone" dataKey="total" stroke="var(--primary)" strokeWidth={2} dot={rangeData.series.length <= 14} />
+                  </LineChart>
+                )}
+              </ResponsiveContainer>
+            </div>
+
+            {/* Horarios concurridos */}
+            <div className="rp-chart-card rp-chart-card-wide">
+              <div className="rp-chart-title-row">
+                <Clock className="h-3.5 w-3.5 text-blue-500" />
+                <p className="rp-chart-title">Horarios más concurridos</p>
+              </div>
+              <ResponsiveContainer width="100%" height={180}>
+                <BarChart data={hourData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="hour" tick={{ fontSize: 10 }} interval={1} />
+                  <YAxis tick={{ fontSize: 11 }} width={30} allowDecimals={false} />
+                  <Tooltip formatter={v => [v, 'Ventas']} labelFormatter={l => `Hora: ${l}`} />
+                  <Bar dataKey="sale_count" radius={[3,3,0,0]}>
+                    {hourData.map((entry, i) => (
+                      <Cell key={i} fill={entry.hour === peakHour?.hour ? '#ef4444' : '#3b82f6'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+              {peakHour && peakHour.sale_count > 0 && (
+                <p className="rp-chart-note">Hora pico: <strong>{peakHour.hour}</strong> con {peakHour.sale_count} ventas · {fmtMoney(peakHour.total)}</p>
+              )}
+            </div>
+
+            {/* Días de semana */}
+            <div className="rp-chart-card">
+              <div className="rp-chart-title-row">
+                <CalendarDays className="h-3.5 w-3.5 text-violet-500" />
+                <p className="rp-chart-title">Ventas por día de semana</p>
+              </div>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={weekdayData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="weekday" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} width={30} allowDecimals={false} />
+                  <Tooltip formatter={v => [v, 'Ventas']} />
+                  <Bar dataKey="sale_count" radius={[3,3,0,0]}>
+                    {weekdayData.map((entry, i) => (
+                      <Cell key={i} fill={entry.weekday === peakDay?.weekday ? '#6366f1' : '#a5b4fc'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Métodos de pago */}
+            <div className="rp-chart-card">
+              <div className="rp-chart-title-row">
+                <CreditCard className="h-3.5 w-3.5 text-emerald-500" />
+                <p className="rp-chart-title">Métodos de pago</p>
+              </div>
+              {pieData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={200}>
+                  <PieChart>
+                    <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} label={({ name, percent }) => `${name} ${(percent*100).toFixed(0)}%`} labelLine={false}>
+                      {pieData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                    </Pie>
+                    <Tooltip formatter={(v, name, p) => [v + ' ventas · ' + fmtMoney(p.payload.total), name]} />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="rp-chart-note rp-chart-note-empty">Sin datos de métodos de pago</p>
+              )}
+            </div>
+
+            {/* Top productos */}
+            {rangeData.topProducts.length > 0 && (
+              <div className="rp-chart-card rp-chart-card-wide">
+                <div className="rp-chart-title-row">
+                  <Package className="h-3.5 w-3.5 text-amber-500" />
+                  <p className="rp-chart-title">Top 10 productos más vendidos</p>
+                </div>
+                <ResponsiveContainer width="100%" height={Math.max(180, rangeData.topProducts.length * 28)}>
+                  <BarChart data={rangeData.topProducts} layout="vertical" margin={{ top: 4, right: 60, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <XAxis type="number" tick={{ fontSize: 11 }} tickFormatter={v => `Q${(v/1000).toFixed(1)}k`} />
+                    <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={150} />
+                    <Tooltip
+                      formatter={(v, _n, p) => [
+                        `${fmtMoney(v)}  ·  ${p.payload.units_sold} uds`,
+                        'Ingresos',
+                      ]}
+                    />
+                    <Bar dataKey="revenue" radius={[0,3,3,0]}>
+                      {rangeData.topProducts.map((_, i) => (
+                        <Cell key={i} fill={i === 0 ? '#f59e0b' : i === 1 ? '#6366f1' : i === 2 ? '#10b981' : '#94a3b8'} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
 
 function KpiCard({ icon, label, value, suffix, highlight = false }) {
   return (

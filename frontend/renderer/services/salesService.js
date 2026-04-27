@@ -69,3 +69,45 @@ export async function voidSale(input) {
   const res  = await window.api.sales.void(safe)
   return unwrap('sales:void', res, voidSaleResultSchema)
 }
+
+export const rangeReportSchema = z.object({
+  series: z.array(z.object({
+    day:        z.string(),
+    sale_count: z.number(),
+    subtotal:   z.number(),
+    total:      z.number(),
+  })),
+  topProducts: z.array(z.object({
+    id:         z.number(),
+    code:       z.string().nullable(),
+    name:       z.string().nullable(),
+    units_sold: z.number(),
+    revenue:    z.number(),
+  })),
+  byHour: z.array(z.object({
+    hour:       z.number(),
+    sale_count: z.number(),
+    total:      z.number(),
+  })),
+  byWeekday: z.array(z.object({
+    weekday:    z.number(),
+    sale_count: z.number(),
+    total:      z.number(),
+  })),
+  byPaymentMethod: z.array(z.object({
+    method:     z.string(),
+    sale_count: z.number(),
+    total:      z.number(),
+  })),
+})
+
+/** @typedef {import('zod').infer<typeof rangeReportSchema>} RangeReport */
+
+/**
+ * @param {{ from: string, to: string }} range  Formato YYYY-MM-DD
+ * @returns {Promise<RangeReport>}
+ */
+export async function rangeReport(range) {
+  const res = await window.api.sales.rangeReport(range)
+  return unwrap('sales:range-report', res, rangeReportSchema)
+}

@@ -146,6 +146,77 @@ export function createSalesRepository(db) {
       ORDER BY units_sold DESC
       LIMIT 5
     `),
+
+    salesByDate: db.prepare(`
+      SELECT
+        date(date)              AS day,
+        COUNT(*)                AS sale_count,
+        COALESCE(SUM(subtotal), 0) AS subtotal,
+        COALESCE(SUM(total), 0)    AS total
+      FROM sales
+      WHERE status = 'active'
+        AND date(date) >= @from
+        AND date(date) <= @to
+      GROUP BY day
+      ORDER BY day ASC
+    `),
+
+    topProductsRange: db.prepare(`
+      SELECT
+        p.id,
+        p.code,
+        p.name,
+        SUM(si.qty)            AS units_sold,
+        SUM(si.qty * si.price) AS revenue
+      FROM sale_items si
+      LEFT JOIN products p ON p.id = si.product_id
+      JOIN sales s ON s.id = si.sale_id
+      WHERE s.status = 'active'
+        AND date(s.date) >= @from
+        AND date(s.date) <= @to
+      GROUP BY si.product_id
+      ORDER BY units_sold DESC
+      LIMIT 10
+    `),
+
+    salesByHour: db.prepare(`
+      SELECT
+        CAST(strftime('%H', date) AS INTEGER) AS hour,
+        COUNT(*)                              AS sale_count,
+        COALESCE(SUM(total), 0)               AS total
+      FROM sales
+      WHERE status = 'active'
+        AND date(date) >= @from
+        AND date(date) <= @to
+      GROUP BY hour
+      ORDER BY hour ASC
+    `),
+
+    salesByWeekday: db.prepare(`
+      SELECT
+        CAST(strftime('%w', date) AS INTEGER) AS weekday,
+        COUNT(*)                              AS sale_count,
+        COALESCE(SUM(total), 0)               AS total
+      FROM sales
+      WHERE status = 'active'
+        AND date(date) >= @from
+        AND date(date) <= @to
+      GROUP BY weekday
+      ORDER BY weekday ASC
+    `),
+
+    salesByPaymentMethod: db.prepare(`
+      SELECT
+        COALESCE(payment_method, 'cash') AS method,
+        COUNT(*)                          AS sale_count,
+        COALESCE(SUM(total), 0)           AS total
+      FROM sales
+      WHERE status = 'active'
+        AND date(date) >= @from
+        AND date(date) <= @to
+      GROUP BY method
+      ORDER BY sale_count DESC
+    `),
   }
 
   /**
@@ -237,6 +308,51 @@ export function createSalesRepository(db) {
      */
     getTopProducts() {
       return /** @type {any[]} */ (stmts.topProducts.all())
+    },
+
+    /**
+     * Ventas agrupadas por día en un rango de fechas.
+     * @param {{ from: string, to: string }} range  Fechas en formato YYYY-MM-DD
+     * @returns {{ day: string, sale_count: number, subtotal: number, total: number }[]}
+     */
+    getSalesByDate({ from, to }) {
+      return /** @type {any[]} */ (stmts.salesByDate.all({ from, to }))
+    },
+
+    /**
+     * Top 10 productos por unidades vendidas en un rango.
+     * @param {{ from: string, to: string }} range
+     * @returns {{ id: number, code: string, name: string, units_sold: number, revenue: number }[]}
+     */
+    getTopProductsRange({ from, to }) {
+      return /** @type {any[]} */ (stmts.topProductsRange.all({ from, to }))
+    },
+
+    /**
+     * Ventas agrupadas por hora del día (0-23).
+     * @param {{ from: string, to: string }} range
+     * @returns {{ hour: number, sale_count: number, total: number }[]}
+     */
+    getSalesByHour({ from, to }) {
+      return /** @type {any[]} */ (stmts.salesByHour.all({ from, to }))
+    },
+
+    /**
+     * Ventas agrupadas por día de semana (0=Dom … 6=Sáb).
+     * @param {{ from: string, to: string }} range
+     * @returns {{ weekday: number, sale_count: number, total: number }[]}
+     */
+    getSalesByWeekday({ from, to }) {
+      return /** @type {any[]} */ (stmts.salesByWeekday.all({ from, to }))
+    },
+
+    /**
+     * Ventas agrupadas por método de pago.
+     * @param {{ from: string, to: string }} range
+     * @returns {{ method: string, sale_count: number, total: number }[]}
+     */
+    getSalesByPaymentMethod({ from, to }) {
+      return /** @type {any[]} */ (stmts.salesByPaymentMethod.all({ from, to }))
     },
   }
 }

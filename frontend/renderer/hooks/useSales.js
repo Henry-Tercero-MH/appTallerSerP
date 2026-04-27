@@ -59,3 +59,16 @@ export function useDailyReport() {
     refetchInterval: 60_000,
   })
 }
+
+/**
+ * Serie de ventas diarias + top productos para un rango de fechas.
+ * @param {{ from: string, to: string }} range  Formato YYYY-MM-DD
+ */
+export function useRangeReport(range) {
+  return useQuery({
+    queryKey: [...saleKeys.all, 'range-report', range.from, range.to],
+    queryFn:  () => salesService.rangeReport(range),
+    enabled:  !!range.from && !!range.to && range.from <= range.to,
+    staleTime: 120_000,
+  })
+}

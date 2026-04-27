@@ -13,6 +13,9 @@ export const ROUTES = {
   SETTINGS:  '/configuracion',
   AUDIT:     '/bitacora',
   CASH:      '/caja',
+  PURCHASES:   '/compras',
+  RECEIVABLES: '/cuentas-cobrar',
+  QUOTES:      '/cotizaciones',
 };
 
 export const ROLES = {
