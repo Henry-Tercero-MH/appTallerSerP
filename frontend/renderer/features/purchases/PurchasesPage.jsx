@@ -18,7 +18,6 @@ import {
 
 import {
   useSuppliers, usePurchaseOrders, usePurchaseOrder,
-  useCreateSupplier, useUpdateSupplier, useSetSupplierActive,
   useCreateOrder, useMarkSent, useReceiveOrder, useCancelOrder,
 } from '@/hooks/usePurchases'
 import { useProducts } from '@/hooks/useProducts'
@@ -31,19 +30,10 @@ const STATUS_LABEL = { draft: 'Borrador', sent: 'Enviada', received: 'Recibida',
 const STATUS_CLASS = { draft: 'po-badge-draft', sent: 'po-badge-sent', received: 'po-badge-received', cancelled: 'po-badge-cancelled' }
 
 export default function PurchasesPage() {
-  const [tab, setTab] = useState(/** @type {'orders'|'suppliers'} */ ('orders'))
   return (
     <div className="p-6">
-      <PageHeader title="Compras" subtitle="Órdenes de compra y proveedores" />
-      <div className="po-tabs">
-        <button className={`po-tab ${tab === 'orders' ? 'po-tab-active' : ''}`} onClick={() => setTab('orders')}>
-          <ShoppingBag className="h-4 w-4" /> Órdenes
-        </button>
-        <button className={`po-tab ${tab === 'suppliers' ? 'po-tab-active' : ''}`} onClick={() => setTab('suppliers')}>
-          <Truck className="h-4 w-4" /> Proveedores
-        </button>
-      </div>
-      {tab === 'orders'    ? <OrdersTab />    : <SuppliersTab />}
+      <PageHeader title="Compras" subtitle="Órdenes de compra" />
+      <OrdersTab />
     </div>
   )
 }
@@ -150,111 +140,6 @@ function OrdersTab() {
       <NewOrderModal open={newModal} onClose={() => setNewModal(false)} user={user} />
       <OrderDetailModal id={detailId} onClose={() => setDetailId(null)} />
       <ReceiveOrderModal id={receiveId} onClose={() => setReceiveId(null)} user={user} />
-    </>
-  )
-}
-
-// ── Tab: Proveedores ─────────────────────────────────────────────────────────
-
-function SuppliersTab() {
-  const { user } = useAuthContext()
-  const [modal, setModal] = useState(/** @type {any} */ (null))
-
-  const { data: suppliers = [], isLoading } = useSuppliers()
-  const createMut     = useCreateSupplier()
-  const updateMut     = useUpdateSupplier()
-  const setActiveMut  = useSetSupplierActive()
-
-  async function handleToggleActive(s) {
-    try {
-      await setActiveMut.mutateAsync({ id: s.id, active: s.active === 0, role: user.role })
-      toast.success(s.active === 1 ? 'Proveedor desactivado' : 'Proveedor activado')
-    } catch (e) { toast.error(e instanceof Error ? e.message : 'Error') }
-  }
-
-  return (
-    <>
-      <div className="po-toolbar">
-        <Button size="sm" onClick={() => setModal('create')}>
-          <Plus className="mr-1 h-4 w-4" /> Nuevo proveedor
-        </Button>
-      </div>
-
-      {isLoading
-        ? <LoadingSpinner label="Cargando proveedores..." className="py-10" />
-        : suppliers.length === 0
-          ? <EmptyState title="Sin proveedores" description="Registra tu primer proveedor." />
-          : (
-            <div className="sh-table-card">
-              <div className="sh-table-scroll">
-                <table className="sh-table">
-                  <thead>
-                    <tr>
-                      <th className="sh-th">Empresa</th>
-                      <th className="sh-th">Contacto</th>
-                      <th className="sh-th">Teléfono</th>
-                      <th className="sh-th">Email</th>
-                      <th className="sh-th w-24">Estado</th>
-                      <th className="sh-th w-24 text-right">Acciones</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {suppliers.map((s, i) => (
-                      <tr key={s.id} className={`${i % 2 === 0 ? 'sh-tr-even' : 'sh-tr-odd'} ${s.active === 0 ? 'opacity-50' : ''}`}>
-                        <td className="sh-td font-medium">{s.name}</td>
-                        <td className="sh-td sh-muted">{s.contact_name ?? '—'}</td>
-                        <td className="sh-td sh-muted">{s.phone ?? '—'}</td>
-                        <td className="sh-td sh-muted">{s.email ?? '—'}</td>
-                        <td className="sh-td">
-                          <span className={`po-badge ${s.active === 1 ? 'po-badge-received' : 'po-badge-cancelled'}`}>
-                            {s.active === 1 ? 'Activo' : 'Inactivo'}
-                          </span>
-                        </td>
-                        <td className="sh-td">
-                          <div className="sh-actions">
-                            <button className="sh-action-btn" title="Editar" onClick={() => setModal({ edit: s })}>
-                              <Pencil className="h-3.5 w-3.5" />
-                            </button>
-                            <button className="sh-action-btn" title={s.active === 1 ? 'Desactivar' : 'Activar'}
-                              onClick={() => handleToggleActive(s)}>
-                              {s.active === 1 ? <PowerOff className="h-3.5 w-3.5 text-destructive" /> : <Power className="h-3.5 w-3.5" />}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )
-      }
-
-      {/* Modal crear/editar proveedor */}
-      <Dialog open={modal === 'create' || modal?.edit != null} onOpenChange={(o) => { if (!o) setModal(null) }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{modal?.edit ? 'Editar proveedor' : 'Nuevo proveedor'}</DialogTitle>
-          </DialogHeader>
-          <SupplierForm
-            initial={modal?.edit}
-            onSubmit={async (data) => {
-              try {
-                if (modal?.edit) {
-                  await updateMut.mutateAsync({ id: modal.edit.id, input: data, role: user.role })
-                  toast.success('Proveedor actualizado')
-                } else {
-                  await createMut.mutateAsync({ input: data, role: user.role })
-                  toast.success('Proveedor creado')
-                }
-                setModal(null)
-              } catch (e) { toast.error(e instanceof Error ? e.message : 'Error') }
-            }}
-            loading={createMut.isPending || updateMut.isPending}
-            onCancel={() => setModal(null)}
-          />
-        </DialogContent>
-      </Dialog>
     </>
   )
 }
@@ -524,57 +409,5 @@ function ReceiveOrderModal({ id, onClose, user }) {
         }
       </DialogContent>
     </Dialog>
-  )
-}
-
-// ── Form: Proveedor ──────────────────────────────────────────────────────────
-
-function SupplierForm({ initial, onSubmit, loading, onCancel }) {
-  const [form, setForm] = useState({
-    name:         initial?.name         ?? '',
-    contact_name: initial?.contact_name ?? '',
-    phone:        initial?.phone        ?? '',
-    email:        initial?.email        ?? '',
-    address:      initial?.address      ?? '',
-    notes:        initial?.notes        ?? '',
-  })
-
-  const set = (field) => (e) => setForm(prev => ({ ...prev, [field]: e.target.value }))
-
-  return (
-    <form onSubmit={(e) => { e.preventDefault(); onSubmit(form) }} className="space-y-3">
-      <div className="grid gap-1.5">
-        <Label>Nombre de la empresa *</Label>
-        <Input value={form.name} onChange={set('name')} placeholder="Distribuidora XYZ" required />
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="grid gap-1.5">
-          <Label>Persona de contacto</Label>
-          <Input value={form.contact_name} onChange={set('contact_name')} placeholder="Juan García" />
-        </div>
-        <div className="grid gap-1.5">
-          <Label>Teléfono</Label>
-          <Input value={form.phone} onChange={set('phone')} placeholder="5555-5555" />
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="grid gap-1.5">
-          <Label>Email</Label>
-          <Input type="email" value={form.email} onChange={set('email')} placeholder="proveedor@email.com" />
-        </div>
-        <div className="grid gap-1.5">
-          <Label>Dirección</Label>
-          <Input value={form.address} onChange={set('address')} placeholder="Ciudad, País" />
-        </div>
-      </div>
-      <div className="grid gap-1.5">
-        <Label>Notas</Label>
-        <Input value={form.notes} onChange={set('notes')} placeholder="Observaciones..." />
-      </div>
-      <DialogFooter className="gap-2 pt-1">
-        <Button type="button" variant="outline" onClick={onCancel}>Cancelar</Button>
-        <Button type="submit" disabled={loading}>{loading ? 'Guardando...' : 'Guardar'}</Button>
-      </DialogFooter>
-    </form>
   )
 }

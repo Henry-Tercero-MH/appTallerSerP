@@ -52,6 +52,7 @@ export function createCustomersRepository(db) {
      ORDER BY name
         LIMIT 50`
     ),
+    selectByNit:     db.prepare(`SELECT ${COLUMNS} FROM customers WHERE nit = ?`),
     insert: db.prepare(
       `INSERT INTO customers (nit, name, email, phone, address)
        VALUES (?, ?, ?, ?, ?)`
@@ -80,6 +81,14 @@ export function createCustomersRepository(db) {
      */
     findById(id) {
       return stmts.selectById.get(id)
+    },
+
+    /**
+     * @param {string} nit
+     * @returns {CustomerRow | undefined}
+     */
+    findByNit(nit) {
+      return stmts.selectByNit.get(nit)
     },
 
     /**

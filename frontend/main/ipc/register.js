@@ -55,6 +55,8 @@ import { createInventoryRepository } from '../modules/inventory/inventory.reposi
 import { createInventoryService }    from '../modules/inventory/inventory.service.js'
 import { registerInventoryIpc }      from '../modules/inventory/inventory.ipc.js'
 
+import { startBackupSchedule, updateBackupSchedule, runBackup, listBackups } from '../database/backup.js'
+
 const migrationModules = import.meta.glob('../database/migrations/*.sql', {
   query: '?raw',
   import: 'default',
@@ -139,23 +141,61 @@ export function bootstrap() {
   registerReturnsIpc(returns_)
   registerInventoryIpc(inventory)
 
-  // ── Backup / restore ────────────────────────────────────────
+  // ── Backup ──────────────────────────────────────────────────
   const dbPath = path.join(app.getPath('userData'), 'taller_pos.sqlite')
+  ipcMain.handle('db:get-path', () => ({ ok: true, data: dbPath }))
 
+  // Backup manual con diálogo "Guardar como…"
   ipcMain.handle('db:backup', async () => {
     try {
       const { filePath, canceled } = await dialog.showSaveDialog({
         title: 'Guardar respaldo de base de datos',
-        defaultPath: `backup_${new Date().toISOString().slice(0,10)}.sqlite`,
+        defaultPath: `backup_${new Date().toISOString().slice(0, 10)}.sqlite`,
         filters: [{ name: 'SQLite', extensions: ['sqlite'] }],
       })
       if (canceled || !filePath) return { ok: true, data: null }
-      db.backup(filePath)
+      await db.backup(filePath)
       return { ok: true, data: filePath }
     } catch (err) {
       return { ok: false, error: { code: 'BACKUP_ERROR', message: err.message } }
     }
   })
 
-  ipcMain.handle('db:get-path', () => ({ ok: true, data: dbPath }))
+  // Backup automático a userData/backups/ (llamado desde Settings o pruebas)
+  ipcMain.handle('db:backup-now', async () => {
+    try {
+      const result = await runBackup(db)
+      return { ok: true, data: result }
+    } catch (err) {
+      return { ok: false, error: { code: 'BACKUP_ERROR', message: err.message } }
+    }
+  })
+
+  // Lista de backups automáticos disponibles
+  ipcMain.handle('db:list-backups', () => {
+    try {
+      return { ok: true, data: listBackups() }
+    } catch (err) {
+      return { ok: false, error: { code: 'BACKUP_LIST_ERROR', message: err.message } }
+    }
+  })
+
+  // Lee configuración de backup desde settings (defaults: 720 h · 10 copias)
+  const intervalHours = Number(settings.get('backup_interval_hours') ?? 720) || 720
+  const maxCopies     = Number(settings.get('backup_max_copies')     ?? 10)  || 10
+
+  // Permite cambiar el intervalo en caliente desde la UI de Configuración
+  ipcMain.handle('db:set-backup-interval', (_e, hours, copies) => {
+    try {
+      const h = Math.max(1, Number(hours) || intervalHours)
+      const c = Math.max(1, Number(copies) || maxCopies)
+      updateBackupSchedule(h, c)
+      return { ok: true, data: { intervalHours: h, maxCopies: c } }
+    } catch (err) {
+      return { ok: false, error: { code: 'BACKUP_INTERVAL_ERROR', message: err.message } }
+    }
+  })
+
+  // Arranca el scheduler con los valores configurados
+  startBackupSchedule(db, intervalHours, maxCopies)
 }

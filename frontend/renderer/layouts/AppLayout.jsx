@@ -19,7 +19,8 @@ import {
   MdChevronRight,
   MdShield,
 } from 'react-icons/md';
-import { Landmark, ShoppingCart, Wallet, FileText, TrendingDown } from 'lucide-react';
+import { Landmark, ShoppingCart, Wallet, FileText, TrendingDown, Truck } from 'lucide-react'
+import { GlobalSearch } from '@/components/shared/GlobalSearch';
 
 const NAV = [
   { to: ROUTES.DASHBOARD, label: 'Dashboard',         icon: MdDashboard },
@@ -36,6 +37,7 @@ const ADMIN_NAV = [
   { to: ROUTES.RECEIVABLES, label: 'Cuentas por Cobrar', icon: Wallet },
   { to: ROUTES.QUOTES,      label: 'Cotizaciones',       icon: FileText },
   { to: ROUTES.EXPENSES,    label: 'Gastos',             icon: TrendingDown },
+  { to: ROUTES.SUPPLIERS,  label: 'Proveedores',        icon: Truck },
   { to: ROUTES.USERS,     label: 'Usuarios',        icon: MdManageAccounts },
   { to: ROUTES.SETTINGS,  label: 'Configuración',   icon: MdSettings },
   { to: ROUTES.AUDIT,     label: 'Bitácora',        icon: MdShield },
@@ -145,7 +147,7 @@ export default function AppLayout() {
         {/* ── Topbar ── */}
         <header className="topbar">
           <div className="topbar-left">
-            {/* Título de la página actual lo pone cada página vía PageHeader */}
+            <GlobalSearch />
           </div>
           <div className="topbar-right">
             <div className="topbar-user">

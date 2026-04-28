@@ -101,8 +101,11 @@ const api = {
   },
 
   db: {
-    backup:  () => ipcRenderer.invoke('db:backup'),
-    getPath: () => ipcRenderer.invoke('db:get-path'),
+    backup:             () => ipcRenderer.invoke('db:backup'),
+    backupNow:          () => ipcRenderer.invoke('db:backup-now'),
+    listBackups:        () => ipcRenderer.invoke('db:list-backups'),
+    setBackupInterval:  (hours, copies) => ipcRenderer.invoke('db:set-backup-interval', hours, copies),
+    getPath:            () => ipcRenderer.invoke('db:get-path'),
   },
 
   expenses: {

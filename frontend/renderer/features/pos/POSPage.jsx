@@ -16,7 +16,8 @@ import { MoneyDisplay }     from '@/components/shared/MoneyDisplay'
 import { CustomerCombobox } from '@/components/shared/CustomerCombobox'
 
 import { useSearchProducts, useCreateSale } from '@/hooks/useProducts'
-import { useTaxSettings, useCurrencySettings } from '@/hooks/useSettings'
+import { useTaxSettings, useCurrencySettings, useBusinessSettings } from '@/hooks/useSettings'
+import { ReceiptModal } from './ReceiptModal'
 import { useCartStore, selectSubtotal, selectItemCount, selectDiscount } from '@/stores/cartStore'
 import { computeBreakdown } from '@/lib/pricing'
 
@@ -93,6 +94,9 @@ function POSInner() {
   const { rate: taxRate, included: taxIncluded } = useTaxSettings()
   const { decimals } = useCurrencySettings()
   const breakdown = computeBreakdown(rawSum, taxRate, taxIncluded, decimals, discount.type, discount.value)
+  const businessSettings = useBusinessSettings()
+
+  const [receiptData, setReceiptData] = useState(/** @type {any} */ (null))
 
   const createSale = useCreateSale()
 
@@ -114,7 +118,21 @@ function POSInner() {
         discountValue: discount.value,
       },
       {
-        onSuccess: () => {
+        onSuccess: (result) => {
+          setReceiptData({
+            saleId:        result.saleId,
+            date:          new Date(),
+            items:         items.map(i => ({ name: i.name, qty: i.qty, price: i.price })),
+            customerName:  result.customerName,
+            customerNit:   result.customerNit,
+            paymentMethod,
+            discount,
+            subtotal:      result.subtotal,
+            taxAmount:     result.taxAmount,
+            total:         result.total,
+            taxRate:       result.taxRate,
+            discountAmount: breakdown.discountAmount,
+          })
           clearCart()
           toast.success('Venta registrada')
         },
@@ -123,6 +141,7 @@ function POSInner() {
   }
 
   return (
+    <>
     <div className="pos-shell">
       {/* ── Panel izquierdo: catálogo ── */}
       <div className="pos-catalog">
@@ -402,5 +421,12 @@ function POSInner() {
         </div>
       </div>
     </div>
+
+    <ReceiptModal
+      data={receiptData}
+      business={businessSettings}
+      onClose={() => setReceiptData(null)}
+    />
+    </>
   )
 }

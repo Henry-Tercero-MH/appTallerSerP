@@ -1363,3 +1363,105 @@ tr.row-warning { background-color: #fff9e6; }
 
 /* detail modal grid */
 .qt-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 20px; margin-bottom: 14px; }
+
+/* ── Receipt / Ticket ────────────────────────────────────────────────── */
+.receipt {
+  width: 100%;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 12px;
+  color: #000;
+  background: #fff;
+  padding: 16px;
+  border-radius: 4px;
+  border: 1px dashed #ccc;
+  box-shadow: 0 2px 8px rgba(0,0,0,.07);
+}
+.receipt-center   { text-align: center; }
+.receipt-bold     { font-weight: 700; }
+.receipt-lg       { font-size: 15px; }
+.receipt-sm       { font-size: 10px; color: #555; }
+.receipt-divider  { border: none; border-top: 1px dashed #000; margin: 6px 0; }
+.receipt-row      { display: flex; justify-content: space-between; padding: 1px 0; }
+.receipt-row-head {
+  display: flex; justify-content: space-between;
+  font-weight: 700; font-size: 10px;
+  border-bottom: 1px solid #000;
+  padding-bottom: 2px; margin-bottom: 2px;
+}
+.receipt-item-name  { flex: 1; word-break: break-word; }
+.receipt-item-qty   { width: 28px; text-align: center; }
+.receipt-item-price { width: 60px; text-align: right; }
+.receipt-item-sub   { width: 68px; text-align: right; }
+.receipt-total-row  { display: flex; justify-content: space-between; padding: 1px 0; }
+.receipt-grand {
+  display: flex; justify-content: space-between;
+  font-size: 14px; font-weight: 700;
+  border-top: 2px solid #000;
+  padding-top: 4px; margin-top: 2px;
+}
+.receipt-footer { text-align: center; margin-top: 10px; font-size: 11px; }
+
+/* ── GlobalSearch ─────────────────────────────────────────────────────── */
+.gs-trigger {
+  display: flex; align-items: center; gap: 8px;
+  height: 32px; padding: 0 10px;
+  border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-muted);
+  font-size: 12px; cursor: pointer;
+  transition: border-color .15s, box-shadow .15s;
+  min-width: 200px;
+}
+.gs-trigger:hover { border-color: var(--primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 15%, transparent); }
+.gs-trigger-text { flex: 1; text-align: left; }
+.gs-kbd {
+  font-size: 10px; padding: 1px 5px; border-radius: 4px;
+  border: 1px solid var(--border); background: var(--gray-100, #f1f3f5);
+  color: var(--text-muted); font-family: inherit; white-space: nowrap;
+}
+
+.gs-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(0,0,0,.35); display: flex;
+  align-items: flex-start; justify-content: center;
+  padding-top: 80px;
+}
+.gs-panel {
+  width: 560px; max-width: calc(100vw - 32px);
+  background: var(--surface); border-radius: 12px;
+  border: 1px solid var(--border);
+  box-shadow: 0 16px 48px rgba(0,0,0,.18);
+  display: flex; flex-direction: column; overflow: hidden;
+  max-height: calc(100vh - 120px);
+}
+.gs-input-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+}
+.gs-input {
+  flex: 1; background: transparent; border: none; outline: none;
+  font-size: 14px; color: var(--text);
+}
+.gs-hint {
+  padding: 20px 16px; font-size: 13px; color: var(--text-muted); text-align: center;
+}
+.gs-group { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.gs-group:last-of-type { border-bottom: none; }
+.gs-group-label {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--text-muted);
+  padding: 2px 16px 6px;
+}
+.gs-item {
+  display: flex; flex-direction: column; align-items: flex-start;
+  width: 100%; padding: 6px 16px; text-align: left;
+  background: transparent; border: none; cursor: pointer;
+  border-radius: 0; transition: background .1s;
+}
+.gs-item:hover { background: var(--gray-100, #f1f3f5); }
+.gs-item-main { font-size: 13px; font-weight: 500; color: var(--text); }
+.gs-item-sub  { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+.gs-footer {
+  padding: 8px 16px; font-size: 11px; color: var(--text-muted);
+  border-top: 1px solid var(--border); text-align: center;
+}

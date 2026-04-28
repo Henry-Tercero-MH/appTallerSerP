@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
-import { Building2, Check, Palette, Printer, ShieldCheck, Database, Download } from 'lucide-react'
+import { Building2, Check, Palette, Printer, ShieldCheck, Database, Download, Clock, HardDrive } from 'lucide-react'
 
 import { Button }   from '@/components/ui/button'
 import { Input }    from '@/components/ui/input'
@@ -446,7 +446,7 @@ export default function SettingsPage() {
           ]}
         />
 
-        <BackupSection />
+        <BackupSection settings={s} />
 
       </div>
     </div>
@@ -454,38 +454,187 @@ export default function SettingsPage() {
 }
 
 // ── Sección: Respaldo de base de datos ───────────────────────────────────────
-function BackupSection() {
-  const [loading, setLoading] = useState(false)
 
-  async function handleBackup() {
-    setLoading(true)
+const INTERVAL_OPTIONS = [
+  { label: 'Cada hora',    hours: 1    },
+  { label: 'Cada 6 horas', hours: 6    },
+  { label: 'Cada 12 horas',hours: 12   },
+  { label: 'Diario',       hours: 24   },
+  { label: 'Semanal',      hours: 168  },
+  { label: 'Mensual',      hours: 720  },
+]
+
+/** @param {number} b */
+const fmtBytes = (b) => b >= 1_048_576
+  ? `${(b / 1_048_576).toFixed(1)} MB`
+  : `${(b / 1024).toFixed(0)} KB`
+
+/** @param {string} iso */
+const fmtDate = (iso) => new Intl.DateTimeFormat('es-GT', {
+  dateStyle: 'short', timeStyle: 'short', hour12: false,
+}).format(new Date(iso))
+
+/** @param {{ settings: Record<string,unknown> }} p */
+function BackupSection({ settings: s }) {
+  const qc  = useQueryClient()
+  const api = /** @type {any} */ (window.api)
+
+  // Intervalo actual leído de settings (default mensual)
+  const savedHours = Number(s.backup_interval_hours ?? 720) || 720
+  const savedMax   = Number(s.backup_max_copies     ?? 10)  || 10
+
+  const [intervalHours, setIntervalHours] = useState(savedHours)
+  const [maxCopies,     setMaxCopies]     = useState(savedMax)
+  const [backups,       setBackups]       = useState(/** @type {any[]} */ ([]))
+  const [loadingNow,    setLoadingNow]    = useState(false)
+  const [loadingExport, setLoadingExport] = useState(false)
+  const [savingCfg,     setSavingCfg]     = useState(false)
+
+  // Sincronizar si los settings cambian desde fuera
+  useEffect(() => { setIntervalHours(savedHours) }, [savedHours])
+  useEffect(() => { setMaxCopies(savedMax) }, [savedMax])
+
+  // Cargar lista de backups automáticos al montar
+  useEffect(() => {
+    api.db.listBackups().then((/** @type {any} */ res) => {
+      if (res.ok) setBackups(res.data)
+    })
+  }, [])
+
+  async function handleBackupNow() {
+    setLoadingNow(true)
     try {
-      const res = await window.api.db.backup()
-      if (!res.ok) { toast.error(res.error.message); return }
-      if (res.data) toast.success(`Respaldo guardado en:\n${res.data}`)
+      const res = await api.db.backupNow()
+      if (!res.ok) { toast.error(res.error?.message ?? 'Error'); return }
+      toast.success(`Respaldo creado: ${res.data.filename}`)
+      const list = await api.db.listBackups()
+      if (list.ok) setBackups(list.data)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Error al crear respaldo')
     } finally {
-      setLoading(false)
+      setLoadingNow(false)
     }
   }
 
+  async function handleExport() {
+    setLoadingExport(true)
+    try {
+      const res = await api.db.backup()
+      if (!res.ok) { toast.error(res.error?.message ?? 'Error'); return }
+      if (res.data) toast.success(`Exportado en:\n${res.data}`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error')
+    } finally {
+      setLoadingExport(false)
+    }
+  }
+
+  async function handleSaveConfig() {
+    setSavingCfg(true)
+    try {
+      await settingsService.set('backup_interval_hours', intervalHours)
+      await settingsService.set('backup_max_copies',     maxCopies)
+      await api.db.setBackupInterval(intervalHours, maxCopies)
+      qc.invalidateQueries({ queryKey: settingsKeys.all })
+      toast.success('Configuración de respaldo guardada')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error al guardar')
+    } finally {
+      setSavingCfg(false)
+    }
+  }
+
+  const configChanged = intervalHours !== savedHours || maxCopies !== savedMax
+
   return (
-    <Card>
+    <Card className="lg:col-span-2">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
-          <Database className="h-4 w-4" /> Respaldo de datos
+          <Database className="h-4 w-4 text-muted-foreground" /> Respaldo automático de datos
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <p className="text-sm text-muted-foreground">
-          Exporta una copia de la base de datos SQLite. Guárdala en un lugar seguro para recuperar
-          todos tus datos en caso de pérdida.
-        </p>
-        <Button variant="outline" size="sm" onClick={handleBackup} disabled={loading}>
-          <Download className="mr-1.5 h-4 w-4" />
-          {loading ? 'Generando respaldo...' : 'Descargar respaldo (.sqlite)'}
-        </Button>
+      <CardContent className="space-y-5">
+
+        {/* ── Programación ── */}
+        <div className="grid sm:grid-cols-2 gap-4 p-4 rounded-lg border bg-muted/30">
+          <div className="grid gap-1.5">
+            <Label className="flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3.5 text-muted-foreground" /> Frecuencia de respaldo
+            </Label>
+            <select
+              value={intervalHours}
+              onChange={e => setIntervalHours(Number(e.target.value))}
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+            >
+              {INTERVAL_OPTIONS.map(o => (
+                <option key={o.hours} value={o.hours}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid gap-1.5">
+            <Label className="flex items-center gap-1.5">
+              <HardDrive className="h-3.5 w-3.5 text-muted-foreground" /> Copias a conservar
+            </Label>
+            <input
+              type="number" min={1} max={50}
+              value={maxCopies}
+              onChange={e => setMaxCopies(Math.max(1, Number(e.target.value) || 1))}
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+            />
+          </div>
+
+          <div className="sm:col-span-2 flex justify-end">
+            <Button size="sm" onClick={handleSaveConfig} disabled={savingCfg || !configChanged}>
+              {savingCfg ? 'Guardando...' : 'Guardar programación'}
+            </Button>
+          </div>
+        </div>
+
+        {/* ── Acciones manuales ── */}
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" onClick={handleBackupNow} disabled={loadingNow}>
+            <Database className="mr-1.5 h-3.5 w-3.5" />
+            {loadingNow ? 'Respaldando...' : 'Respaldar ahora'}
+          </Button>
+          <Button size="sm" variant="outline" onClick={handleExport} disabled={loadingExport}>
+            <Download className="mr-1.5 h-3.5 w-3.5" />
+            {loadingExport ? 'Exportando...' : 'Exportar a archivo…'}
+          </Button>
+        </div>
+
+        {/* ── Lista de respaldos automáticos ── */}
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+            Respaldos automáticos ({backups.length})
+          </p>
+          {backups.length === 0
+            ? <p className="text-sm text-muted-foreground">Aún no hay respaldos automáticos.</p>
+            : (
+              <div className="rounded-md border overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead className="bg-muted/50">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-medium text-muted-foreground">Archivo</th>
+                      <th className="px-3 py-2 text-left font-medium text-muted-foreground">Fecha</th>
+                      <th className="px-3 py-2 text-right font-medium text-muted-foreground">Tamaño</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {backups.map((b, i) => (
+                      <tr key={b.filename} className={i % 2 === 0 ? '' : 'bg-muted/20'}>
+                        <td className="px-3 py-1.5 font-mono text-muted-foreground truncate max-w-[220px]">{b.filename}</td>
+                        <td className="px-3 py-1.5">{fmtDate(b.createdAt)}</td>
+                        <td className="px-3 py-1.5 text-right">{fmtBytes(b.size)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          }
+        </div>
+
       </CardContent>
     </Card>
   )

@@ -19,6 +19,7 @@ import PurchasesPage from '../features/purchases/PurchasesPage';
 import ReceivablesPage from '../features/receivables/ReceivablesPage';
 import QuotesPage from '../features/quotes/QuotesPage';
 import ExpensesPage from '../features/expenses/ExpensesPage';
+import SuppliersPage from '../features/purchases/SuppliersPage';
 import AdminRoute from '../layouts/AdminRoute';
 
 import { ROUTES } from '../lib/constants';
@@ -53,6 +54,7 @@ export const router = createHashRouter([
               { path: ROUTES.RECEIVABLES, element: <ReceivablesPage /> },
               { path: ROUTES.QUOTES,      element: <QuotesPage /> },
               { path: ROUTES.EXPENSES,    element: <ExpensesPage /> },
+              { path: ROUTES.SUPPLIERS,   element: <SuppliersPage /> },
             ],
           },
           { path: '*', element: <Navigate to={ROUTES.DASHBOARD} replace /> },

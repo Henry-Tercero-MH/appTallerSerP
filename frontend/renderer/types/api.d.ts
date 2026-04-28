@@ -426,8 +426,6 @@ export interface RendererApi {
     close(input: CashCloseInput):                    Promise<IpcResponse<CashSessionRow>>
     addMovement(input: CashMovementInput):           Promise<IpcResponse<CashMovementRow>>
   }
-}
-
   receivables: {
     list():                                              Promise<IpcResponse<ReceivableRow[]>>
     get(id: number):                                     Promise<IpcResponse<ReceivableDetail>>

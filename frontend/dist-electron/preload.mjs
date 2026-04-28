@@ -84,6 +84,9 @@ const api = {
   },
   db: {
     backup: () => electron.ipcRenderer.invoke("db:backup"),
+    backupNow: () => electron.ipcRenderer.invoke("db:backup-now"),
+    listBackups: () => electron.ipcRenderer.invoke("db:list-backups"),
+    setBackupInterval: (hours, copies) => electron.ipcRenderer.invoke("db:set-backup-interval", hours, copies),
     getPath: () => electron.ipcRenderer.invoke("db:get-path")
   },
   expenses: {

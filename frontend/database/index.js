@@ -47,6 +47,7 @@ if (count.count === 0) {
     { code: 'SRV-001', name: 'Servicio de Diagnóstico Escáner', price: 150.00, stock: 999 },
   ]
   seedProducts.forEach(p => insert.run(p.code, p.name, p.price, p.stock))
+  //jola
 }
 
 export default db

@@ -95,6 +95,12 @@ export function createCustomersService(repo) {
       assertValidName(input.name)
       assertValidEmail(input.email)
       const nit = normalizeNit(input.nit)
+      
+      if (nit !== 'C/F') {
+        const existing = repo.findByNit(nit)
+        if (existing) throw new CustomerValidationError('nit', `El NIT ${nit} ya esta registrado`)
+      }
+
       const id = repo.insert({
         nit,
         name: input.name.trim(),
@@ -125,9 +131,17 @@ export function createCustomersService(repo) {
       if (patch.name !== undefined) assertValidName(patch.name)
       if (patch.email !== undefined) assertValidEmail(patch.email)
 
+      const nit = patch.nit !== undefined ? normalizeNit(patch.nit) : undefined
+      if (nit && nit !== 'C/F') {
+        const existing = repo.findByNit(nit)
+        if (existing && existing.id !== id) {
+          throw new CustomerValidationError('nit', `El NIT ${nit} ya esta registrado en otro cliente`)
+        }
+      }
+
       /** @type {CustomerUpdateInput} */
       const safe = {}
-      if (patch.nit     !== undefined) safe.nit     = normalizeNit(patch.nit)
+      if (nit     !== undefined) safe.nit     = nit
       if (patch.name    !== undefined) safe.name    = patch.name.trim()
       if (patch.email   !== undefined) safe.email   = patch.email?.trim() || null
       if (patch.phone   !== undefined) safe.phone   = patch.phone?.trim() || null

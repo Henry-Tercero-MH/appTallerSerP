@@ -37,7 +37,9 @@ export default function SystemDashboard() {
   const summary     = report?.summary ?? null
   const lowStock    = products.filter(p => p.is_active === 1 && p.stock <= p.min_stock)
   const activeProds = products.filter(p => p.is_active === 1).length
+  const in3Days     = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10)
   const overdueRecv = recvList.filter(r => ['pending','partial'].includes(r.status) && r.due_date && r.due_date < today)
+  const soonDueRecv = recvList.filter(r => ['pending','partial'].includes(r.status) && r.due_date && r.due_date >= today && r.due_date <= in3Days)
   const pendingOrders = orders.filter(o => ['draft','sent'].includes(o.status))
 
   return (
@@ -46,7 +48,7 @@ export default function SystemDashboard() {
       <p className="text-sm text-muted-foreground">{dateFmt.format(new Date())}</p>
 
       {/* ── Alertas ─────────────────────────────────────────────── */}
-      {(lowStock.length > 0 || overdueRecv.length > 0) && (
+      {(lowStock.length > 0 || overdueRecv.length > 0 || soonDueRecv.length > 0) && (
         <div className="flex flex-col gap-2">
           {lowStock.length > 0 && (
             <Card className="border-l-4 border-l-destructive bg-destructive/5">
@@ -65,6 +67,27 @@ export default function SystemDashboard() {
                 </div>
                 <Button size="sm" variant="outline" onClick={() => navigate(ROUTES.INVENTORY)}>
                   Ver inventario
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+          {soonDueRecv.length > 0 && (
+            <Card className="border-l-4 border-l-blue-400 bg-blue-50/60">
+              <CardContent className="p-4 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <CreditCard className="h-5 w-5 text-blue-500 shrink-0" />
+                  <div>
+                    <p className="font-semibold text-blue-700 text-sm">
+                      {soonDueRecv.length} cuenta{soonDueRecv.length > 1 ? 's' : ''} por vencer en los próximos 3 días
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {soonDueRecv.slice(0, 2).map(r => r.customer_name).join(', ')}
+                      {soonDueRecv.length > 2 ? ` y ${soonDueRecv.length - 2} más` : ''}
+                    </p>
+                  </div>
+                </div>
+                <Button size="sm" variant="outline" onClick={() => navigate(ROUTES.RECEIVABLES)}>
+                  Ver cuentas
                 </Button>
               </CardContent>
             </Card>
