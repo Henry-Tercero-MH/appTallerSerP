@@ -64,6 +64,12 @@ export interface SaleItemInput {
 export interface SaleInput {
   items: SaleItemInput[]
   customerId?: number
+  paymentMethod?: 'cash' | 'credit' | 'card' | 'transfer'
+  clientType?: 'cf' | 'registered' | 'company'
+  discountType?: 'none' | 'percent' | 'fixed'
+  discountValue?: number
+  userId?: number
+  userName?: string
 }
 
 export interface SaleCreatedResult {
@@ -356,6 +362,11 @@ export interface ApplyPaymentInput {
   userName: string
 }
 
+export interface CustomerBalance {
+  rows: ReceivableRow[]
+  balance: number
+}
+
 export interface RendererApi {
   settings: {
     getAll():                                        Promise<IpcResponse<SettingsByCategory>>
@@ -433,6 +444,7 @@ export interface RendererApi {
     create(input: ReceivableCreateInput):                Promise<IpcResponse<ReceivableRow>>
     applyPayment(input: ApplyPaymentInput):              Promise<IpcResponse<ReceivableRow>>
     cancel(id: number):                                  Promise<IpcResponse<ReceivableRow>>
+    byCustomer(id: number):                              Promise<IpcResponse<CustomerBalance>>
   }
 }
 

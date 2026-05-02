@@ -29,11 +29,13 @@ const storage = typeof window !== 'undefined'
  * @typedef {Object} CartState
  * @property {CartItem[]} items
  * @property {Customer} customer
+ * @property {{ type: 'none'|'percent'|'fixed', value: number }} discount
  * @property {(product: { id: number, code: string, name: string, price: number, stock: number }) => void} addItem
  * @property {(productId: number) => void} removeItem
  * @property {(productId: number, qty: number) => void} updateQuantity
  * @property {() => void} clear
  * @property {(customer: Customer) => void} setCustomer
+ * @property {(type: 'none'|'percent'|'fixed', value: number) => void} setDiscount
  */
 
 /** @type {import('zustand').UseBoundStore<import('zustand').StoreApi<CartState>>} */

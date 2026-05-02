@@ -2,10 +2,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as svc from '@/services/receivablesService.js'
 
 export const receivableKeys = {
-  all:     ['receivables'],
-  list:    ['receivables', 'list'],
-  detail:  (id) => ['receivables', 'detail', id],
-  summary: ['receivables', 'summary'],
+  all:         ['receivables'],
+  list:        ['receivables', 'list'],
+  detail:      (id) => ['receivables', 'detail', id],
+  summary:     ['receivables', 'summary'],
+  byCustomer:  (id) => ['receivables', 'customer', id],
 }
 
 export function useReceivables() {
@@ -45,5 +46,14 @@ export function useCancelReceivable() {
   return useMutation({
     mutationFn: svc.cancelReceivable,
     onSuccess: () => qc.invalidateQueries({ queryKey: receivableKeys.all }),
+  })
+}
+
+export function useCustomerBalance(customerId) {
+  return useQuery({
+    queryKey: receivableKeys.byCustomer(customerId),
+    queryFn:  () => svc.getCustomerBalance(customerId),
+    enabled:  !!customerId && customerId > 1,
+    staleTime: 30_000,
   })
 }

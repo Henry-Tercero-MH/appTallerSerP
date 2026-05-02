@@ -16,6 +16,7 @@ import { useOpenSession }        from '@/hooks/useCash'
 import { useReceivables, useReceivablesSummary } from '@/hooks/useReceivables'
 import { usePurchaseOrders }     from '@/hooks/usePurchases'
 import { useExpenseSummary }     from '@/hooks/useExpenses'
+import { useTaxSettings }        from '@/hooks/useSettings'
 import { ROUTES }                from '@/lib/constants'
 
 const dateFmt  = new Intl.DateTimeFormat('es-GT', { dateStyle: 'full' })
@@ -33,6 +34,7 @@ export default function SystemDashboard() {
   const { data: recvSummary }                          = useReceivablesSummary()
   const { data: orders = [] }                          = usePurchaseOrders()
   const { data: expSummary }                           = useExpenseSummary(today, today)
+  const { enabled: taxEnabled }                        = useTaxSettings()
 
   const summary     = report?.summary ?? null
   const lowStock    = products.filter(p => p.is_active === 1 && p.stock <= p.min_stock)
@@ -124,7 +126,7 @@ export default function SystemDashboard() {
           : (
             <div className="db-kpi-grid">
               <KpiCard label="Transacciones"    value={summary?.sale_count ?? 0}             suffix="ventas"  icon={<ShoppingCart className="db-kpi-icon" />} />
-              <KpiCard label="Subtotal"         value={fmtMoney(summary?.subtotal ?? 0)}                      icon={<TrendingUp className="db-kpi-icon text-blue-500" />} />
+              {taxEnabled && <KpiCard label="Subtotal"   value={fmtMoney(summary?.subtotal ?? 0)}             icon={<TrendingUp className="db-kpi-icon text-blue-500" />} suffix="" />}
               <KpiCard label="Total cobrado"    value={fmtMoney(summary?.total ?? 0)}                         icon={<TrendingUp className="db-kpi-icon text-emerald-600" />} highlight />
               <KpiCard label="Gastos del día"   value={fmtMoney(expSummary?.today ?? 0)}                      icon={<TrendingDown className="db-kpi-icon text-red-500" />} danger />
             </div>

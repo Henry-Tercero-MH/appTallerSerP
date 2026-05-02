@@ -1,7 +1,7 @@
 import { unwrap } from './ipc.js'
 import {
   receivableSchema, receivableListSchema,
-  receivableDetailSchema, receivableSummarySchema,
+  receivableDetailSchema, receivableSummarySchema, customerBalanceSchema,
 } from '@/schemas/receivables.schema.js'
 
 export async function listReceivables() {
@@ -26,4 +26,8 @@ export async function applyPayment(input) {
 
 export async function cancelReceivable(id) {
   return unwrap('receivables:cancel', await window.api.receivables.cancel(id), receivableSchema)
+}
+
+export async function getCustomerBalance(customerId) {
+  return unwrap('receivables:by-customer', await window.api.receivables.byCustomer(customerId), customerBalanceSchema)
 }

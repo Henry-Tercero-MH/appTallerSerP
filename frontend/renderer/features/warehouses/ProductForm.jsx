@@ -2,20 +2,10 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { useActiveCategories } from '@/hooks/useCategories'
 
 const SELECT_CLASS =
   'h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
-
-const CATEGORIES = [
-  'Aceites y lubricantes',
-  'Frenos e hidráulico',
-  'Filtros',
-  'Bujías y encendido',
-  'Químicos y aerosoles',
-  'Refrigeración',
-  'Eléctrico',
-  'Otro',
-]
 
 /**
  * @param {{
@@ -25,10 +15,12 @@ const CATEGORIES = [
  * }} props
  */
 export default function ProductForm({ initial, onSave, onCancel }) {
+  const { data: categories = [] } = useActiveCategories()
+
   const [formData, setFormData] = useState({
     code:        initial?.code        ?? '',
     name:        initial?.name        ?? '',
-    category:    initial?.category    ?? CATEGORIES[0],
+    category:    initial?.category    ?? '',
     description: initial?.description ?? '',
     brand:       initial?.brand       ?? '',
     price:       initial?.price       ?? 0,
@@ -65,7 +57,8 @@ export default function ProductForm({ initial, onSave, onCancel }) {
         <div className="grid gap-2">
           <Label htmlFor="category">Categoria</Label>
           <select id="category" name="category" value={formData.category} onChange={handleChange} className={SELECT_CLASS}>
-            {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+            <option value="">— Seleccionar —</option>
+            {categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
           </select>
         </div>
         <div className="grid gap-2">

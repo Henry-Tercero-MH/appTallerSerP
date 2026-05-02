@@ -124,9 +124,16 @@ function pdfFooter(doc) {
 
 // ─── 1. Ventas del dia ───────────────────────────────────────────────────────
 
-export function exportDailySalesExcel({ summary, topProducts }) {
+export function exportDailySalesExcel({ summary, topProducts, taxEnabled = false }) {
   const company = getCompanyName()
   const wb = XLSX.utils.book_new()
+
+  const summaryRows = [
+    ['Ventas realizadas', summary?.sale_count ?? 0],
+    ['Subtotal', summary?.subtotal ?? 0],
+    ...(taxEnabled ? [['IVA cobrado', summary?.tax_amount ?? 0]] : []),
+    ['Total del dia', summary?.total ?? 0],
+  ]
 
   // Hoja resumen
   const ws1 = XLSX.utils.aoa_to_sheet([
@@ -134,10 +141,7 @@ export function exportDailySalesExcel({ summary, topProducts }) {
     ['Reporte de ventas del dia', dateLabel()],
     [],
     ['Metrica', 'Valor'],
-    ['Ventas realizadas', summary?.sale_count ?? 0],
-    ['Subtotal', summary?.subtotal ?? 0],
-    ['IVA cobrado', summary?.tax_amount ?? 0],
-    ['Total del dia', summary?.total ?? 0],
+    ...summaryRows,
   ])
   ws1['!cols'] = [{ wch: 26 }, { wch: 18 }]
   XLSX.utils.book_append_sheet(wb, ws1, 'Resumen del dia')
@@ -156,19 +160,21 @@ export function exportDailySalesExcel({ summary, topProducts }) {
   downloadXlsx(wb, 'ventas_del_dia')
 }
 
-export function exportDailySalesPDF({ summary, topProducts }) {
+export function exportDailySalesPDF({ summary, topProducts, taxEnabled = false }) {
   const doc = new jsPDF()
   const startY = pdfHeader(doc, 'Ventas del dia', `Resumen correspondiente al ${dateLabel()}`)
+
+  const summaryBody = [
+    ['Ventas realizadas', `${summary?.sale_count ?? 0} ordenes`],
+    ['Subtotal', currency(summary?.subtotal)],
+    ...(taxEnabled ? [['IVA cobrado', currency(summary?.tax_amount)]] : []),
+    ['Total del dia', currency(summary?.total)],
+  ]
 
   autoTable(doc, {
     startY,
     head: [['Metrica', 'Valor']],
-    body: [
-      ['Ventas realizadas', `${summary?.sale_count ?? 0} ordenes`],
-      ['Subtotal', currency(summary?.subtotal)],
-      ['IVA cobrado', currency(summary?.tax_amount)],
-      ['Total del dia', currency(summary?.total)],
-    ],
+    body: summaryBody,
     theme: 'grid',
     headStyles: { fillColor: PRIMARY, textColor: 255, fontStyle: 'bold' },
     columnStyles: { 1: { halign: 'right' } },
@@ -199,7 +205,7 @@ export function exportDailySalesPDF({ summary, topProducts }) {
 
 // ─── 2. Historial de ventas ───────────────────────────────────────────────────
 
-export function exportSalesHistoryExcel(sales, { from, to }) {
+export function exportSalesHistoryExcel(sales, { from, to, taxEnabled = false }) {
   const company = getCompanyName()
   const active  = sales.filter(s => s.status !== 'voided')
   const wb = XLSX.utils.book_new()
@@ -207,7 +213,8 @@ export function exportSalesHistoryExcel(sales, { from, to }) {
   const PAYMENT = { cash: 'Efectivo', credit: 'Credito', card: 'Tarjeta', transfer: 'Transferencia' }
   const CLIENT  = { cf: 'C/F', registered: 'Registrado', company: 'Empresa' }
 
-  const header = ['Folio', 'Fecha', 'Cliente', 'NIT', 'Tipo cliente', 'Metodo de pago', 'Subtotal', 'IVA', 'Total', 'Estado']
+  const header = ['Folio', 'Fecha', 'Cliente', 'NIT', 'Tipo cliente', 'Metodo de pago', 'Subtotal',
+    ...(taxEnabled ? ['IVA'] : []), 'Total', 'Estado']
   const rows = sales.map(s => [
     s.id,
     fmtDateTime(s.date),
@@ -216,10 +223,16 @@ export function exportSalesHistoryExcel(sales, { from, to }) {
     CLIENT[s.client_type]    ?? s.client_type  ?? '—',
     PAYMENT[s.payment_method] ?? s.payment_method ?? '—',
     s.subtotal,
-    s.tax_amount,
+    ...(taxEnabled ? [s.tax_amount] : []),
     s.total,
     s.status === 'voided' ? 'Anulada' : 'Activa',
   ])
+
+  const totalsRow = ['', '', '', '', '', 'TOTALES',
+    active.reduce((a, s) => a + s.subtotal, 0),
+    ...(taxEnabled ? [active.reduce((a, s) => a + s.tax_amount, 0)] : []),
+    active.reduce((a, s) => a + s.total, 0),
+  ]
 
   const ws = XLSX.utils.aoa_to_sheet([
     [company],
@@ -228,56 +241,63 @@ export function exportSalesHistoryExcel(sales, { from, to }) {
     header,
     ...rows,
     [],
-    ['', '', '', '', '', 'TOTALES',
-      active.reduce((a, s) => a + s.subtotal, 0),
-      active.reduce((a, s) => a + s.tax_amount, 0),
-      active.reduce((a, s) => a + s.total, 0),
-    ],
+    totalsRow,
   ])
   ws['!cols'] = [
     { wch: 8 }, { wch: 18 }, { wch: 28 }, { wch: 14 },
-    { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 10 },
+    { wch: 14 }, { wch: 16 }, { wch: 12 },
+    ...(taxEnabled ? [{ wch: 10 }] : []),
+    { wch: 12 }, { wch: 10 },
   ]
   XLSX.utils.book_append_sheet(wb, ws, 'Historial de ventas')
   downloadXlsx(wb, 'historial_ventas')
 }
 
-export function exportSalesHistoryPDF(sales, { from, to }) {
+export function exportSalesHistoryPDF(sales, { from, to, taxEnabled = false }) {
   const doc     = new jsPDF({ orientation: 'landscape' })
   const active  = sales.filter(s => s.status !== 'voided')
   const startY  = pdfHeader(doc, 'Historial de ventas', `Periodo: ${from} al ${to}`)
 
   const PAYMENT = { cash: 'Efectivo', credit: 'Credito', card: 'Tarjeta', transfer: 'Transferencia' }
 
+  const head = ['Folio', 'Fecha', 'Cliente', 'NIT', 'Pago', 'Subtotal',
+    ...(taxEnabled ? ['IVA'] : []), 'Total', 'Estado']
+  const body = sales.map(s => [
+    s.id,
+    fmtDateTime(s.date),
+    s.customer_name_snapshot ?? 'C/F',
+    s.customer_nit_snapshot  ?? 'C/F',
+    PAYMENT[s.payment_method] ?? s.payment_method ?? '—',
+    currency(s.subtotal),
+    ...(taxEnabled ? [currency(s.tax_amount)] : []),
+    currency(s.total),
+    s.status === 'voided' ? 'Anulada' : 'Activa',
+  ])
+  const statusIdx = taxEnabled ? 8 : 7
+  const totalIdx  = taxEnabled ? 7 : 6
+  const foot = [['', '', '', '', 'TOTALES',
+    currency(active.reduce((a, s) => a + s.subtotal, 0)),
+    ...(taxEnabled ? [currency(active.reduce((a, s) => a + s.tax_amount, 0))] : []),
+    currency(active.reduce((a, s) => a + s.total, 0)),
+    '',
+  ]]
+
   autoTable(doc, {
     startY,
-    head: [['Folio', 'Fecha', 'Cliente', 'NIT', 'Pago', 'Subtotal', 'IVA', 'Total', 'Estado']],
-    body: sales.map(s => [
-      s.id,
-      fmtDateTime(s.date),
-      s.customer_name_snapshot ?? 'C/F',
-      s.customer_nit_snapshot  ?? 'C/F',
-      PAYMENT[s.payment_method] ?? s.payment_method ?? '—',
-      currency(s.subtotal),
-      currency(s.tax_amount),
-      currency(s.total),
-      s.status === 'voided' ? 'Anulada' : 'Activa',
-    ]),
-    foot: [['', '', '', '', 'TOTALES',
-      currency(active.reduce((a, s) => a + s.subtotal, 0)),
-      currency(active.reduce((a, s) => a + s.tax_amount, 0)),
-      currency(active.reduce((a, s) => a + s.total, 0)),
-      '',
-    ]],
+    head: [head],
+    body,
+    foot,
     theme: 'grid',
     headStyles: { fillColor: PRIMARY, textColor: 255, fontStyle: 'bold' },
     footStyles: { fillColor: GRAY, textColor: [30, 30, 30], fontStyle: 'bold' },
     columnStyles: {
-      5: { halign: 'right' }, 6: { halign: 'right' },
-      7: { halign: 'right' }, 8: { halign: 'center' },
+      5: { halign: 'right' },
+      [totalIdx]:  { halign: 'right' },
+      [statusIdx]: { halign: 'center' },
+      ...(taxEnabled ? { 6: { halign: 'right' } } : {}),
     },
     didParseCell(data) {
-      if (data.section === 'body' && data.row.raw[8] === 'Anulada') {
+      if (data.section === 'body' && data.row.raw[statusIdx] === 'Anulada') {
         data.cell.styles.textColor = /** @type {[number,number,number]} */ ([0, 0, 0])
       }
     },

@@ -1,4 +1,4 @@
-import { ipcMain, dialog, app } from 'electron'
+import { ipcMain, dialog, app, BrowserWindow } from 'electron'
 import path from 'path'
 import { getDb } from '../database/connection.js'
 import { runMigrations } from '../database/migrator.js'
@@ -6,6 +6,10 @@ import { runMigrations } from '../database/migrator.js'
 import { createSettingsRepository } from '../modules/settings/settings.repository.js'
 import { createSettingsService }    from '../modules/settings/settings.service.js'
 import { registerSettingsIpc }      from '../modules/settings/settings.ipc.js'
+
+import { createCategoriesRepository } from '../modules/categories/categories.repository.js'
+import { createCategoriesService }    from '../modules/categories/categories.service.js'
+import { registerCategoriesIpc }      from '../modules/categories/categories.ipc.js'
 
 import { createProductsRepository } from '../modules/products/products.repository.js'
 import { createProductsService }    from '../modules/products/products.service.js'
@@ -91,6 +95,9 @@ export function bootstrap() {
   const settings     = createSettingsService(settingsRepo)
   settings.init() // warmup del cache antes de registrar IPC
 
+  const categoriesRepo = createCategoriesRepository(db)
+  const categories     = createCategoriesService(categoriesRepo)
+
   const productsRepo = createProductsRepository(db)
   const products     = createProductsService(productsRepo)
 
@@ -128,6 +135,7 @@ export function bootstrap() {
   const inventory     = createInventoryService(inventoryRepo)
 
   registerSettingsIpc(settings)
+  registerCategoriesIpc(categories)
   registerProductsIpc(products)
   registerCustomersIpc(customers)
   registerSalesIpc(sales)
@@ -198,4 +206,42 @@ export function bootstrap() {
 
   // Arranca el scheduler con los valores configurados
   startBackupSchedule(db, intervalHours, maxCopies)
+
+  // ── Impresora ────────────────────────────────────────────────
+  ipcMain.handle('printer:list', async (event) => {
+    try {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      const printers = win ? await win.webContents.getPrintersAsync() : []
+      return { ok: true, data: printers.map(p => ({ name: p.name, isDefault: p.isDefault })) }
+    } catch (err) {
+      return { ok: false, error: { code: 'PRINTER_LIST_ERROR', message: String(err.message) } }
+    }
+  })
+
+  ipcMain.handle('printer:print', async (_event, html, deviceName, paperSize) => {
+    const sizes = {
+      'half-letter': { width: 139700, height: 215900 },
+      'letter':      { width: 215900, height: 279400 },
+      'thermal-80':  { width: 80000,  height: 297000 },
+    }
+    const pageSize = sizes[paperSize] ?? sizes['half-letter']
+    const win = new BrowserWindow({ show: false, webPreferences: { contextIsolation: true } })
+    try {
+      await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
+      return await new Promise((resolve) => {
+        win.webContents.print(
+          { silent: true, deviceName: deviceName || undefined, pageSize },
+          (success, reason) => {
+            win.close()
+            resolve(success
+              ? { ok: true, data: null }
+              : { ok: false, error: { code: 'PRINT_FAILED', message: reason } })
+          }
+        )
+      })
+    } catch (err) {
+      win.close()
+      return { ok: false, error: { code: 'PRINT_ERROR', message: String(err.message) } }
+    }
+  })
 }

@@ -8,6 +8,10 @@ import './index.css'
 
 const container = /** @type {HTMLElement} */ (document.getElementById('root'))
 
+// Quitar splash de carga cuando React monta
+const splash = document.getElementById('app-splash')
+if (splash) splash.remove()
+
 ReactDOM.createRoot(container).render(
   <React.StrictMode>
     <QueryProvider>

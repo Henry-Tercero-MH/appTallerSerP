@@ -44,3 +44,8 @@ export const receivableSummarySchema = z.object({
   partial_balance:  z.number(),
   overdue_balance:  z.number(),
 })
+
+export const customerBalanceSchema = z.object({
+  rows:    z.array(receivableSchema),
+  balance: z.number(),
+})

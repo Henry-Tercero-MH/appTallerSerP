@@ -18,6 +18,8 @@
  * @property {string} customerNitSnapshot
  * @property {string} [paymentMethod]
  * @property {string} [clientType]
+ * @property {number} [userId]
+ * @property {string} [userName]
  */
 
 /**
@@ -76,11 +78,16 @@ export function createSalesRepository(db) {
   const stmts = {
     insertSale: db.prepare(
       `INSERT INTO sales (
+         date,
          total, subtotal, tax_rate_applied, tax_amount, currency_code,
          customer_id, customer_name_snapshot, customer_nit_snapshot,
          payment_method, client_type,
-         discount_type, discount_value, discount_amount
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         discount_type, discount_value, discount_amount,
+         created_by_user_id, created_by_user_snapshot
+       ) VALUES (
+         strftime('%Y-%m-%d %H:%M:%S','now','localtime'),
+         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+       )`
     ),
     insertItem: db.prepare(
       'INSERT INTO sale_items (sale_id, product_id, qty, price) VALUES (?, ?, ?, ?)'
@@ -245,6 +252,22 @@ export function createSalesRepository(db) {
       GROUP BY method
       ORDER BY sale_count DESC
     `),
+
+    salesByCashier: db.prepare(`
+      SELECT
+        COALESCE(created_by_user_snapshot, 'Desconocido') AS cashier_name,
+        created_by_user_id                                AS cashier_id,
+        COUNT(*)                                          AS sale_count,
+        COALESCE(SUM(subtotal),0)                         AS subtotal,
+        COALESCE(SUM(tax_amount),0)                       AS tax_amount,
+        COALESCE(SUM(total),0)                            AS total
+      FROM sales
+      WHERE status = 'active'
+        AND date >= @from || ' 00:00:00'
+        AND date <= @to   || ' 23:59:59'
+      GROUP BY created_by_user_id, created_by_user_snapshot
+      ORDER BY total DESC
+    `),
   }
 
   /**
@@ -265,7 +288,9 @@ export function createSalesRepository(db) {
       record.clientType     ?? 'cf',
       record.discountType   ?? 'none',
       record.discountValue  ?? 0,
-      record.discountAmount ?? 0
+      record.discountAmount ?? 0,
+      record.userId         ?? null,
+      record.userName       ?? null
     )
     const saleId = info.lastInsertRowid
     for (const item of record.items) {
@@ -414,6 +439,15 @@ export function createSalesRepository(db) {
      */
     getSalesByPaymentMethod({ from, to }) {
       return /** @type {any[]} */ (stmts.salesByPaymentMethod.all({ from, to }))
+    },
+
+    /**
+     * Ventas agrupadas por cajero (usuario que registró la venta).
+     * @param {{ from: string, to: string }} range
+     * @returns {any[]}
+     */
+    getSalesByCashier({ from, to }) {
+      return /** @type {any[]} */ (stmts.salesByCashier.all({ from, to }))
     },
   }
 }

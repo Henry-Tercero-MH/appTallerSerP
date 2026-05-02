@@ -11,7 +11,6 @@ import {
   MdPeopleOutline,
   MdInsertChartOutlined,
   MdReceiptLong,
-  MdBuild,
   MdExitToApp,
   MdManageAccounts,
   MdSettings,
@@ -23,12 +22,12 @@ import { Landmark, ShoppingCart, Wallet, FileText, TrendingDown, Truck } from 'l
 import { GlobalSearch } from '@/components/shared/GlobalSearch';
 
 const NAV = [
-  { to: ROUTES.DASHBOARD, label: 'Dashboard',         icon: MdDashboard },
+  { to: ROUTES.DASHBOARD, label: 'Dashboard',         icon: MdDashboard,           adminOnly: true },
   { to: ROUTES.POS,       label: 'Facturar',          icon: MdPointOfSale },
   { to: ROUTES.HISTORY,   label: 'Historial',         icon: MdReceiptLong },
   { to: ROUTES.INVENTORY, label: 'Productos / Stock', icon: MdInventory },
-  { to: ROUTES.CLIENTS,   label: 'Clientes',          icon: MdPeopleOutline },
-  { to: ROUTES.REPORTS,   label: 'Reportes',          icon: MdInsertChartOutlined },
+  { to: ROUTES.CLIENTS,   label: 'Clientes',          icon: MdPeopleOutline,        adminOnly: true },
+  { to: ROUTES.REPORTS,   label: 'Reportes',          icon: MdInsertChartOutlined,  adminOnly: true },
 ];
 
 const ADMIN_NAV = [
@@ -93,7 +92,7 @@ export default function AppLayout() {
         </div>
 
         <nav className="sidebar-nav">
-          {NAV.map(({ to, label, icon: Icon }) => (
+          {NAV.filter(item => !item.adminOnly || isAdmin).map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
@@ -150,6 +149,15 @@ export default function AppLayout() {
             <GlobalSearch />
           </div>
           <div className="topbar-right">
+            {isAdmin && (
+              <button
+                className="topbar-audit-btn"
+                title="Bitácora"
+                onClick={() => navigate(ROUTES.AUDIT)}
+              >
+                <MdShield style={{ fontSize: 18 }} />
+              </button>
+            )}
             <div className="topbar-user">
               <div className="topbar-avatar">
                 {user?.avatar

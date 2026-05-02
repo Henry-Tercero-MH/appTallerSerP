@@ -23,7 +23,7 @@ import {
 } from '@/hooks/useQuotes'
 import { useProducts }          from '@/hooks/useProducts'
 import { useAuthContext }       from '@/features/auth/AuthContext'
-import { useBusinessSettings }  from '@/hooks/useSettings'
+import { useBusinessSettings, useTaxSettings }  from '@/hooks/useSettings'
 
 const fmtDate  = (s) => s ? new Intl.DateTimeFormat('es-GT', { dateStyle: 'medium' }).format(new Date(s + 'T00:00:00')) : '—'
 const fmtMoney = (n) => new Intl.NumberFormat('es-GT', { style: 'currency', currency: 'GTQ' }).format(n ?? 0)
@@ -47,6 +47,7 @@ const EDITABLE_STATUSES = ['draft', 'sent']
 const ACTIVE_STATUSES   = ['draft', 'sent', 'accepted']
 
 export default function QuotesPage() {
+  const { enabled: taxEnabled } = useTaxSettings()
   const { user }  = useAuthContext()
   const [search, setSearch]       = useState('')
   const [statusFilter, setStatus] = useState('active')
@@ -404,7 +405,7 @@ function QuoteFormModal({ open, editId = null, onClose, user }) {
                         </div>
                       ))}
                       <div className="qt-totals-row">
-                        <span className="text-muted-foreground text-sm">Subtotal (sin IVA):</span>
+                        <span className="text-muted-foreground text-sm">Subtotal:</span>
                         <strong>{fmtMoney(subtotal)}</strong>
                       </div>
                     </div>
@@ -504,10 +505,12 @@ function QuoteDetailModal({ id, onClose }) {
                     <td colSpan={3} className="sh-td text-right text-muted-foreground text-sm">Subtotal:</td>
                     <td className="sh-td sh-num">{fmtMoney(q.subtotal)}</td>
                   </tr>
-                  <tr>
-                    <td colSpan={3} className="sh-td text-right text-muted-foreground text-sm">IVA ({(q.tax_rate * 100).toFixed(0)}%):</td>
-                    <td className="sh-td sh-num">{fmtMoney(q.tax_amount)}</td>
-                  </tr>
+                  {taxEnabled && (
+                    <tr>
+                      <td colSpan={3} className="sh-td text-right text-muted-foreground text-sm">IVA ({(q.tax_rate * 100).toFixed(0)}%):</td>
+                      <td className="sh-td sh-num">{fmtMoney(q.tax_amount)}</td>
+                    </tr>
+                  )}
                   <tr className="font-bold">
                     <td colSpan={3} className="sh-td text-right">Total:</td>
                     <td className="sh-td sh-num sh-total">{fmtMoney(q.total)}</td>
@@ -600,9 +603,11 @@ function QuotePrintDialog({ id, onClose }) {
                 <div className="qt-print-total-row">
                   <span>Subtotal</span><span>{fmtMoney(q.subtotal)}</span>
                 </div>
-                <div className="qt-print-total-row">
-                  <span>IVA ({(q.tax_rate * 100).toFixed(0)}%)</span><span>{fmtMoney(q.tax_amount)}</span>
-                </div>
+                {taxEnabled && (
+                  <div className="qt-print-total-row">
+                    <span>IVA ({(q.tax_rate * 100).toFixed(0)}%)</span><span>{fmtMoney(q.tax_amount)}</span>
+                  </div>
+                )}
                 <div className="qt-print-total-row qt-print-total-final">
                   <span>TOTAL</span><span>{fmtMoney(q.total)}</span>
                 </div>

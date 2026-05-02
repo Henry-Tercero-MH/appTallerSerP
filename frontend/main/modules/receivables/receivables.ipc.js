@@ -20,4 +20,5 @@ export function registerReceivablesIpc(svc) {
   handle('receivables:create',        (input)   => svc.create(input))
   handle('receivables:apply-payment', (input)   => svc.applyPayment(input))
   handle('receivables:cancel',        (id)      => svc.cancel(id))
+  handle('receivables:by-customer',   (id)      => svc.byCustomer(id))
 }

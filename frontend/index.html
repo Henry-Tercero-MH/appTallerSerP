@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SerProMec</title>
+    <title>Bienvenido</title>
     <!--
       Script síncrono: aplica el tema guardado ANTES de que React monte.
       Evita el flash de colores incorrectos en Login y cualquier otra ruta.
@@ -66,7 +66,34 @@
     </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Splash visible solo mientras React carga (desaparece al montar) -->
+      <div id="app-splash" style="
+        position:fixed;inset:0;display:flex;flex-direction:column;
+        align-items:center;justify-content:center;gap:16px;
+        background:#071030;font-family:'Segoe UI',system-ui,sans-serif;
+      ">
+        <div style="
+          width:56px;height:56px;border-radius:14px;
+          background:rgba(255,255,255,0.08);
+          display:flex;align-items:center;justify-content:center;
+          font-size:28px;
+        ">▦</div>
+        <div style="color:#fff;font-size:20px;font-weight:700;letter-spacing:0.01em;">
+          Mangueras del Sur
+        </div>
+        <div style="color:#8a9ec4;font-size:13px;">Sistema de Gestión</div>
+        <div style="margin-top:8px;display:flex;gap:6px;align-items:center;">
+          <div class="sp-dot"></div><div class="sp-dot"></div><div class="sp-dot"></div>
+        </div>
+      </div>
+    </div>
+    <style>
+      .sp-dot{width:7px;height:7px;border-radius:50%;background:#3a5080;animation:sp-bounce 1.2s infinite ease-in-out both;}
+      .sp-dot:nth-child(1){animation-delay:-0.32s;}
+      .sp-dot:nth-child(2){animation-delay:-0.16s;}
+      @keyframes sp-bounce{0%,80%,100%{transform:scale(0.6);opacity:.4}40%{transform:scale(1);opacity:1}}
+    </style>
     <script type="module" src="/renderer/main.jsx"></script>
   </body>
 </html>

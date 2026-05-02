@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import {
   BarChart3, RefreshCw, ShoppingCart, TrendingUp, TrendingDown, Package,
   FileSpreadsheet, FileText, Download, AlertTriangle, Users,
-  CalendarDays, ClipboardList, Clock, CreditCard, Scale,
+  CalendarDays, ClipboardList, Clock, CreditCard, Scale, UserCheck,
 } from 'lucide-react'
 import {
   BarChart, Bar, LineChart, Line,
@@ -20,6 +20,7 @@ import { useDailyReport, useRangeReport } from '@/hooks/useSales'
 import { useExpenseSummary }              from '@/hooks/useExpenses'
 import { useProducts }        from '@/hooks/useProducts'
 import { useSearchCustomers } from '@/hooks/useCustomers'
+import { useTaxSettings }     from '@/hooks/useSettings'
 
 import {
   exportDailySalesExcel,
@@ -55,6 +56,7 @@ export default function ReportsPage() {
     to:   new Date().toISOString().slice(0, 10),
   })
 
+  const { enabled: taxEnabled } = useTaxSettings()
   const { data: dailyData, isLoading: dailyLoading, isError: dailyError, refetch, isFetching } = useDailyReport()
   const { data: rangeData, isLoading: rangeLoading } = useRangeReport(chartRange)
   const { data: plRangeData }   = useRangeReport(plRange)
@@ -106,10 +108,10 @@ export default function ReportsPage() {
           <div className="rp-kpi-grid">
             <KpiCard icon={<ShoppingCart className="h-4 w-4 text-primary" />}
               label="Ventas realizadas" value={summary?.sale_count ?? 0} suffix="órdenes" />
-            <KpiCard icon={<TrendingUp className="h-4 w-4 text-emerald-600" />}
-              label="Subtotal del día" value={<MoneyDisplay amount={summary?.subtotal ?? 0} />} />
-            <KpiCard icon={<BarChart3 className="h-4 w-4 text-blue-600" />}
-              label="IVA cobrado" value={<MoneyDisplay amount={summary?.tax_amount ?? 0} />} />
+            {taxEnabled && <KpiCard icon={<TrendingUp className="h-4 w-4 text-emerald-600" />}
+              label="Subtotal del día" value={<MoneyDisplay amount={summary?.subtotal ?? 0} />} />}
+            {taxEnabled && <KpiCard icon={<BarChart3 className="h-4 w-4 text-blue-600" />}
+              label="IVA cobrado" value={<MoneyDisplay amount={summary?.tax_amount ?? 0} />} />}
             <KpiCard icon={<TrendingUp className="h-4 w-4 text-primary" />}
               label="Total del día" value={<MoneyDisplay amount={summary?.total ?? 0} />} highlight />
           </div>
@@ -153,6 +155,9 @@ export default function ReportsPage() {
       {/* ── Análisis por rango ────────────────────────────────────────────── */}
       <AnalyticsSection chartRange={chartRange} setChartRange={setChartRange} rangeData={rangeData} rangeLoading={rangeLoading} />
 
+      {/* ── Ventas por cajero ─────────────────────────────────────────────── */}
+      <CashierSection rangeData={rangeData} rangeLoading={rangeLoading} chartRange={chartRange} />
+
       {/* ── P&L Ingresos vs Egresos ─────────────────────────────────────────── */}
       <PLSection
         plRange={plRange}
@@ -177,12 +182,12 @@ export default function ReportsPage() {
           actions={[
             {
               label: 'Excel', icon: <FileSpreadsheet className="h-3.5 w-3.5" />, color: 'green',
-              onClick: () => run('daily-xlsx', async () => exportDailySalesExcel({ summary, topProducts })),
+              onClick: () => run('daily-xlsx', async () => exportDailySalesExcel({ summary, topProducts, taxEnabled })),
               loading: loadingReport === 'daily-xlsx',
             },
             {
               label: 'PDF', icon: <FileText className="h-3.5 w-3.5" />, color: 'red',
-              onClick: () => run('daily-pdf', async () => exportDailySalesPDF({ summary, topProducts })),
+              onClick: () => run('daily-pdf', async () => exportDailySalesPDF({ summary, topProducts, taxEnabled })),
               loading: loadingReport === 'daily-pdf',
             },
           ]}
@@ -214,7 +219,7 @@ export default function ReportsPage() {
               label: 'Excel', icon: <FileSpreadsheet className="h-3.5 w-3.5" />, color: 'green',
               onClick: () => run('hist-xlsx', async () => {
                 const sales = await fetchAllSales()
-                exportSalesHistoryExcel(sales, histRange)
+                exportSalesHistoryExcel(sales, { ...histRange, taxEnabled })
               }),
               loading: loadingReport === 'hist-xlsx',
             },
@@ -222,7 +227,7 @@ export default function ReportsPage() {
               label: 'PDF', icon: <FileText className="h-3.5 w-3.5" />, color: 'red',
               onClick: () => run('hist-pdf', async () => {
                 const sales = await fetchAllSales()
-                exportSalesHistoryPDF(sales, histRange)
+                exportSalesHistoryPDF(sales, { ...histRange, taxEnabled })
               }),
               loading: loadingReport === 'hist-pdf',
             },
@@ -320,6 +325,70 @@ export default function ReportsPage() {
         />
 
       </div>
+    </div>
+  )
+}
+
+// ─── Ventas por cajero ────────────────────────────────────────────────────────
+
+const fmtMoneyCashier = (n) => new Intl.NumberFormat('es-GT', { style: 'currency', currency: 'GTQ' }).format(n ?? 0)
+
+function CashierSection({ rangeData, rangeLoading, chartRange }) {
+  const rows = rangeData?.byCashier ?? []
+
+  return (
+    <div className="rp-chart-section">
+      <div className="rp-chart-header">
+        <div className="rp-section-header">
+          <UserCheck className="h-4 w-4 text-primary" />
+          <span>Ventas por cajero</span>
+          <span className="text-xs text-muted-foreground ml-1">
+            {chartRange.from} – {chartRange.to}
+          </span>
+        </div>
+      </div>
+
+      {rangeLoading ? (
+        <div className="flex h-20 items-center justify-center"><RefreshCw className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+      ) : rows.length === 0 ? (
+        <p className="py-6 text-center text-sm text-muted-foreground">Sin ventas en el rango seleccionado.</p>
+      ) : (
+        <div className="sh-table-scroll mt-3">
+          <table className="sh-table">
+            <thead>
+              <tr>
+                <th className="sh-th">Cajero</th>
+                <th className="sh-th sh-num">Ventas</th>
+                <th className="sh-th sh-num">Subtotal</th>
+                <th className="sh-th sh-num">Total</th>
+                <th className="sh-th sh-num" style={{ width: 120 }}>% del total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => {
+                const grandTotal = rows.reduce((s, x) => s + x.total, 0)
+                const pct = grandTotal > 0 ? ((r.total / grandTotal) * 100).toFixed(1) : '0.0'
+                return (
+                  <tr key={r.cashier_id ?? i} className={i % 2 === 0 ? 'sh-tr-even' : 'sh-tr-odd'}>
+                    <td className="sh-td font-medium">{r.cashier_name}</td>
+                    <td className="sh-td sh-num">{r.sale_count}</td>
+                    <td className="sh-td sh-num">{fmtMoneyCashier(r.subtotal)}</td>
+                    <td className="sh-td sh-num sh-total">{fmtMoneyCashier(r.total)}</td>
+                    <td className="sh-td sh-num">
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+                          <div className="h-full bg-primary rounded-full" style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="text-xs tabular-nums">{pct}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

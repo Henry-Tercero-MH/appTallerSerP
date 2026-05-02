@@ -74,5 +74,15 @@ export function createReceivablesService(repo) {
       repo.cancel(id)
       return repo.findById(id)
     },
+
+    byCustomer(customerId) {
+      if (!Number.isInteger(customerId) || customerId <= 0) {
+        throw Object.assign(new Error('customer_id inválido'), { code: 'RECV_INVALID_CUSTOMER' })
+      }
+      const rows = repo.findByCustomer(customerId)
+      const active = rows.filter(r => ['pending', 'partial'].includes(r.status))
+      const balance = active.reduce((s, r) => s + (r.amount - r.amount_paid), 0)
+      return { rows: active, balance }
+    },
   }
 }

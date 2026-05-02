@@ -32,8 +32,9 @@ export function useCurrencySettings() {
 
 export function useTaxSettings() {
   const { data } = useSettings()
-  const tax = /** @type {{ tax_rate?: number, tax_included_in_price?: boolean } | undefined} */ (data?.tax)
+  const tax = /** @type {{ tax_rate?: number, tax_included_in_price?: boolean, tax_enabled?: boolean } | undefined} */ (data?.tax)
   return {
+    enabled:  typeof tax?.tax_enabled === 'boolean' ? tax.tax_enabled : false,
     rate:     typeof tax?.tax_rate === 'number' ? tax.tax_rate : 0.12,
     included: typeof tax?.tax_included_in_price === 'boolean' ? tax.tax_included_in_price : false,
   }
@@ -52,5 +53,14 @@ export function useBusinessSettings() {
     email:       typeof b?.business_email    === 'string' ? b.business_email    : '',
     city:        typeof b?.business_city     === 'string' ? b.business_city     : '',
     country:     typeof b?.business_country  === 'string' ? b.business_country  : '',
+  }
+}
+
+export function usePrinterSettings() {
+  const { data } = useSettings()
+  const ticket = /** @type {Record<string, unknown> | undefined} */ (data?.ticket)
+  return {
+    printerName: typeof ticket?.receipt_printer    === 'string' ? ticket.receipt_printer    : '',
+    paperSize:   typeof ticket?.receipt_paper_size === 'string' ? ticket.receipt_paper_size : 'half-letter',
   }
 }

@@ -14,6 +14,7 @@ import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { MoneyDisplay }   from '@/components/shared/MoneyDisplay'
 
 import { useSales } from '@/hooks/useSales'
+import { useTaxSettings } from '@/hooks/useSettings'
 import { SaleDetailDialog } from './SaleDetailDialog'
 import { VoidSaleDialog }   from './VoidSaleDialog'
 import { ReturnDialog }     from './ReturnDialog'
@@ -50,6 +51,7 @@ const STATUS_OPTS = [
 ]
 
 export default function SalesHistoryPage() {
+  const { enabled: taxEnabled } = useTaxSettings()
   const [page,          setPage]          = useState(1)
   const [openSaleId,    setOpenSaleId]    = useState(/** @type {number | null} */ (null))
   const [voidSale,      setVoidSale]      = useState(/** @type {any} */ (null))
@@ -204,7 +206,7 @@ export default function SalesHistoryPage() {
                   <th className="sh-th w-24">Tipo</th>
                   <th className="sh-th w-28">Pago</th>
                   <th className="sh-th sh-num w-28">Subtotal</th>
-                  <th className="sh-th sh-num w-24">IVA</th>
+                  {taxEnabled && <th className="sh-th sh-num w-24">IVA</th>}
                   <th className="sh-th sh-num w-28">Total</th>
                   <th className="sh-th w-16" />
                 </tr>
@@ -245,9 +247,11 @@ export default function SalesHistoryPage() {
                       <td className="sh-td sh-num sh-amount">
                         <MoneyDisplay amount={sale.subtotal} />
                       </td>
-                      <td className="sh-td sh-num sh-tax">
-                        <MoneyDisplay amount={sale.tax_amount} />
-                      </td>
+                      {taxEnabled && (
+                        <td className="sh-td sh-num sh-tax">
+                          <MoneyDisplay amount={sale.tax_amount} />
+                        </td>
+                      )}
                       <td className={`sh-td sh-num ${isVoided ? 'sh-total-voided' : 'sh-total'}`}>
                         <MoneyDisplay amount={sale.total} />
                       </td>
@@ -279,7 +283,7 @@ export default function SalesHistoryPage() {
                     {hasFilters && ` · filtrado de ${data.total} total`})
                   </td>
                   <td className="sh-tf sh-num"><MoneyDisplay amount={pageTotals.subtotal} /></td>
-                  <td className="sh-tf sh-num"><MoneyDisplay amount={pageTotals.tax} /></td>
+                  {taxEnabled && <td className="sh-tf sh-num"><MoneyDisplay amount={pageTotals.tax} /></td>}
                   <td className="sh-tf sh-num sh-tf-total"><MoneyDisplay amount={pageTotals.total} /></td>
                   <td className="sh-tf" />
                 </tr>

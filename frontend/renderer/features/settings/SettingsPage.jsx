@@ -20,7 +20,7 @@ import { settingsKeys }       from '@/hooks/queryKeys.js'
 import { THEMES, THEME_MAP, applyTheme } from '@/lib/themes'
 
 const THEME_GROUPS = [
-  { label: 'Clásicos',  ids: ['crimson','ocean','forest','violet','slate','amber','rose','teal','indigo','emerald','coral','carbon'] },
+  { label: 'Clásicos',  ids: ['crimson','tricolor','tricolor-buttons','ocean','forest','violet','slate','amber','rose','teal','indigo','emerald','coral','carbon'] },
   { label: 'Claros',    ids: ['light-sky','light-sand'] },
   { label: 'Mate',      ids: ['matte-steel','matte-earth'] },
   { label: 'Neón',      ids: ['neon-cyan','neon-magenta'] },
@@ -135,7 +135,7 @@ function ThemeSection({ currentTheme, appName, setMut, upsertMut }) {
             <Label>Paleta de colores</Label>
             <div className="flex items-center gap-3 flex-wrap">
               <div className="flex gap-1.5">
-                {[active.preview.sidebar, active.preview.primary, active.preview.accent].map((c, i) => (
+                {[active.preview.primary, active.preview.accent, active.preview.sidebar].map((c, i) => (
                   <span key={i} className="block h-6 w-6 rounded-full border border-black/10" style={{ background: c }} />
                 ))}
               </div>
@@ -179,7 +179,7 @@ function ThemeSection({ currentTheme, appName, setMut, upsertMut }) {
                           ].join(' ')}
                         >
                           <div className="flex gap-1 shrink-0">
-                            {[theme.preview.sidebar, theme.preview.primary, theme.preview.accent].map((c, i) => (
+                            {[theme.preview.primary, theme.preview.accent, theme.preview.sidebar].map((c, i) => (
                               <span key={i} className="block h-5 w-5 rounded-full border border-black/10" style={{ background: c }} />
                             ))}
                           </div>
@@ -350,6 +350,86 @@ function LogoSection({ current, mut }) {
   )
 }
 
+// ── selector de impresora ─────────────────────────────────────────────────────
+
+/**
+ * @param {{ currentValue: string, mut: ReturnType<typeof useSetSetting> }} p
+ */
+function PrinterSelector({ currentValue, mut }) {
+  const [printers, setPrinters] = useState(/** @type {{ name: string, isDefault: boolean }[]} */ ([]))
+
+  useEffect(() => {
+    const api = /** @type {any} */ (window.api)
+    if (!api?.printer) return
+    api.printer.list().then((/** @type {any} */ res) => {
+      if (res.ok) setPrinters(res.data)
+    })
+  }, [])
+
+  async function handleChange(/** @type {import('react').ChangeEvent<HTMLSelectElement>} */ e) {
+    await mut.mutateAsync({ key: 'receipt_printer', value: e.target.value })
+    toast.success('Impresora guardada')
+  }
+
+  return (
+    <Field label="Impresora para recibos" hint="Vacío = abre el diálogo del sistema al imprimir">
+      <select
+        value={currentValue}
+        onChange={handleChange}
+        className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+      >
+        <option value="">(Diálogo del sistema)</option>
+        {printers.map(p => (
+          <option key={p.name} value={p.name}>
+            {p.name}{p.isDefault ? ' — predeterminada' : ''}
+          </option>
+        ))}
+      </select>
+    </Field>
+  )
+}
+
+// ── sección ticket / impresión ────────────────────────────────────────────────
+
+/**
+ * @param {{ s: Record<string,unknown>, setMut: ReturnType<typeof useSetSetting> }} p
+ */
+function TicketSection({ s, setMut }) {
+  return (
+    <div className="space-y-0">
+      <SettingsSection
+        title="Ticket / Impresión"
+        icon={Printer}
+        mut={setMut}
+        defaults={{
+          ticket_footer_line1: s.ticket_footer_line1 ?? '',
+          ticket_footer_line2: s.ticket_footer_line2 ?? '',
+          ticket_show_logo:    s.ticket_show_logo    ?? true,
+          ticket_show_tax:     s.ticket_show_tax     ?? true,
+          ticket_copies:       s.ticket_copies       ?? 1,
+          receipt_paper_size:  s.receipt_paper_size  ?? 'half-letter',
+        }}
+        fields={[
+          { key: 'ticket_footer_line1', label: 'Pie de ticket — línea 1',  type: 'string',  hint: 'Ej. ¡Gracias por su preferencia!' },
+          { key: 'ticket_footer_line2', label: 'Pie de ticket — línea 2',  type: 'string' },
+          { key: 'ticket_show_logo',    label: 'Mostrar logo en ticket',   type: 'boolean' },
+          { key: 'ticket_show_tax',     label: 'Desglosar IVA en ticket',  type: 'boolean' },
+          { key: 'ticket_copies',       label: 'Copias por venta',         type: 'number' },
+          { key: 'receipt_paper_size',  label: 'Tamaño de papel',          type: 'string',  hint: 'half-letter | letter | thermal-80' },
+        ]}
+      />
+      <Card className="-mt-3 rounded-t-none border-t-0 pt-0">
+        <CardContent className="pt-4">
+          <PrinterSelector
+            currentValue={typeof s.receipt_printer === 'string' ? s.receipt_printer : ''}
+            mut={setMut}
+          />
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
 // ── página principal ──────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
@@ -414,37 +494,21 @@ export default function SettingsPage() {
             currency_code:         s.currency_code         ?? 'GTQ',
             currency_symbol:       s.currency_symbol       ?? 'Q',
             decimal_places:        s.decimal_places        ?? 2,
+            tax_enabled:           s.tax_enabled           ?? false,
             tax_rate:              s.tax_rate              ?? 0.12,
             tax_included_in_price: s.tax_included_in_price ?? false,
           }}
           fields={[
-            { key: 'currency_code',        label: 'Código moneda (ISO 4217)', type: 'string', hint: 'GTQ, USD, MXN…' },
+            { key: 'currency_code',        label: 'Código moneda (ISO 4217)', type: 'string',  hint: 'GTQ, USD, MXN…' },
             { key: 'currency_symbol',      label: 'Símbolo',                  type: 'string' },
             { key: 'decimal_places',       label: 'Decimales',                type: 'number' },
-            { key: 'tax_rate',             label: 'Tasa de IVA (decimal)',    type: 'number', hint: '0.12 = 12 %' },
-            { key: 'tax_included_in_price',label: 'Precio ya incluye IVA',   type: 'boolean' },
+            { key: 'tax_enabled',          label: 'Habilitar IVA',            type: 'boolean', hint: 'Activa el cálculo y visualización de IVA en toda la app' },
+            { key: 'tax_rate',             label: 'Tasa de IVA (decimal)',    type: 'number',  hint: '0.12 = 12 %' },
+            { key: 'tax_included_in_price',label: 'IVA embebido en el precio', type: 'boolean', hint: 'Activo: el IVA se extrae del precio ingresado. Inactivo: el IVA se agrega encima del precio base.' },
           ]}
         />
 
-        <SettingsSection
-          title="Ticket / Impresión"
-          icon={Printer}
-          mut={setMut}
-          defaults={{
-            ticket_footer_line1: s.ticket_footer_line1 ?? '',
-            ticket_footer_line2: s.ticket_footer_line2 ?? '',
-            ticket_show_logo:    s.ticket_show_logo    ?? true,
-            ticket_show_tax:     s.ticket_show_tax     ?? true,
-            ticket_copies:       s.ticket_copies       ?? 1,
-          }}
-          fields={[
-            { key: 'ticket_footer_line1', label: 'Pie de ticket — línea 1', type: 'string', hint: 'Ej. ¡Gracias por su preferencia!' },
-            { key: 'ticket_footer_line2', label: 'Pie de ticket — línea 2', type: 'string' },
-            { key: 'ticket_show_logo',    label: 'Mostrar logo en ticket',  type: 'boolean' },
-            { key: 'ticket_show_tax',     label: 'Desglosar IVA en ticket', type: 'boolean' },
-            { key: 'ticket_copies',       label: 'Copias por venta',        type: 'number' },
-          ]}
-        />
+        <TicketSection s={s} setMut={setMut} />
 
         <BackupSection settings={s} />
 

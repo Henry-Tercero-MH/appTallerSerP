@@ -22,6 +22,8 @@
  * @property {string} [clientType]
  * @property {'none'|'percent'|'fixed'} [discountType]
  * @property {number} [discountValue]
+ * @property {number} [userId]
+ * @property {string} [userName]
  */
 
 /**
@@ -130,6 +132,8 @@ export function createSalesService(repo, settings, customers, audit) {
       const taxIncluded = /** @type {boolean} */ (settings.get('tax_included_in_price'))
       const currency    = /** @type {string} */ (settings.get('currency_code'))
       const decimals    = /** @type {number} */ (settings.get('decimal_places'))
+      let taxEnabled = false
+      try { taxEnabled = /** @type {boolean} */ (settings.get('tax_enabled')) } catch { /* migración pendiente */ }
 
       // Snapshot del cliente. requireById lanza CustomerNotFoundError si el
       // id no existe — protege contra un renderer que envia un id invalido.
@@ -150,12 +154,9 @@ export function createSalesService(repo, settings, customers, audit) {
       }
       const discountedSum = roundD(Math.max(0, rawSum - discountAmount))
 
-      const { subtotal, taxAmount, total } = computeBreakdown(
-        discountedSum,
-        taxRate,
-        taxIncluded,
-        decimals
-      )
+      const { subtotal, taxAmount, total } = taxEnabled
+        ? computeBreakdown(discountedSum, taxRate, taxIncluded, decimals)
+        : { subtotal: discountedSum, taxAmount: 0, total: discountedSum }
 
       const saleId = repo.insertSale({
         items: input.items,
@@ -172,6 +173,8 @@ export function createSalesService(repo, settings, customers, audit) {
         discountType,
         discountValue,
         discountAmount,
+        userId:   input.userId,
+        userName: input.userName,
       })
 
       return {
@@ -287,6 +290,7 @@ export function createSalesService(repo, settings, customers, audit) {
         byHour:         repo.getSalesByHour({ from, to }),
         byWeekday:      repo.getSalesByWeekday({ from, to }),
         byPaymentMethod: repo.getSalesByPaymentMethod({ from, to }),
+        byCashier:      repo.getSalesByCashier({ from, to }),
       }
     },
   }

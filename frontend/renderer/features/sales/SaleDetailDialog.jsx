@@ -14,7 +14,7 @@ import {
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { MoneyDisplay } from '@/components/shared/MoneyDisplay'
 import { useSale } from '@/hooks/useSales'
-import { useBusinessSettings } from '@/hooks/useSettings'
+import { useBusinessSettings, useTaxSettings } from '@/hooks/useSettings'
 
 const dateFmt = new Intl.DateTimeFormat('es-GT', {
   dateStyle: 'medium',
@@ -96,6 +96,7 @@ function Ticket({ sale }) {
   const taxPct   = Math.round(sale.tax_rate_applied * 100)
   const isVoided = sale.status === 'voided'
   const { name: bizName, logo: bizLogo } = useBusinessSettings()
+  const { enabled: taxEnabled } = useTaxSettings()
 
   return (
     <div className="print-friendly space-y-4 text-sm relative overflow-hidden">
@@ -197,12 +198,16 @@ function Ticket({ sale }) {
       <Separator />
 
       <dl className="space-y-1">
-        <Row label="Subtotal">
-          <MoneyDisplay amount={sale.subtotal} />
-        </Row>
-        <Row label={`IVA (${taxPct}%)`}>
-          <MoneyDisplay amount={sale.tax_amount} />
-        </Row>
+        {taxEnabled && (
+          <Row label="Subtotal">
+            <MoneyDisplay amount={sale.subtotal} />
+          </Row>
+        )}
+        {taxEnabled && (
+          <Row label={`IVA (${taxPct}%)`}>
+            <MoneyDisplay amount={sale.tax_amount} />
+          </Row>
+        )}
         <Row label="Total" emphasize>
           <MoneyDisplay amount={sale.total} className="text-primary" />
         </Row>

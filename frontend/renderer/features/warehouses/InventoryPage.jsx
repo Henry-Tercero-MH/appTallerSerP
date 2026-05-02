@@ -9,6 +9,7 @@ import {
   Power,
   Printer,
   RefreshCw,
+  Tag,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -37,6 +38,12 @@ import {
 } from './inventoryStore'
 import { useAdjustStock, useInventoryMovements } from '@/hooks/useInventory'
 import { useAuthContext } from '@/features/auth/AuthContext'
+import {
+  useCategories,
+  useCreateCategory,
+  useUpdateCategory,
+  useSetCategoryActive,
+} from '@/hooks/useCategories'
 import ProductForm from './ProductForm'
 import StockMovementModal from './StockMovementModal'
 
@@ -158,6 +165,7 @@ export default function InventoryPage() {
   const [activeTab,    setActiveTab]    = useState('inventory')
   const [search,       setSearch]       = useState('')
   const [showInactive, setShowInactive] = useState(false)
+  const [catDialog,    setCatDialog]    = useState(false)
 
   const filteredProducts = useMemo(() => {
     return products.filter((p) => {
@@ -232,6 +240,9 @@ export default function InventoryPage() {
           subtitle="Gestión de inventario del taller"
           actions={
             <>
+              <Button variant="outline" size="sm" onClick={() => setCatDialog(true)}>
+                <Tag className="mr-1 h-4 w-4" /> Categorías
+              </Button>
               <Button variant="outline" size="sm" onClick={() => window.print()}>
                 <Printer className="mr-1 h-4 w-4" /> Imprimir
               </Button>
@@ -442,7 +453,107 @@ export default function InventoryPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Dialog: gestionar categorías */}
+      <CategoriesDialog open={catDialog} onClose={() => setCatDialog(false)} />
     </div>
+  )
+}
+
+function CategoriesDialog({ open, onClose }) {
+  const { data: categories = [], isLoading } = useCategories()
+  const createCategory  = useCreateCategory()
+  const updateCategory  = useUpdateCategory()
+  const setCatActive    = useSetCategoryActive()
+
+  const [newName,   setNewName]   = useState('')
+  const [editingId, setEditingId] = useState(null)
+  const [editName,  setEditName]  = useState('')
+
+  const handleAdd = (e) => {
+    e.preventDefault()
+    if (!newName.trim()) return
+    createCategory.mutate(newName.trim(), { onSuccess: () => setNewName('') })
+  }
+
+  const handleEditStart = (cat) => {
+    setEditingId(cat.id)
+    setEditName(cat.name)
+  }
+
+  const handleEditSave = (id) => {
+    updateCategory.mutate({ id, name: editName }, { onSuccess: () => setEditingId(null) })
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Gestionar categorías</DialogTitle>
+          <DialogDescription>
+            Agrega, edita o activa/desactiva las categorías de productos.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="max-h-72 overflow-y-auto space-y-1 pr-1">
+          {isLoading && <p className="text-sm text-muted-foreground py-4 text-center">Cargando...</p>}
+          {categories.map((cat) => (
+            <div key={cat.id} className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/50">
+              {editingId === cat.id ? (
+                <>
+                  <Input
+                    className="h-7 flex-1 text-sm"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleEditSave(cat.id) }}
+                    autoFocus
+                  />
+                  <Button size="sm" className="h-7 px-2 text-xs" onClick={() => handleEditSave(cat.id)}
+                    disabled={updateCategory.isPending}>
+                    Guardar
+                  </Button>
+                  <Button size="sm" variant="outline" className="h-7 px-2 text-xs"
+                    onClick={() => setEditingId(null)}>
+                    Cancelar
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <span className={`flex-1 text-sm ${cat.is_active === 0 ? 'text-muted-foreground line-through' : ''}`}>
+                    {cat.name}
+                  </span>
+                  <button className="inv-btn" onClick={() => handleEditStart(cat)} title="Editar">
+                    <Pencil className="h-3 w-3" />
+                  </button>
+                  <button
+                    className={cat.is_active === 1 ? 'inv-btn inv-btn-danger' : 'inv-btn inv-btn-restore'}
+                    onClick={() => setCatActive.mutate({ id: cat.id, active: cat.is_active === 0 })}
+                    title={cat.is_active === 1 ? 'Desactivar' : 'Activar'}
+                  >
+                    {cat.is_active === 1
+                      ? <PowerOff className="h-3 w-3" />
+                      : <Power className="h-3 w-3" />}
+                  </button>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <form onSubmit={handleAdd} className="flex items-center gap-2 border-t pt-3">
+          <Input
+            className="h-8 flex-1 text-sm"
+            placeholder="Nueva categoría..."
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+          />
+          <Button type="submit" size="sm" className="h-8 px-3 text-xs"
+            disabled={createCategory.isPending || !newName.trim()}>
+            <Plus className="mr-1 h-3.5 w-3.5" /> Agregar
+          </Button>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
 

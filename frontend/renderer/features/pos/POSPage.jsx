@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Minus, Plus, Search, ShoppingCart, Trash2, X, Lock } from 'lucide-react'
 import { toast } from 'sonner'
 import { useNavigate } from 'react-router-dom'
@@ -17,6 +17,8 @@ import { CustomerCombobox } from '@/components/shared/CustomerCombobox'
 
 import { useSearchProducts, useCreateSale } from '@/hooks/useProducts'
 import { useTaxSettings, useCurrencySettings, useBusinessSettings } from '@/hooks/useSettings'
+import { useCreateReceivable, useCustomerBalance } from '@/hooks/useReceivables'
+import { useAuthContext } from '@/features/auth/AuthContext'
 import { ReceiptModal } from './ReceiptModal'
 import { useCartStore, selectSubtotal, selectItemCount, selectDiscount } from '@/stores/cartStore'
 import { computeBreakdown } from '@/lib/pricing'
@@ -91,14 +93,25 @@ function POSInner() {
   const rawSum      = useCartStore(selectSubtotal)
   const discount    = useCartStore(selectDiscount)
 
-  const { rate: taxRate, included: taxIncluded } = useTaxSettings()
+  const { rate: taxRate, included: taxIncluded, enabled: taxEnabled } = useTaxSettings()
   const { decimals } = useCurrencySettings()
-  const breakdown = computeBreakdown(rawSum, taxRate, taxIncluded, decimals, discount.type, discount.value)
+  const breakdown = computeBreakdown(rawSum, taxRate, taxIncluded, decimals, discount.type, discount.value, taxEnabled)
   const businessSettings = useBusinessSettings()
+  const { user } = useAuthContext()
 
   const [receiptData, setReceiptData] = useState(/** @type {any} */ (null))
 
-  const createSale = useCreateSale()
+  const createSale       = useCreateSale()
+  const createReceivable = useCreateReceivable()
+
+  const { data: customerBalance } = useCustomerBalance(customerId)
+
+  // Al cambiar a CF, resetear al cliente genérico
+  useEffect(() => {
+    if (clientType === 'cf') {
+      setCustomerId(DEFAULT_CUSTOMER_ID)
+    }
+  }, [clientType])
 
   // Categorías únicas de los productos cargados
   const categories = ['all', ...new Set(products.map(p => p.category).filter(Boolean))]
@@ -116,6 +129,8 @@ function POSInner() {
         clientType:    /** @type {'cf'|'registered'|'company'} */ (clientType),
         discountType:  discount.type,
         discountValue: discount.value,
+        userId:        user?.id,
+        userName:      user?.full_name,
       },
       {
         onSuccess: (result) => {
@@ -133,6 +148,17 @@ function POSInner() {
             taxRate:       result.taxRate,
             discountAmount: breakdown.discountAmount,
           })
+          if (paymentMethod === 'credit') {
+            createReceivable.mutate({
+              customerId:   result.customerId > 1 ? result.customerId : undefined,
+              customerName: result.customerName,
+              customerNit:  result.customerNit || undefined,
+              description:  `Venta #${String(result.saleId).padStart(6, '0')}`,
+              amount:       result.total,
+              userId:       user?.id ?? 0,
+              userName:     user?.full_name ?? 'Sistema',
+            })
+          }
           clearCart()
           toast.success('Venta registrada')
         },
@@ -224,10 +250,6 @@ function POSInner() {
           )}
         </div>
 
-        {/* Nota IVA */}
-        <p className="pos-note">
-          ℹ Todos los precios incluyen impuestos regulados.
-        </p>
       </div>
 
       {/* ── Panel derecho: carrito + pago ── */}
@@ -340,10 +362,12 @@ function POSInner() {
             <span>Subtotal</span>
             <MoneyDisplay amount={breakdown.subtotal} />
           </div>
-          <div className="pos-total-row">
-            <span>IVA ({Math.round(taxRate * 100)}%)</span>
-            <MoneyDisplay amount={breakdown.taxAmount} />
-          </div>
+          {taxEnabled && (
+            <div className="pos-total-row">
+              <span>IVA ({Math.round(taxRate * 100)}%)</span>
+              <MoneyDisplay amount={breakdown.taxAmount} />
+            </div>
+          )}
           <div className="pos-total-row pos-total-main">
             <span>Total</span>
             <MoneyDisplay amount={breakdown.total} />
@@ -355,7 +379,20 @@ function POSInner() {
         <div className="pos-payment">
           <div className="grid gap-1">
             <label className="text-xs font-medium text-muted-foreground">Cliente</label>
-            <CustomerCombobox value={customerId} onChange={setCustomerId} />
+            {clientType === 'cf' ? (
+              <div className="h-9 rounded-md border border-input bg-muted/40 px-3 flex items-center text-xs text-muted-foreground select-none">
+                Consumidor Final (C/F)
+              </div>
+            ) : (
+              <CustomerCombobox value={customerId} onChange={setCustomerId} />
+            )}
+            {clientType !== 'cf' && customerBalance && customerBalance.balance > 0 && (
+              <div className="flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+                <span className="font-semibold">⚠ Deuda pendiente:</span>
+                <span>{new Intl.NumberFormat('es-GT', { style: 'currency', currency: 'GTQ' }).format(customerBalance.balance)}</span>
+                <span className="ml-auto text-amber-600 dark:text-amber-400">({customerBalance.rows.length} cuenta{customerBalance.rows.length !== 1 ? 's' : ''})</span>
+              </div>
+            )}
           </div>
           <div className="grid gap-1">
             <label className="text-xs font-medium text-muted-foreground">Método de pago</label>
@@ -425,6 +462,7 @@ function POSInner() {
     <ReceiptModal
       data={receiptData}
       business={businessSettings}
+      taxEnabled={taxEnabled}
       onClose={() => setReceiptData(null)}
     />
     </>

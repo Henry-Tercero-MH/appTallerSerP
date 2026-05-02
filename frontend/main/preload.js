@@ -17,6 +17,14 @@ const api = {
     getByCategory: (category)     => ipcRenderer.invoke('settings:get-by-category', category),
   },
 
+  categories: {
+    list:      ()           => ipcRenderer.invoke('categories:list'),
+    listActive:()           => ipcRenderer.invoke('categories:list-active'),
+    create:    (name)       => ipcRenderer.invoke('categories:create', name),
+    update:    (id, name)   => ipcRenderer.invoke('categories:update', id, name),
+    setActive: (id, active) => ipcRenderer.invoke('categories:set-active', id, active),
+  },
+
   products: {
     list:        ()               => ipcRenderer.invoke('products:list'),
     listActive:  ()               => ipcRenderer.invoke('products:list-active'),
@@ -138,6 +146,12 @@ const api = {
     create:       (input)  => ipcRenderer.invoke('receivables:create', input),
     applyPayment: (input)  => ipcRenderer.invoke('receivables:apply-payment', input),
     cancel:       (id)     => ipcRenderer.invoke('receivables:cancel', id),
+    byCustomer:   (id)     => ipcRenderer.invoke('receivables:by-customer', id),
+  },
+
+  printer: {
+    list:  ()                            => ipcRenderer.invoke('printer:list'),
+    print: (html, deviceName, paperSize) => ipcRenderer.invoke('printer:print', html, deviceName, paperSize),
   },
 }
 
