@@ -17,6 +17,15 @@ export function createReceivablesService(repo) {
       return repo.getSummary()
     },
 
+    getPaymentsToday() {
+      return repo.getPaymentsToday()
+    },
+
+    /** @param {{ from: string, to: string }} range */
+    getPaymentsForRange({ from, to }) {
+      return repo.getPaymentsForRange({ from, to })
+    },
+
     /**
      * @param {{ customerId?: number, customerName: string, customerNit?: string, description: string, amount: number, dueDate?: string, notes?: string, userId: number, userName: string }} input
      */

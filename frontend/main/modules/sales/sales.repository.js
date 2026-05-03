@@ -141,9 +141,11 @@ export function createSalesRepository(db) {
         COALESCE(SUM(subtotal), 0)        AS subtotal,
         COALESCE(SUM(tax_amount), 0)      AS tax_amount,
         COALESCE(SUM(total), 0)           AS total,
+        COALESCE(SUM(CASE WHEN COALESCE(payment_method,'cash') != 'credit' THEN total ELSE 0 END), 0) AS cash_total,
         currency_code
       FROM sales
-      WHERE date(date) = date('now', 'localtime')
+      WHERE status = 'active'
+        AND date(date) = date('now', 'localtime')
       GROUP BY currency_code
     `),
 

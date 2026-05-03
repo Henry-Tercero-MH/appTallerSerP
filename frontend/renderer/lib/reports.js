@@ -1,20 +1,12 @@
 import * as XLSX from 'xlsx'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import { BRAND_NAME } from '@/lib/brand.js'
 
 // ─── utilidades ─────────────────────────────────────────────────────────────
 
-/** Nombre de empresa desde settings en localStorage (fallback al app name) */
 function getCompanyName() {
-  try {
-    // intentamos leer el valor guardado por ThemeProvider en settings
-    const raw = localStorage.getItem('app-settings')
-    if (raw) {
-      const s = JSON.parse(raw)
-      if (s?.business?.business_name) return s.business.business_name
-    }
-  } catch (_) { /* ignorar */ }
-  return localStorage.getItem('app-name') ?? 'Sistema POS'
+  return BRAND_NAME
 }
 
 /** Fecha actual en formato YYYY-MM-DD (seguro para nombres de archivo) */
@@ -297,7 +289,8 @@ export function exportSalesHistoryPDF(sales, { from, to, taxEnabled = false }) {
       ...(taxEnabled ? { 6: { halign: 'right' } } : {}),
     },
     didParseCell(data) {
-      if (data.section === 'body' && data.row.raw[statusIdx] === 'Anulada') {
+      const raw = /** @type {any[]} */ (data.row.raw)
+      if (data.section === 'body' && raw[statusIdx] === 'Anulada') {
         data.cell.styles.textColor = /** @type {[number,number,number]} */ ([0, 0, 0])
       }
     },
@@ -356,8 +349,9 @@ export function exportInventoryPDF(products) {
     },
     didParseCell(data) {
       if (data.section === 'body') {
-        const stock = Number(data.row.raw[5])
-        const min   = Number(data.row.raw[6])
+        const raw   = /** @type {any[]} */ (data.row.raw)
+        const stock = Number(raw[5])
+        const min   = Number(raw[6])
         if (!isNaN(stock) && !isNaN(min) && stock <= min) {
           data.cell.styles.textColor = /** @type {[number,number,number]} */ ([0, 0, 0])
           data.cell.styles.fontStyle = 'bold'
@@ -467,7 +461,8 @@ export function exportPurchaseOrderPDF(products, threshold) {
     },
     didParseCell(data) {
       if (data.section === 'body' && data.column.index === 3) {
-        if (Number(data.row.raw[3]) === 0) {
+        const raw = /** @type {any[]} */ (data.row.raw)
+        if (Number(raw[3]) === 0) {
           data.cell.styles.textColor = /** @type {[number,number,number]} */ ([0, 0, 0])
           data.cell.styles.fontStyle = 'bold'
         }

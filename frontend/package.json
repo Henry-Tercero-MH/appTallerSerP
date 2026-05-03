@@ -1,7 +1,7 @@
 {
     "name": "taller-pos-electron",
     "version": "1.0.0",
-    "description": "Sistema de POS Offline para Taller",
+    "description": "Sistema ERP offline para Mangueras del Sur",
     "main": "dist-electron/index.js",
     "type": "module",
     "files": [
@@ -10,7 +10,7 @@
     ],
     "scripts": {
         "dev": "vite",
-        "build": "vite build && electron-builder",
+        "build": "node scripts/configure-build.js && vite build && electron-builder --win --linux",
         "postinstall": "npx electron-rebuild -f -w better-sqlite3",
         "lint": "eslint .",
         "typecheck": "tsc --noEmit -p jsconfig.json"
@@ -57,11 +57,13 @@
         "vite-plugin-electron-renderer": "^0.14.6"
     },
     "build": {
-        "appId": "com.tallerpos.app",
-        "productName": "TallerPOS",
+        "appId": "com.manguerasdelsor.app",
+        "productName": "Mangueras del sur POS",
         "directories": {
-            "output": "release"
+            "output": "release",
+            "buildResources": "release/build"
         },
+        "icon": "release/build/icon",
         "win": {
             "target": "nsis"
         },

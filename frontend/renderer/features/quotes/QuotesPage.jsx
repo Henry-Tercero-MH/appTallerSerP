@@ -431,6 +431,7 @@ function QuoteFormModal({ open, editId = null, onClose, user }) {
 
 function QuoteDetailModal({ id, onClose }) {
   const { data, isLoading } = useQuote(id)
+  const { enabled: taxEnabled } = useTaxSettings()
   const q = data?.quote
 
   return (
@@ -527,110 +528,215 @@ function QuoteDetailModal({ id, onClose }) {
 
 // ── Dialog: Imprimir cotización ───────────────────────────────────────────────
 
+/**
+ * Genera HTML autocontenido (tamaño carta) para la cotización.
+ * @param {{ q: any, items: any[], bizName: string, taxEnabled: boolean }} opts
+ */
+function buildQuoteHtml({ q, items, bizName, taxEnabled }) {
+  const fmtM = (n) => new Intl.NumberFormat('es-GT', { style: 'currency', currency: 'GTQ' }).format(n ?? 0)
+  const fmtD = (s) => s ? new Intl.DateTimeFormat('es-GT', { dateStyle: 'long' }).format(new Date(s + 'T00:00:00')) : '—'
+
+  const itemRows = items.map((it) => `
+    <tr>
+      <td>${it.product_code ? `<span style="color:#888;font-size:11px">${it.product_code} · </span>` : ''}${it.product_name}</td>
+      <td style="text-align:right">${it.qty}</td>
+      <td style="text-align:right">${fmtM(it.unit_price)}</td>
+      <td style="text-align:right;font-weight:600">${fmtM(it.subtotal)}</td>
+    </tr>`).join('')
+
+  const taxRow = taxEnabled
+    ? `<tr><td colspan="3" style="text-align:right;padding:2px 8px;color:#555">IVA (${(q.tax_rate * 100).toFixed(0)}%)</td><td style="text-align:right;padding:2px 8px">${fmtM(q.tax_amount)}</td></tr>`
+    : ''
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8">
+  <title>Cotización #${q.id}</title>
+  <style>
+    @page { size: letter; margin: 18mm 18mm 20mm; }
+    body { font-family: Arial, sans-serif; font-size: 12px; color: #111; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #111; padding-bottom: 10px; margin-bottom: 14px; }
+    .biz-name { font-size: 15px; font-weight: bold; }
+    .doc-title { font-size: 20px; font-weight: bold; text-align: right; }
+    .doc-num { font-size: 13px; color: #444; text-align: right; }
+    .meta { display: flex; justify-content: space-between; margin-bottom: 18px; font-size: 11.5px; }
+    .meta-label { color: #666; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
+    .meta-value { font-weight: 600; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+    thead tr { background: #222; color: #fff; }
+    th { padding: 6px 8px; font-size: 11px; }
+    td { padding: 5px 8px; border-bottom: 1px solid #eee; font-size: 12px; }
+    tr:nth-child(even) td { background: #f7f7f7; }
+    .totals { margin-left: auto; width: 280px; border-top: 1px solid #ccc; padding-top: 8px; }
+    .totals tr td { border: none; padding: 3px 8px; }
+    .total-final td { font-size: 14px; font-weight: bold; border-top: 2px solid #111; padding-top: 6px; }
+    .notes { margin-top: 16px; font-size: 11px; color: #444; border-top: 1px dashed #ccc; padding-top: 8px; }
+    .footer { margin-top: 30px; text-align: center; font-size: 10px; color: #888; border-top: 1px solid #eee; padding-top: 8px; }
+  </style></head><body>
+  <div class="header">
+    <div class="biz-name">${bizName}</div>
+    <div>
+      <div class="doc-title">COTIZACIÓN</div>
+      <div class="doc-num"># ${q.id}</div>
+    </div>
+  </div>
+  <div class="meta">
+    <div>
+      <div class="meta-label">Cliente</div>
+      <div class="meta-value">${q.customer_name}</div>
+      ${q.customer_nit ? `<div style="font-size:11px;color:#555">NIT: ${q.customer_nit}</div>` : ''}
+    </div>
+    <div style="text-align:right">
+      <div class="meta-label">Fecha</div>
+      <div class="meta-value">${fmtD(q.created_at?.slice(0,10))}</div>
+      ${q.valid_until ? `<div class="meta-label" style="margin-top:6px">Válida hasta</div><div class="meta-value">${fmtD(q.valid_until)}</div>` : ''}
+    </div>
+  </div>
+  <table>
+    <thead><tr>
+      <th style="text-align:left">Descripción</th>
+      <th style="text-align:right;width:60px">Cant.</th>
+      <th style="text-align:right;width:110px">Precio unit.</th>
+      <th style="text-align:right;width:110px">Subtotal</th>
+    </tr></thead>
+    <tbody>${itemRows}</tbody>
+  </table>
+  <table class="totals">
+    <tbody>
+      <tr><td colspan="3" style="text-align:right;color:#555">Subtotal</td><td style="text-align:right">${fmtM(q.subtotal)}</td></tr>
+      ${taxRow}
+      <tr class="total-final"><td colspan="3" style="text-align:right">TOTAL</td><td style="text-align:right">${fmtM(q.total)}</td></tr>
+    </tbody>
+  </table>
+  ${q.notes ? `<div class="notes"><strong>Notas:</strong> ${q.notes}</div>` : ''}
+  <div class="footer">Gracias por su preferencia · ${bizName} · Generado el ${new Date().toLocaleDateString('es-GT')}</div>
+  </body></html>`
+}
+
 function QuotePrintDialog({ id, onClose }) {
   const { data, isLoading } = useQuote(id)
   const { name: bizName, logo: bizLogo } = useBusinessSettings()
+  const { enabled: taxEnabled } = useTaxSettings()
+  const [printing, setPrinting] = useState(false)
   const q = data?.quote
+
+  async function handlePrint() {
+    if (!q || !data) return
+    setPrinting(true)
+    try {
+      const anyApi = /** @type {any} */ (window.api)
+      const settingsRes = await anyApi.settings.getAll()
+      const printer = settingsRes?.data?.default_printer ?? ''
+      const html = buildQuoteHtml({ q, items: data.items, bizName, taxEnabled })
+      const res = await anyApi.printer.print(html, printer, 'letter')
+      if (res?.ok) {
+        toast.success('Cotización enviada a imprimir')
+        onClose()
+      } else {
+        toast.error('Error al imprimir: ' + (res?.error?.message ?? 'desconocido'))
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error al imprimir')
+    } finally {
+      setPrinting(false)
+    }
+  }
 
   return (
     <Dialog open={!!id} onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="max-w-xl">
-        <DialogHeader className="no-print">
+      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
+        <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Printer className="h-5 w-5" /> Imprimir cotización #{id}
           </DialogTitle>
+          <DialogDescription>
+            Vista previa · Tamaño carta · Se enviará a la impresora configurada
+          </DialogDescription>
         </DialogHeader>
 
-        {isLoading
-          ? <LoadingSpinner label="Cargando..." />
-          : q && (
-            <div className="print-friendly qt-print-body">
-              {/* Encabezado */}
-              <header className="qt-print-header">
-                {bizLogo && <img src={bizLogo} alt={bizName} className="qt-print-logo" />}
-                <div>
-                  <div className="qt-print-biz-name">{bizName}</div>
-                  <div className="qt-print-doc-title">COTIZACIÓN #{q.id}</div>
+        <div className="flex-1 overflow-y-auto border rounded-md p-4 bg-white text-sm">
+          {isLoading
+            ? <LoadingSpinner label="Cargando..." />
+            : q && (
+              <div>
+                {/* Encabezado */}
+                <div className="flex justify-between items-start border-b-2 border-black pb-3 mb-4">
+                  {bizLogo && <img src={bizLogo} alt={bizName} className="h-10 object-contain" />}
+                  <div className={bizLogo ? 'text-right' : ''}>
+                    <div className="font-bold text-base">{bizName}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xl font-bold">COTIZACIÓN</div>
+                    <div className="text-sm text-muted-foreground"># {q.id}</div>
+                  </div>
                 </div>
-              </header>
 
-              {/* Info cliente y fechas */}
-              <div className="qt-print-meta">
-                <div>
-                  <div className="qt-print-meta-label">Cliente</div>
-                  <div className="qt-print-meta-value">{q.customer_name}</div>
-                  {q.customer_nit && <div className="qt-print-meta-sub">NIT: {q.customer_nit}</div>}
+                {/* Meta */}
+                <div className="flex justify-between mb-4 text-xs">
+                  <div>
+                    <div className="text-gray-500 uppercase tracking-wide">Cliente</div>
+                    <div className="font-semibold">{q.customer_name}</div>
+                    {q.customer_nit && <div className="text-gray-500">NIT: {q.customer_nit}</div>}
+                  </div>
+                  <div className="text-right">
+                    <div className="text-gray-500 uppercase tracking-wide">Fecha</div>
+                    <div className="font-semibold">{fmtDate(q.created_at?.slice(0,10))}</div>
+                    {q.valid_until && (
+                      <>
+                        <div className="text-gray-500 uppercase tracking-wide mt-1">Válida hasta</div>
+                        <div className="font-semibold">{fmtDate(q.valid_until)}</div>
+                      </>
+                    )}
+                  </div>
                 </div>
-                <div className="text-right">
-                  <div className="qt-print-meta-label">Fecha</div>
-                  <div className="qt-print-meta-value">{fmtDate(q.created_at?.slice(0,10))}</div>
-                  {q.valid_until && (
-                    <>
-                      <div className="qt-print-meta-label mt-1">Válida hasta</div>
-                      <div className="qt-print-meta-value">{fmtDate(q.valid_until)}</div>
-                    </>
-                  )}
-                </div>
-              </div>
 
-              {/* Items */}
-              <table className="qt-print-table">
-                <thead>
-                  <tr>
-                    <th className="text-left">Descripción</th>
-                    <th className="text-right w-16">Cant.</th>
-                    <th className="text-right w-28">Precio unit.</th>
-                    <th className="text-right w-28">Subtotal</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.items.map((it, i) => (
-                    <tr key={it.id} className={i % 2 === 0 ? 'qt-print-row-even' : ''}>
-                      <td>
-                        {it.product_code && <span className="qt-print-code">{it.product_code} · </span>}
-                        {it.product_name}
-                      </td>
-                      <td className="text-right">{it.qty}</td>
-                      <td className="text-right">{fmtMoney(it.unit_price)}</td>
-                      <td className="text-right font-medium">{fmtMoney(it.subtotal)}</td>
+                {/* Items */}
+                <table className="w-full text-xs border-collapse mb-3">
+                  <thead>
+                    <tr className="bg-gray-800 text-white">
+                      <th className="text-left p-1.5">Descripción</th>
+                      <th className="text-right p-1.5 w-12">Cant.</th>
+                      <th className="text-right p-1.5 w-24">Precio unit.</th>
+                      <th className="text-right p-1.5 w-24">Subtotal</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {data.items.map((it, i) => (
+                      <tr key={it.id} className={i % 2 === 0 ? 'bg-gray-50' : ''}>
+                        <td className="p-1.5">
+                          {it.product_code && <span className="text-gray-400 mr-1">{it.product_code} ·</span>}
+                          {it.product_name}
+                        </td>
+                        <td className="text-right p-1.5">{it.qty}</td>
+                        <td className="text-right p-1.5">{fmtMoney(it.unit_price)}</td>
+                        <td className="text-right p-1.5 font-semibold">{fmtMoney(it.subtotal)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
 
-              {/* Totales */}
-              <div className="qt-print-totals">
-                <div className="qt-print-total-row">
-                  <span>Subtotal</span><span>{fmtMoney(q.subtotal)}</span>
+                {/* Totales */}
+                <div className="ml-auto w-60 border-t pt-2 text-xs space-y-1">
+                  <div className="flex justify-between"><span className="text-gray-500">Subtotal</span><span>{fmtMoney(q.subtotal)}</span></div>
+                  {taxEnabled && (
+                    <div className="flex justify-between"><span className="text-gray-500">IVA ({(q.tax_rate * 100).toFixed(0)}%)</span><span>{fmtMoney(q.tax_amount)}</span></div>
+                  )}
+                  <div className="flex justify-between font-bold text-sm border-t pt-1"><span>TOTAL</span><span>{fmtMoney(q.total)}</span></div>
                 </div>
-                {taxEnabled && (
-                  <div className="qt-print-total-row">
-                    <span>IVA ({(q.tax_rate * 100).toFixed(0)}%)</span><span>{fmtMoney(q.tax_amount)}</span>
+
+                {q.notes && (
+                  <div className="mt-3 text-xs text-gray-600 border-t border-dashed pt-2">
+                    <span className="font-semibold">Notas: </span>{q.notes}
                   </div>
                 )}
-                <div className="qt-print-total-row qt-print-total-final">
-                  <span>TOTAL</span><span>{fmtMoney(q.total)}</span>
-                </div>
               </div>
+            )
+          }
+        </div>
 
-              {/* Notas */}
-              {q.notes && (
-                <div className="qt-print-notes">
-                  <span className="font-semibold">Notas: </span>{q.notes}
-                </div>
-              )}
-
-              <div className="qt-print-footer">
-                Gracias por su preferencia · {bizName}
-              </div>
-            </div>
-          )
-        }
-
-        <DialogFooter className="no-print gap-2">
+        <DialogFooter className="gap-2 pt-2">
           <Button type="button" variant="outline" onClick={onClose}>Cerrar</Button>
-          <Button type="button" disabled={!q} onClick={() => window.print()}>
-            <Printer className="mr-1 h-4 w-4" /> Imprimir
+          <Button type="button" disabled={!q || printing} onClick={handlePrint}>
+            <Printer className="mr-1 h-4 w-4" />
+            {printing ? 'Imprimiendo...' : 'Imprimir (carta)'}
           </Button>
         </DialogFooter>
       </DialogContent>

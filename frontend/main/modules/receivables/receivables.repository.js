@@ -36,6 +36,25 @@ export function createReceivablesRepository(db) {
         (@receivable_id, @amount, @payment_method, @notes, @created_by, @created_by_name)
     `),
 
+    // pagos de hoy
+    paymentsToday: db.prepare(`
+      SELECT
+        COALESCE(SUM(amount), 0)  AS total,
+        COUNT(*)                  AS count
+      FROM receivable_payments
+      WHERE DATE(created_at) = DATE('now', 'localtime')
+    `),
+
+    // pagos en un rango de fechas
+    paymentsForRange: db.prepare(`
+      SELECT
+        COALESCE(SUM(amount), 0)  AS total,
+        COUNT(*)                  AS count
+      FROM receivable_payments
+      WHERE DATE(created_at) >= @from
+        AND DATE(created_at) <= @to
+    `),
+
     // summary
     summary: db.prepare(`
       SELECT
@@ -68,5 +87,10 @@ export function createReceivablesRepository(db) {
     findPayments(id)      { return stmts.findPayments.all(id) },
     applyPayment,
     getSummary()          { return stmts.summary.get() },
+    getPaymentsToday()    { return stmts.paymentsToday.get() },
+    /** @param {{ from: string, to: string }} range */
+    getPaymentsForRange({ from, to }) {
+      return stmts.paymentsForRange.get({ from, to })
+    },
   }
 }

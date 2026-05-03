@@ -108,8 +108,20 @@ export function createPurchasesService(repo) {
     },
 
     /**
-     * Recibe la orden: actualiza stock y costo de productos.
-     * @param {{ orderId: number, role: string, items: { id: number, qty_received: number }[] }} input
+     * Devuelve los items de la orden comparados con el costo actual en catálogo.
+     * Útil para mostrar al usuario si hay variaciones de precio antes de confirmar.
+     * @param {{ orderId: number, role: string }} input
+     */
+    priceVariations(input) {
+      assertAdmin(input.role)
+      const order = repo.findOrderById(input.orderId)
+      if (!order) throw Object.assign(new Error('Orden no encontrada'), { code: 'ORDER_NOT_FOUND' })
+      return repo.priceVariations(input.orderId)
+    },
+
+    /**
+     * Recibe la orden: actualiza stock. Si updatePrices=true también actualiza el costo.
+     * @param {{ orderId: number, role: string, items: { id: number, qty_received: number }[], updatePrices?: boolean }} input
      */
     receiveOrder(input) {
       assertAdmin(input.role)
@@ -120,7 +132,7 @@ export function createPurchasesService(repo) {
       }
       if (!input.items?.length) throw Object.assign(new Error('Sin items para recibir'), { code: 'ORDER_EMPTY' })
 
-      repo.receiveOrder(input.orderId, input.items)
+      repo.receiveOrder(input.orderId, input.items, input.updatePrices ?? false)
       return repo.findOrderById(input.orderId)
     },
 

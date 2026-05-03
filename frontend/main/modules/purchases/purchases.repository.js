@@ -116,7 +116,7 @@ export function createPurchasesRepository(db) {
       `UPDATE products SET cost = @cost WHERE id = @id`
     ),
     getProductForMove: db.prepare(
-      `SELECT id, name, stock FROM products WHERE id = ?`
+      `SELECT id, name, stock, cost FROM products WHERE id = ?`
     ),
     insertMovement: db.prepare(`
       INSERT INTO stock_movements
@@ -159,19 +159,19 @@ export function createPurchasesRepository(db) {
      * Marca orden como recibida, actualiza qty_received en items y suma al stock.
      * @param {number} orderId
      * @param {{ id: number, qty_received: number }[]} receivedItems
+     * @param {boolean} updatePrices  Si true actualiza el costo del producto al costo de la orden
      */
-    receiveOrder: db.transaction((orderId, receivedItems) => {
+    receiveOrder: db.transaction((orderId, receivedItems, updatePrices) => {
       let total = 0
       for (const item of receivedItems) {
         stmts.updateItemReceived.run(item)
-        // buscar item para obtener product_id y unit_cost
         /** @type {PurchaseItemRow} */
         const row = stmts.findItemsByOrder.all(orderId).find(i => i.id === item.id)
         if (row?.product_id && item.qty_received > 0) {
           const prod      = stmts.getProductForMove.get(row.product_id)
           const qtyBefore = prod?.stock ?? 0
           stmts.addStock.run({ id: row.product_id, qty: item.qty_received })
-          if (row.unit_cost > 0) {
+          if (updatePrices && row.unit_cost > 0) {
             stmts.updateProductCost.run({ id: row.product_id, cost: row.unit_cost })
           }
           stmts.insertMovement.run({
@@ -193,5 +193,25 @@ export function createPurchasesRepository(db) {
       const receivedAt = new Date().toISOString().slice(0, 19).replace('T', ' ')
       stmts.updateOrderStatus.run({ id: orderId, status: 'received', received_at: receivedAt, total_cost: total })
     }),
+
+    /**
+     * Devuelve los items de una orden con el costo actual del producto en catálogo,
+     * para detectar variaciones antes de confirmar recepción.
+     * @param {number} orderId
+     */
+    priceVariations(orderId) {
+      /** @type {PurchaseItemRow[]} */
+      const items = stmts.findItemsByOrder.all(orderId)
+      return items.map(it => {
+        if (!it.product_id) return { ...it, current_cost: null, has_variation: false }
+        const prod = /** @type {{ cost: number }|undefined} */ (stmts.getProductForMove.get(it.product_id))
+        const currentCost = prod?.cost ?? 0
+        return {
+          ...it,
+          current_cost:  currentCost,
+          has_variation: it.unit_cost > 0 && Math.abs(it.unit_cost - currentCost) > 0.001,
+        }
+      })
+    },
   }
 }

@@ -2,11 +2,10 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import {
   LockOpen, Lock, Plus, Minus, RefreshCw, TrendingUp, TrendingDown,
-  DollarSign, ClipboardList, ChevronDown, ChevronUp,
+  DollarSign, ClipboardList, ChevronDown, ChevronUp, Printer, BarChart2,
 } from 'lucide-react'
 
 import { PageHeader }     from '@/components/shared/PageHeader'
-import { MoneyDisplay }   from '@/components/shared/MoneyDisplay'
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { Button }         from '@/components/ui/button'
 import {
@@ -21,8 +20,60 @@ import {
 } from '@/hooks/useCash'
 import { useAuthContext } from '@/features/auth/AuthContext'
 
+/** @param {string|null|undefined} s */
 const fmtDate = (s) => s ? new Intl.DateTimeFormat('es-GT', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(s)) : '—'
+/** @param {number|null|undefined} n */
 const fmtMoney = (n) => new Intl.NumberFormat('es-GT', { style: 'currency', currency: 'GTQ' }).format(n ?? 0)
+
+/** @param {any} detail */
+function buildSessionHtml(detail) {
+  const s = detail.session
+  const movRows = (/** @type {any[]} */ (detail.movements)).map((m) => `
+    <tr>
+      <td>${m.type === 'in' ? 'Ingreso' : 'Egreso'}</td>
+      <td>${m.concept}</td>
+      <td style="text-align:right">${fmtMoney(m.amount)}</td>
+      <td>${String(m.created_at).slice(11, 16)}</td>
+    </tr>`).join('')
+  return `<!DOCTYPE html><html><head><meta charset="utf-8">
+  <title>Cierre de caja</title>
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 12px; margin: 24px; color: #111; }
+    h1 { font-size: 16px; margin-bottom: 4px; }
+    h2 { font-size: 13px; margin: 16px 0 6px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+    .meta { color: #555; margin-bottom: 16px; }
+    .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+    .kpi { background: #f5f5f5; border-radius: 4px; padding: 8px 12px; }
+    .kpi-label { font-size: 10px; color: #666; }
+    .kpi-value { font-size: 14px; font-weight: bold; }
+    table { width: 100%; border-collapse: collapse; }
+    th { background: #eee; text-align: left; padding: 4px 6px; font-size: 11px; }
+    td { padding: 4px 6px; border-bottom: 1px solid #f0f0f0; }
+    .diff-neg { color: #c00; }
+    .diff-pos { color: #060; }
+    .footer { margin-top: 20px; font-size: 10px; color: #888; text-align: center; }
+  </style></head><body>
+  <h1>Reporte de cierre de caja</h1>
+  <div class="meta">
+    Apertura: ${fmtDate(s.opened_at)} · Por: ${s.opened_by_name}<br>
+    ${s.closed_at ? `Cierre: ${fmtDate(s.closed_at)} · Por: ${s.closed_by_name}` : 'Sesión abierta'}
+    ${s.notes ? `<br>Notas: ${s.notes}` : ''}
+  </div>
+  <div class="kpis">
+    <div class="kpi"><div class="kpi-label">Monto inicial</div><div class="kpi-value">${fmtMoney(s.opening_amount)}</div></div>
+    <div class="kpi"><div class="kpi-label">Ventas del turno</div><div class="kpi-value">${fmtMoney(detail.salesTotal)}</div></div>
+    ${(detail.receivablePaymentsTotal ?? 0) > 0 ? `<div class="kpi"><div class="kpi-label">Cobros CxC</div><div class="kpi-value">${fmtMoney(detail.receivablePaymentsTotal)}</div></div>` : ''}
+    <div class="kpi"><div class="kpi-label">Monto esperado</div><div class="kpi-value">${fmtMoney(s.expected_amount)}</div></div>
+    ${s.closing_amount != null ? `<div class="kpi"><div class="kpi-label">Monto contado</div><div class="kpi-value">${fmtMoney(s.closing_amount)}</div></div>` : ''}
+    ${s.difference != null ? `<div class="kpi"><div class="kpi-label">Diferencia</div><div class="kpi-value ${s.difference < 0 ? 'diff-neg' : s.difference > 0 ? 'diff-pos' : ''}">${s.difference >= 0 ? '+' : ''}${fmtMoney(s.difference)}</div></div>` : ''}
+  </div>
+  ${detail.movements.length > 0 ? `
+  <h2>Movimientos manuales</h2>
+  <table><thead><tr><th>Tipo</th><th>Concepto</th><th>Monto</th><th>Hora</th></tr></thead>
+  <tbody>${movRows}</tbody></table>` : ''}
+  <div class="footer">Mangueras del Sur · ${new Date().toLocaleString('es-GT')}</div>
+  </body></html>`
+}
 
 export default function CashRegisterPage() {
   const { user } = useAuthContext()
@@ -85,6 +136,18 @@ export default function CashRegisterPage() {
         )
       }
 
+      {/* ── Card de reportes ── */}
+      <div className="cx-reports-card">
+        <div className="cx-reports-header">
+          <BarChart2 className="h-4 w-4" />
+          <span>Reportes de caja</span>
+        </div>
+        <p className="cx-reports-desc">
+          Expande cualquier sesión cerrada y usa el botón <Printer className="inline h-3.5 w-3.5 mx-0.5" /> para imprimir su resumen.
+          Para reportes completos de ventas, visita el módulo de <strong>Reportes</strong>.
+        </p>
+      </div>
+
       {/* ── Historial de sesiones ── */}
       <div className="cx-section-title">
         <ClipboardList className="h-4 w-4" />
@@ -132,10 +195,26 @@ export default function CashRegisterPage() {
 
 // ── Fila de sesión expandible ────────────────────────────────────────────────
 
+/** @param {{ session: any, expanded: boolean, onToggle: () => void }} props */
 function SessionRow({ session, expanded, onToggle }) {
   const { data: detail } = useCashSession(expanded ? session.id : null)
 
   const isOpen = session.status === 'open'
+
+  async function handlePrint() {
+    if (!detail) return
+    try {
+      const anyApi = /** @type {any} */ (window.api)
+      const settingsRes = await anyApi.settings.getAll()
+      const paperSize = settingsRes?.data?.paper_size ?? 'letter'
+      const printer   = settingsRes?.data?.default_printer ?? ''
+      const html = buildSessionHtml(detail)
+      const res = await anyApi.printer.print(html, printer, paperSize)
+      if (!res?.ok) toast.error('Error al imprimir: ' + (res?.error?.message ?? ''))
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error al imprimir')
+    }
+  }
 
   return (
     <div className={`cx-session-card ${isOpen ? 'cx-session-open' : ''}`}>
@@ -154,6 +233,15 @@ function SessionRow({ session, expanded, onToggle }) {
               {session.difference >= 0 ? '+' : ''}{fmtMoney(session.difference)}
             </span>
           )}
+          {!isOpen && expanded && detail && (
+            <button
+              className="sh-action-btn cx-print-btn"
+              title="Imprimir cierre de caja"
+              onClick={(e) => { e.stopPropagation(); handlePrint() }}
+            >
+              <Printer className="h-3.5 w-3.5" />
+            </button>
+          )}
           {expanded ? <ChevronUp className="h-4 w-4 cx-chevron" /> : <ChevronDown className="h-4 w-4 cx-chevron" />}
         </div>
       </div>
@@ -165,9 +253,12 @@ function SessionRow({ session, expanded, onToggle }) {
             : (
               <>
                 <div className="cx-detail-grid">
-                  <CxKpi label="Monto inicial"   value={fmtMoney(detail.session.opening_amount)} />
+                  <CxKpi label="Monto inicial"    value={fmtMoney(detail.session.opening_amount)} />
                   <CxKpi label="Ventas del turno" value={fmtMoney(detail.salesTotal)} accent="green" />
-                  <CxKpi label="Monto esperado"  value={fmtMoney(detail.session.expected_amount)} />
+                  {(detail.receivablePaymentsTotal ?? 0) > 0 && (
+                    <CxKpi label="Cobros CxC"     value={fmtMoney(detail.receivablePaymentsTotal)} accent="green" />
+                  )}
+                  <CxKpi label="Monto esperado"   value={fmtMoney(detail.session.expected_amount)} />
                   {detail.session.closing_amount != null && (
                     <CxKpi label="Monto contado"  value={fmtMoney(detail.session.closing_amount)} />
                   )}
@@ -229,6 +320,7 @@ function SessionRow({ session, expanded, onToggle }) {
   )
 }
 
+/** @param {{ label: string, value: string, accent?: string }} props */
 function CxKpi({ label, value, accent = '' }) {
   return (
     <div className={`cx-kpi ${accent ? `cx-kpi-${accent}` : ''}`}>
@@ -240,10 +332,12 @@ function CxKpi({ label, value, accent = '' }) {
 
 // ── Modal: Abrir caja ────────────────────────────────────────────────────────
 
+/** @param {{ open: boolean, onClose: () => void, user: any }} props */
 function OpenCashModal({ open, onClose, user }) {
   const [amount, setAmount] = useState('')
   const mut = useOpenCash()
 
+  /** @param {Event & { preventDefault(): void }} e */
   async function handleSubmit(e) {
     e.preventDefault()
     const val = parseFloat(amount)
@@ -299,11 +393,13 @@ function OpenCashModal({ open, onClose, user }) {
 
 // ── Modal: Cerrar caja ───────────────────────────────────────────────────────
 
+/** @param {{ open: boolean, onClose: () => void, session: any, user: any }} props */
 function CloseCashModal({ open, onClose, session, user }) {
   const [amount, setAmount] = useState('')
   const [notes, setNotes]   = useState('')
   const mut = useCloseCash()
 
+  /** @param {Event & { preventDefault(): void }} e */
   async function handleSubmit(e) {
     e.preventDefault()
     const val = parseFloat(amount)
@@ -375,11 +471,13 @@ function CloseCashModal({ open, onClose, session, user }) {
 
 // ── Modal: Movimiento manual ─────────────────────────────────────────────────
 
+/** @param {{ type: 'in'|'out'|null, onClose: () => void, user: any }} props */
 function MovementModal({ type, onClose, user }) {
   const [amount, setAmount]   = useState('')
   const [concept, setConcept] = useState('')
   const mut = useAddMovement()
 
+  /** @param {Event & { preventDefault(): void }} e */
   async function handleSubmit(e) {
     e.preventDefault()
     const val = parseFloat(amount)

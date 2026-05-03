@@ -1,10 +1,10 @@
-import { app as y, ipcMain as l, dialog as Ae, BrowserWindow as x, Menu as ye } from "electron";
-import v, { join as te } from "node:path";
-import Le from "path";
-import ge from "better-sqlite3";
-import he, { createHash as Ue } from "node:crypto";
+import { app as I, ipcMain as l, dialog as ne, BrowserWindow as j, Menu as ue } from "electron";
+import U, { join as re } from "node:path";
+import he from "path";
+import be from "better-sqlite3";
+import Ue, { createHash as Ce } from "node:crypto";
 import L from "node:fs";
-const be = `-- 001_init.sql
+const De = `-- 001_init.sql
 -- Preserva el esquema actual (products, sales, sale_items) y la data semilla.
 -- No cambia estructura: solo mueve la creacion a una migracion versionada.
 -- Los redisenios de negocio iran en migraciones posteriores.
@@ -41,7 +41,7 @@ INSERT OR IGNORE INTO products (code, name, price, stock) VALUES
   ('FRE-003', 'Pastillas de Freno Ceramicas',    120.00,   8),
   ('BAT-004', 'Bateria 12V 70Ah LTH',            650.00,   2),
   ('SRV-001', 'Servicio de Diagnostico Escaner', 150.00, 999);
-`, Ce = `-- 002_settings.sql
+`, ve = `-- 002_settings.sql
 -- Tabla de configuracion parametrica. \`type\` restringe los valores que el
 -- service aceptara y como deserializa \`value\` (que siempre se almacena TEXT).
 -- CHECK evita que la capa de datos quede en estado invalido incluso si alguien
@@ -72,7 +72,7 @@ INSERT OR IGNORE INTO settings (key, value, type, category, description) VALUES
   ('business_nit',           '',      'string',  'business', 'NIT del emisor'),
   ('business_address',       '',      'string',  'business', 'Direccion fiscal'),
   ('business_phone',         '',      'string',  'business', 'Telefono de contacto');
-`, De = `-- 003_sales_tax_snapshot.sql
+`, we = `-- 003_sales_tax_snapshot.sql
 -- Snapshotea impuesto y moneda al momento de la venta. Motivo: reimprimir
 -- un ticket mañana con la tasa vigente hoy da totales distintos al cobrado,
 -- lo cual es legalmente y contablemente invalido. Ver Prompt 1, seccion
@@ -88,7 +88,7 @@ ALTER TABLE sales ADD COLUMN currency_code    TEXT NOT NULL DEFAULT 'GTQ';
 -- fielmente historico; en una migracion de produccion habria que coordinar
 -- con contabilidad un criterio acordado (ej. retro-aplicar tax_rate actual).
 UPDATE sales SET subtotal = total WHERE subtotal = 0;
-`, we = `-- 004_customers.sql
+`, Me = `-- 004_customers.sql
 -- Tabla de clientes + enlace desde sales con snapshot de nombre/NIT.
 --
 -- Motivo snapshot: un cliente puede renombrarse o darse de baja despues de
@@ -132,7 +132,7 @@ UPDATE sales
        customer_name_snapshot = 'Consumidor Final',
        customer_nit_snapshot  = 'C/F'
  WHERE customer_id IS NULL;
-`, ve = `-- 005_products_extended.sql
+`, Fe = `-- 005_products_extended.sql
 -- Extiende la tabla products con los campos que usa el modulo de Inventario:
 -- categoria, marca, ubicacion, condicion, stock minimo y estado activo.
 --
@@ -152,7 +152,7 @@ ALTER TABLE products ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_a
 
 CREATE INDEX IF NOT EXISTS idx_products_category  ON products(category);
 CREATE INDEX IF NOT EXISTS idx_products_is_active ON products(is_active);
-`, Me = `-- 006_users.sql
+`, Be = `-- 006_users.sql
 -- Tabla de usuarios del sistema con autenticacion local.
 --
 -- SEGURIDAD:
@@ -208,7 +208,7 @@ UPDATE sales
    SET created_by_user_id       = 1,
        created_by_user_snapshot = 'Administrador'
  WHERE created_by_user_id IS NULL;
-`, Be = `-- 007_settings_extended.sql
+`, qe = `-- 007_settings_extended.sql
 -- Amplía la tabla settings con configuraciones de negocio genéricas:
 -- identidad visual, contacto, ticket y preferencias de app.
 -- INSERT OR IGNORE: nunca pisa valores que el usuario ya haya guardado.
@@ -231,12 +231,12 @@ INSERT OR IGNORE INTO settings (key, value, type, category, description) VALUES
   -- Apariencia / app
   ('app_name',             'SerProMec',  'string',  'app',       'Nombre que aparece en la barra lateral y titulo'),
   ('app_accent_color',     '#e5001f',    'string',  'app',       'Color de acento principal (hex)');
-`, Fe = `-- 008_settings_theme.sql
+`, Pe = `-- 008_settings_theme.sql
 -- Agrega la clave app_theme para persistir la paleta de colores seleccionada.
 
 INSERT OR IGNORE INTO settings (key, value, type, category, description) VALUES
   ('app_theme', 'crimson', 'string', 'app', 'Paleta de colores del sistema (slug de tema)');
-`, qe = `-- 009_sales_payment.sql
+`, ke = `-- 009_sales_payment.sql
 -- Agrega método de pago y tipo de cliente a la tabla de ventas.
 
 ALTER TABLE sales ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'cash'
@@ -244,7 +244,7 @@ ALTER TABLE sales ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'cash'
 
 ALTER TABLE sales ADD COLUMN client_type TEXT NOT NULL DEFAULT 'cf'
   CHECK (client_type IN ('cf', 'registered', 'company'));
-`, Pe = `-- 010_sales_void_audit.sql
+`, He = `-- 010_sales_void_audit.sql
 -- Anulación de ventas + bitácora general de la aplicación.
 
 -- 1. Estado de la venta (activa / anulada)
@@ -276,8 +276,8 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS idx_audit_log_action     ON audit_log(action);
 CREATE INDEX IF NOT EXISTS idx_audit_log_entity     ON audit_log(entity, entity_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at DESC);
-`, ke = `ALTER TABLE users ADD COLUMN avatar TEXT;
-`, He = `-- 012_cash_sessions.sql
+`, xe = `ALTER TABLE users ADD COLUMN avatar TEXT;
+`, Xe = `-- 012_cash_sessions.sql
 -- Apertura y cierre de caja con movimientos manuales.
 
 CREATE TABLE IF NOT EXISTS cash_sessions (
@@ -310,7 +310,7 @@ CREATE TABLE IF NOT EXISTS cash_movements (
 CREATE INDEX IF NOT EXISTS idx_cash_sessions_status    ON cash_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_cash_sessions_opened_at ON cash_sessions(opened_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cash_movements_session  ON cash_movements(session_id);
-`, Xe = `-- 013_purchases.sql
+`, je = `-- 013_purchases.sql
 -- Proveedores y órdenes de compra.
 
 CREATE TABLE IF NOT EXISTS suppliers (
@@ -356,7 +356,7 @@ ALTER TABLE products ADD COLUMN cost REAL NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier ON purchase_orders(supplier_id);
 CREATE INDEX IF NOT EXISTS idx_purchase_orders_status   ON purchase_orders(status);
 CREATE INDEX IF NOT EXISTS idx_purchase_items_order     ON purchase_items(order_id);
-`, xe = `-- Cuentas por cobrar
+`, Ve = `-- Cuentas por cobrar
 CREATE TABLE IF NOT EXISTS receivables (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   customer_id   INTEGER,
@@ -385,7 +385,7 @@ CREATE TABLE IF NOT EXISTS receivable_payments (
   created_by_name TEXT,
   created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime'))
 );
-`, je = `CREATE TABLE IF NOT EXISTS quotes (
+`, Ye = `CREATE TABLE IF NOT EXISTS quotes (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   customer_id     INTEGER,
   customer_name   TEXT    NOT NULL,
@@ -414,11 +414,11 @@ CREATE TABLE IF NOT EXISTS quote_items (
   unit_price   REAL    NOT NULL DEFAULT 0,
   subtotal     REAL    NOT NULL DEFAULT 0
 );
-`, Ye = `-- Descuentos en ventas
+`, We = `-- Descuentos en ventas
 ALTER TABLE sales ADD COLUMN discount_type   TEXT NOT NULL DEFAULT 'none';
 ALTER TABLE sales ADD COLUMN discount_value  REAL NOT NULL DEFAULT 0;
 ALTER TABLE sales ADD COLUMN discount_amount REAL NOT NULL DEFAULT 0;
-`, Ve = `-- Gastos / egresos operativos
+`, Ge = `-- Gastos / egresos operativos
 CREATE TABLE IF NOT EXISTS expenses (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   category        TEXT    NOT NULL DEFAULT 'otros',
@@ -431,7 +431,7 @@ CREATE TABLE IF NOT EXISTS expenses (
   created_by_name TEXT,
   created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now','localtime'))
 );
-`, Ge = `-- Devoluciones de ventas
+`, $e = `-- Devoluciones de ventas
 CREATE TABLE IF NOT EXISTS returns (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   sale_id         INTEGER NOT NULL REFERENCES sales(id),
@@ -453,7 +453,7 @@ CREATE TABLE IF NOT EXISTS return_items (
   unit_price    REAL    NOT NULL DEFAULT 0,
   subtotal      REAL    NOT NULL DEFAULT 0
 );
-`, We = `-- Movimientos de inventario (kardex)
+`, Ke = `-- Movimientos de inventario (kardex)
 CREATE TABLE IF NOT EXISTS stock_movements (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   product_id     INTEGER NOT NULL,
@@ -471,23 +471,23 @@ CREATE TABLE IF NOT EXISTS stock_movements (
 );
 
 CREATE INDEX IF NOT EXISTS idx_stock_movements_product ON stock_movements(product_id, created_at DESC);
-`, $e = `-- Configuración del backup automático
+`, ze = `-- Configuración del backup automático
 INSERT OR IGNORE INTO settings (key, value, type, category, description) VALUES
   ('backup_interval_hours', '720',  'number', 'backup', 'Intervalo entre backups automáticos en horas (24=diario, 168=semanal, 720=mensual)'),
   ('backup_max_copies',     '10',   'number', 'backup', 'Número máximo de copias automáticas a conservar');
-`, Ke = `-- 021_tax_enabled.sql
+`, Qe = `-- 021_tax_enabled.sql
 -- Agrega el interruptor global de IVA.
 -- Por defecto desactivado: los precios ya incluyen IVA y no se desglosa en ningun lado.
 -- INSERT OR IGNORE: no pisa el valor si el usuario ya lo cambio.
 
 INSERT OR IGNORE INTO settings (key, value, type, category, description) VALUES
   ('tax_enabled', '0', 'boolean', 'tax', 'Habilitar calculo y visualizacion de IVA en toda la app');
-`, Qe = `-- 022_printer_settings.sql
+`, Ze = `-- 022_printer_settings.sql
 -- Configuracion de impresora para recibos.
 INSERT OR IGNORE INTO settings (key, value, type, category, description) VALUES
   ('receipt_printer',    '',              'string', 'ticket', 'Nombre exacto de la impresora para recibos (vacío = abre diálogo del sistema)'),
   ('receipt_paper_size', 'half-letter',   'string', 'ticket', 'Tamaño de papel: half-letter | letter | thermal-80');
-`, ze = `-- 023_categories.sql
+`, Je = `-- 023_categories.sql
 -- Tabla de categorias de productos. Reemplaza el arreglo hardcodeado en ProductForm.
 CREATE TABLE IF NOT EXISTS categories (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -508,13 +508,16 @@ INSERT OR IGNORE INTO categories (name) VALUES
   ('Servicios'),
   ('Otro');
 `;
-let Y = null;
-function Ze() {
-  if (Y) return Y;
-  const e = v.join(y.getPath("userData"), "taller_pos.sqlite"), n = new ge(e);
-  return n.pragma("journal_mode = WAL"), n.pragma("foreign_keys = ON"), n.pragma("synchronous = NORMAL"), Y = n, n;
+let D = null;
+function et() {
+  if (D) return D;
+  const e = U.join(I.getPath("userData"), "taller_pos.sqlite"), n = new be(e);
+  return n.pragma("journal_mode = WAL"), n.pragma("foreign_keys = ON"), n.pragma("synchronous = NORMAL"), D = n, n;
 }
-const Je = `
+function tt() {
+  D && (D.close(), D = null);
+}
+const nt = `
   CREATE TABLE IF NOT EXISTS schema_migrations (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT    NOT NULL UNIQUE,
@@ -522,33 +525,33 @@ const Je = `
     executed_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 `;
-function et(e) {
+function rt(e) {
   const n = e.replace(/\r\n/g, `
 `);
-  return he.createHash("sha256").update(n, "utf8").digest("hex");
+  return Ue.createHash("sha256").update(n, "utf8").digest("hex");
 }
-function tt(e, n) {
-  e.exec(Je);
+function at(e, n) {
+  e.exec(nt);
   const t = e.prepare("SELECT checksum FROM schema_migrations WHERE name = ?"), r = e.prepare(
     "INSERT INTO schema_migrations (name, checksum) VALUES (?, ?)"
-  ), a = [...n].sort((o, c) => o.name.localeCompare(c.name)), s = [], i = [];
-  for (const o of a) {
-    const c = et(o.sql), d = t.get(o.name);
+  ), a = [...n].sort((c, i) => c.name.localeCompare(i.name)), s = [], o = [];
+  for (const c of a) {
+    const i = rt(c.sql), d = t.get(c.name);
     if (d) {
-      if (d.checksum !== c)
+      if (d.checksum !== i)
         throw new Error(
-          `Migration tampering detected: "${o.name}" fue aplicada con checksum ${d.checksum} pero el archivo actual tiene ${c}. Nunca modifiques migraciones ya aplicadas; crea una nueva.`
+          `Migration tampering detected: "${c.name}" fue aplicada con checksum ${d.checksum} pero el archivo actual tiene ${i}. Nunca modifiques migraciones ya aplicadas; crea una nueva.`
         );
-      i.push(o.name);
+      o.push(c.name);
       continue;
     }
     e.transaction(() => {
-      e.exec(o.sql), r.run(o.name, c);
-    })(), s.push(o.name);
+      e.exec(c.sql), r.run(c.name, i);
+    })(), s.push(c.name);
   }
-  return { applied: s, skipped: i };
+  return { applied: s, skipped: o };
 }
-function nt(e) {
+function st(e) {
   const n = {
     selectAll: e.prepare("SELECT key, value, type, category, description, updated_at FROM settings"),
     selectByKey: e.prepare(
@@ -612,7 +615,7 @@ function nt(e) {
     }
   };
 }
-class de extends Error {
+class Ee extends Error {
   /**
    * @param {string} code
    * @param {string} message
@@ -621,13 +624,13 @@ class de extends Error {
     super(t), this.name = "SettingError", this.code = n;
   }
 }
-class V extends de {
+class W extends Ee {
   /** @param {string} key */
   constructor(n) {
     super("SETTING_NOT_FOUND", `Setting no encontrado: "${n}"`), this.name = "SettingNotFoundError", this.key = n;
   }
 }
-class A extends de {
+class h extends Ee {
   /**
    * @param {string} key
    * @param {string} expectedType
@@ -643,16 +646,16 @@ class A extends de {
   }
 }
 function G(e) {
-  return { ...e, value: rt(e.value, e.type, e.key) };
+  return { ...e, value: ot(e.value, e.type, e.key) };
 }
-function rt(e, n, t) {
+function ot(e, n, t) {
   switch (n) {
     case "string":
       return e;
     case "number": {
       const r = Number(e);
       if (!Number.isFinite(r))
-        throw new A(t, "number", e);
+        throw new h(t, "number", e);
       return r;
     }
     case "boolean":
@@ -661,35 +664,35 @@ function rt(e, n, t) {
       try {
         return JSON.parse(e);
       } catch {
-        throw new A(t, "json", e);
+        throw new h(t, "json", e);
       }
     default:
-      throw new A(t, n, e);
+      throw new h(t, n, e);
   }
 }
-function at(e, n, t) {
+function it(e, n, t) {
   switch (n) {
     case "string":
-      if (typeof e != "string") throw new A(t, "string", e);
+      if (typeof e != "string") throw new h(t, "string", e);
       return e;
     case "number":
       if (typeof e != "number" || !Number.isFinite(e))
-        throw new A(t, "number", e);
+        throw new h(t, "number", e);
       return String(e);
     case "boolean":
-      if (typeof e != "boolean") throw new A(t, "boolean", e);
+      if (typeof e != "boolean") throw new h(t, "boolean", e);
       return e ? "1" : "0";
     case "json":
       try {
         return JSON.stringify(e);
       } catch {
-        throw new A(t, "json", e);
+        throw new h(t, "json", e);
       }
     default:
-      throw new A(t, n, e);
+      throw new h(t, n, e);
   }
 }
-function st(e) {
+function ct(e) {
   const n = /* @__PURE__ */ new Map();
   let t = !1;
   function r() {
@@ -710,9 +713,9 @@ function st(e) {
      */
     get(s) {
       a();
-      const i = n.get(s);
-      if (!i) throw new V(s);
-      return i.value;
+      const o = n.get(s);
+      if (!o) throw new W(s);
+      return o.value;
     },
     /**
      * Devuelve settings agrupados por `category`:
@@ -722,8 +725,8 @@ function st(e) {
     getAll() {
       a();
       const s = {};
-      for (const i of n.values())
-        s[i.category] || (s[i.category] = {}), s[i.category][i.key] = i.value;
+      for (const o of n.values())
+        s[o.category] || (s[o.category] = {}), s[o.category][o.key] = o.value;
       return s;
     },
     /**
@@ -732,10 +735,10 @@ function st(e) {
      */
     getByCategory(s) {
       a();
-      const i = {};
-      for (const o of n.values())
-        o.category === s && (i[o.key] = o.value);
-      return i;
+      const o = {};
+      for (const c of n.values())
+        c.category === s && (o[c.key] = c.value);
+      return o;
     },
     /**
      * Valida tipo, persiste y actualiza el cache. Si la key no existe en DB
@@ -745,13 +748,13 @@ function st(e) {
      * @param {unknown} value
      * @throws {SettingNotFoundError | SettingValidationError}
      */
-    set(s, i) {
+    set(s, o) {
       a();
-      const o = n.get(s);
-      if (!o) throw new V(s);
-      const c = at(i, o.type, s);
-      if (e.updateValue(s, c) === 0)
-        throw n.delete(s), new V(s);
+      const c = n.get(s);
+      if (!c) throw new W(s);
+      const i = it(o, c.type, s);
+      if (e.updateValue(s, i) === 0)
+        throw n.delete(s), new W(s);
       const E = e.findByKey(s);
       n.set(s, G(E));
     },
@@ -761,11 +764,11 @@ function st(e) {
      * @param {string} key
      * @param {string} value
      */
-    upsert(s, i) {
-      if (typeof i != "string") throw new A(s, "string", i);
-      e.upsertValue(s, i);
-      const o = e.findByKey(s);
-      o && n.set(s, G(o));
+    upsert(s, o) {
+      if (typeof o != "string") throw new h(s, "string", o);
+      e.upsertValue(s, o);
+      const c = e.findByKey(s);
+      c && n.set(s, G(c));
     }
   };
 }
@@ -779,10 +782,10 @@ function u(e) {
     }
   };
 }
-function ot(e) {
+function dt(e) {
   l.handle("settings:get-all", u(() => e.getAll())), l.handle("settings:get", u((n, t) => e.get(t))), l.handle("settings:get-by-category", u((n, t) => e.getByCategory(t))), l.handle("settings:set", u((n, t, r) => (e.set(t, r), !0))), l.handle("settings:upsert", u((n, t, r) => (e.upsert(t, r), !0)));
 }
-function it(e) {
+function lt(e) {
   const n = {
     findAll: e.prepare("SELECT id, name, is_active FROM categories ORDER BY name"),
     findActive: e.prepare("SELECT id, name FROM categories WHERE is_active = 1 ORDER BY name"),
@@ -813,7 +816,7 @@ function it(e) {
     }
   };
 }
-function ct(e) {
+function ut(e) {
   return {
     list() {
       return e.findAll();
@@ -829,30 +832,30 @@ function ct(e) {
     update(n, t) {
       const r = (t ?? "").trim();
       if (!r) throw new Error("El nombre de la categoría es requerido");
-      e.update(n, r);
+      return e.update(n, r), { id: n, name: r, is_active: 1 };
     },
     setActive(n, t) {
       e.setActive(n, t ? 1 : 0);
     }
   };
 }
-function dt(e) {
+function Et(e) {
   l.handle("categories:list", u(() => e.list())), l.handle("categories:list-active", u(() => e.listActive())), l.handle("categories:create", u((n, t) => e.create(t))), l.handle("categories:update", u((n, t, r) => e.update(t, r))), l.handle("categories:set-active", u((n, t, r) => e.setActive(t, r)));
 }
-const k = "id, code, name, price, stock, category, brand, location, condition, min_stock, is_active";
-function lt(e) {
+const H = "id, code, name, price, stock, category, brand, location, condition, min_stock, is_active";
+function mt(e) {
   const n = {
     selectAll: e.prepare(
-      `SELECT ${k} FROM products ORDER BY name`
+      `SELECT ${H} FROM products ORDER BY name`
     ),
     selectActive: e.prepare(
-      `SELECT ${k} FROM products WHERE is_active = 1 ORDER BY name`
+      `SELECT ${H} FROM products WHERE is_active = 1 ORDER BY name`
     ),
     selectById: e.prepare(
-      `SELECT ${k} FROM products WHERE id = ?`
+      `SELECT ${H} FROM products WHERE id = ?`
     ),
     search: e.prepare(
-      `SELECT ${k} FROM products
+      `SELECT ${H} FROM products
         WHERE (name LIKE ? OR code LIKE ? OR category LIKE ?)
         ORDER BY name`
     ),
@@ -936,7 +939,7 @@ function lt(e) {
     }
   };
 }
-function ut(e) {
+function _t(e) {
   function n(r) {
     if (!Number.isInteger(r) || r <= 0)
       throw Object.assign(new Error(`product id invalido: ${r}`), {
@@ -975,13 +978,13 @@ function ut(e) {
       const a = (r.code ?? "").trim(), s = (r.name ?? "").trim();
       if (!a) throw Object.assign(new Error("code requerido"), { code: "PRODUCT_MISSING_CODE" });
       if (!s) throw Object.assign(new Error("name requerido"), { code: "PRODUCT_MISSING_NAME" });
-      const i = Number(r.price);
-      if (!Number.isFinite(i) || i < 0)
+      const o = Number(r.price);
+      if (!Number.isFinite(o) || o < 0)
         throw Object.assign(new Error("price invalido"), { code: "PRODUCT_INVALID_PRICE" });
-      const o = e.create({
+      const c = e.create({
         code: a,
         name: s,
-        price: i,
+        price: o,
         stock: Math.max(0, Math.round(Number(r.stock) || 0)),
         category: (r.category ?? "General").trim() || "General",
         brand: (r.brand ?? "").trim(),
@@ -989,21 +992,21 @@ function ut(e) {
         condition: (r.condition ?? "Nuevo").trim() || "Nuevo",
         min_stock: Math.max(0, Math.round(Number(r.min_stock) || 5))
       });
-      return e.findById(o);
+      return e.findById(c);
     },
     /**
      * @param {number} id
      * @param {ProductPatch} patch
      */
     update(r, a) {
-      const s = t(r), i = (a.name ?? s.name).trim();
-      if (!i) throw Object.assign(new Error("name requerido"), { code: "PRODUCT_MISSING_NAME" });
-      const o = a.price !== void 0 ? Number(a.price) : s.price;
-      if (!Number.isFinite(o) || o < 0)
+      const s = t(r), o = (a.name ?? s.name).trim();
+      if (!o) throw Object.assign(new Error("name requerido"), { code: "PRODUCT_MISSING_NAME" });
+      const c = a.price !== void 0 ? Number(a.price) : s.price;
+      if (!Number.isFinite(c) || c < 0)
         throw Object.assign(new Error("price invalido"), { code: "PRODUCT_INVALID_PRICE" });
       return e.update(r, {
-        name: i,
-        price: o,
+        name: o,
+        price: c,
         category: (a.category ?? s.category ?? "General").trim() || "General",
         brand: (a.brand ?? s.brand ?? "").trim(),
         location: (a.location ?? s.location ?? "").trim(),
@@ -1027,36 +1030,36 @@ function ut(e) {
      */
     adjustStock(r, a, s) {
       t(r);
-      const i = Math.round(Number(s));
-      if (!Number.isFinite(i) || i <= 0)
+      const o = Math.round(Number(s));
+      if (!Number.isFinite(o) || o <= 0)
         throw Object.assign(new Error("qty invalido"), { code: "PRODUCT_INVALID_QTY" });
-      const o = a === "entry" ? i : -i;
-      return e.adjustStock(r, o), e.findById(r);
+      const c = a === "entry" ? o : -o;
+      return e.adjustStock(r, c), e.findById(r);
     }
   };
 }
-function Et(e) {
+function Tt(e) {
   l.handle("products:list", u(() => e.list())), l.handle("products:list-active", u(() => e.listActive())), l.handle("products:search", u((n, t) => e.search(t))), l.handle("products:get-by-id", u((n, t) => e.getById(t))), l.handle("products:create", u((n, t) => e.create(t))), l.handle("products:update", u((n, t, r) => e.update(t, r))), l.handle("products:remove", u((n, t) => e.remove(t))), l.handle("products:restore", u((n, t) => e.restore(t))), l.handle("products:adjust-stock", u((n, t, r, a) => e.adjustStock(t, r, a)));
 }
-const h = "id, nit, name, email, phone, address, active, created_at, updated_at";
-function mt(e) {
+const C = "id, nit, name, email, phone, address, active, created_at, updated_at";
+function pt(e) {
   const n = {
-    selectAllActive: e.prepare(`SELECT ${h} FROM customers WHERE active = 1 ORDER BY name`),
-    selectAllAny: e.prepare(`SELECT ${h} FROM customers ORDER BY name`),
-    selectById: e.prepare(`SELECT ${h} FROM customers WHERE id = ?`),
+    selectAllActive: e.prepare(`SELECT ${C} FROM customers WHERE active = 1 ORDER BY name`),
+    selectAllAny: e.prepare(`SELECT ${C} FROM customers ORDER BY name`),
+    selectById: e.prepare(`SELECT ${C} FROM customers WHERE id = ?`),
     searchActive: e.prepare(
-      `SELECT ${h} FROM customers
+      `SELECT ${C} FROM customers
         WHERE (name LIKE ? OR nit LIKE ?) AND active = 1
      ORDER BY name
         LIMIT 50`
     ),
     searchAny: e.prepare(
-      `SELECT ${h} FROM customers
+      `SELECT ${C} FROM customers
         WHERE (name LIKE ? OR nit LIKE ?)
      ORDER BY name
         LIMIT 50`
     ),
-    selectByNit: e.prepare(`SELECT ${h} FROM customers WHERE nit = ?`),
+    selectByNit: e.prepare(`SELECT ${C} FROM customers WHERE nit = ?`),
     insert: e.prepare(
       `INSERT INTO customers (nit, name, email, phone, address)
        VALUES (?, ?, ?, ?, ?)`
@@ -1122,12 +1125,12 @@ function mt(e) {
      */
     update(t, r) {
       const a = [], s = [];
-      for (const [c, d] of Object.entries(r))
-        d !== void 0 && (a.push(`${c} = ?`), s.push(d));
+      for (const [i, d] of Object.entries(r))
+        d !== void 0 && (a.push(`${i} = ?`), s.push(d));
       if (a.length === 0) return 0;
       a.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')");
-      const i = `UPDATE customers SET ${a.join(", ")} WHERE id = ?`;
-      return s.push(t), e.prepare(i).run(...s).changes;
+      const o = `UPDATE customers SET ${a.join(", ")} WHERE id = ?`;
+      return s.push(t), e.prepare(o).run(...s).changes;
     },
     /**
      * @param {number} id
@@ -1139,7 +1142,7 @@ function mt(e) {
     }
   };
 }
-class le extends Error {
+class me extends Error {
   /**
    * @param {string} code
    * @param {string} message
@@ -1148,13 +1151,13 @@ class le extends Error {
     super(t), this.name = "CustomerError", this.code = n;
   }
 }
-class H extends le {
+class x extends me {
   /** @param {number} id */
   constructor(n) {
     super("CUSTOMER_NOT_FOUND", `Cliente no encontrado: #${n}`), this.id = n;
   }
 }
-class f extends le {
+class g extends me {
   /**
    * @param {string} field
    * @param {string} message
@@ -1163,20 +1166,20 @@ class f extends le {
     super("CUSTOMER_INVALID", `${n}: ${t}`), this.field = n;
   }
 }
-const _t = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-function ne(e) {
+const Nt = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function ae(e) {
   const n = (e ?? "").trim().toUpperCase();
   return n.length === 0 ? "C/F" : n;
 }
-function re(e) {
+function se(e) {
   if (typeof e != "string" || e.trim().length < 2)
-    throw new f("name", "nombre requerido (minimo 2 caracteres)");
+    throw new g("name", "nombre requerido (minimo 2 caracteres)");
 }
-function ae(e) {
-  if (!(e == null || e === "") && !_t.test(e))
-    throw new f("email", "formato de email invalido");
+function oe(e) {
+  if (!(e == null || e === "") && !Nt.test(e))
+    throw new g("email", "formato de email invalido");
 }
-function Tt(e) {
+function Rt(e) {
   return {
     /**
      * @param {{ includeInactive?: boolean }} [opts]
@@ -1200,7 +1203,7 @@ function Tt(e) {
      */
     getById(n) {
       if (!Number.isInteger(n) || n <= 0)
-        throw new f("id", `id invalido: ${n}`);
+        throw new g("id", `id invalido: ${n}`);
       return e.findById(n) ?? null;
     },
     /**
@@ -1213,7 +1216,7 @@ function Tt(e) {
      */
     requireById(n) {
       const t = e.findById(n);
-      if (!t) throw new H(n);
+      if (!t) throw new x(n);
       return t;
     },
     /**
@@ -1221,17 +1224,17 @@ function Tt(e) {
      * @returns {CustomerRow}
      */
     create(n) {
-      var i, o, c;
-      re(n.name), ae(n.email);
-      const t = ne(n.nit);
+      var o, c, i;
+      se(n.name), oe(n.email);
+      const t = ae(n.nit);
       if (t !== "C/F" && e.findByNit(t))
-        throw new f("nit", `El NIT ${t} ya esta registrado`);
+        throw new g("nit", `El NIT ${t} ya esta registrado`);
       const r = e.insert({
         nit: t,
         name: n.name.trim(),
-        email: ((i = n.email) == null ? void 0 : i.trim()) || null,
-        phone: ((o = n.phone) == null ? void 0 : o.trim()) || null,
-        address: ((c = n.address) == null ? void 0 : c.trim()) || null
+        email: ((o = n.email) == null ? void 0 : o.trim()) || null,
+        phone: ((c = n.phone) == null ? void 0 : c.trim()) || null,
+        address: ((i = n.address) == null ? void 0 : i.trim()) || null
       }), a = typeof r == "bigint" ? Number(r) : r, s = e.findById(a);
       if (!s) throw new Error("Cliente recien insertado no encontrado (race imposible)");
       return s;
@@ -1242,23 +1245,23 @@ function Tt(e) {
      * @returns {CustomerRow}
      */
     update(n, t) {
-      var o, c, d;
+      var c, i, d;
       if (!Number.isInteger(n) || n <= 0)
-        throw new f("id", `id invalido: ${n}`);
+        throw new g("id", `id invalido: ${n}`);
       if (n === 1)
-        throw new f("id", 'No se puede editar "Consumidor Final"');
-      t.name !== void 0 && re(t.name), t.email !== void 0 && ae(t.email);
-      const r = t.nit !== void 0 ? ne(t.nit) : void 0;
+        throw new g("id", 'No se puede editar "Consumidor Final"');
+      t.name !== void 0 && se(t.name), t.email !== void 0 && oe(t.email);
+      const r = t.nit !== void 0 ? ae(t.nit) : void 0;
       if (r && r !== "C/F") {
         const E = e.findByNit(r);
         if (E && E.id !== n)
-          throw new f("nit", `El NIT ${r} ya esta registrado en otro cliente`);
+          throw new g("nit", `El NIT ${r} ya esta registrado en otro cliente`);
       }
       const a = {};
-      if (r !== void 0 && (a.nit = r), t.name !== void 0 && (a.name = t.name.trim()), t.email !== void 0 && (a.email = ((o = t.email) == null ? void 0 : o.trim()) || null), t.phone !== void 0 && (a.phone = ((c = t.phone) == null ? void 0 : c.trim()) || null), t.address !== void 0 && (a.address = ((d = t.address) == null ? void 0 : d.trim()) || null), t.active !== void 0 && (a.active = t.active ? 1 : 0), e.update(n, a) === 0) throw new H(n);
-      const i = e.findById(n);
-      if (!i) throw new H(n);
-      return i;
+      if (r !== void 0 && (a.nit = r), t.name !== void 0 && (a.name = t.name.trim()), t.email !== void 0 && (a.email = ((c = t.email) == null ? void 0 : c.trim()) || null), t.phone !== void 0 && (a.phone = ((i = t.phone) == null ? void 0 : i.trim()) || null), t.address !== void 0 && (a.address = ((d = t.address) == null ? void 0 : d.trim()) || null), t.active !== void 0 && (a.active = t.active ? 1 : 0), e.update(n, a) === 0) throw new x(n);
+      const o = e.findById(n);
+      if (!o) throw new x(n);
+      return o;
     },
     /**
      * @param {number} id
@@ -1266,24 +1269,24 @@ function Tt(e) {
      */
     setActive(n, t) {
       if (!Number.isInteger(n) || n <= 0)
-        throw new f("id", `id invalido: ${n}`);
+        throw new g("id", `id invalido: ${n}`);
       if (n === 1)
-        throw new f("id", 'No se puede desactivar "Consumidor Final"');
-      if (e.setActive(n, t) === 0) throw new H(n);
+        throw new g("id", 'No se puede desactivar "Consumidor Final"');
+      if (e.setActive(n, t) === 0) throw new x(n);
       return !0;
     }
   };
 }
-function pt(e) {
+function St(e) {
   l.handle("customers:list", u((n, t) => e.list(t))), l.handle("customers:search", u((n, t, r) => e.search(t, r))), l.handle("customers:get-by-id", u((n, t) => e.getById(t))), l.handle("customers:create", u((n, t) => e.create(t))), l.handle("customers:update", u((n, t, r) => e.update(t, r))), l.handle("customers:set-active", u((n, t, r) => e.setActive(t, r)));
 }
-const se = `
+const ie = `
   id, subtotal, tax_rate_applied, tax_amount, total, currency_code, date,
   customer_id, customer_name_snapshot, customer_nit_snapshot,
   payment_method, client_type, status,
   discount_type, discount_value, discount_amount
 `;
-function Nt(e) {
+function Ot(e) {
   const n = {
     insertSale: e.prepare(
       `INSERT INTO sales (
@@ -1302,7 +1305,7 @@ function Nt(e) {
       "INSERT INTO sale_items (sale_id, product_id, qty, price) VALUES (?, ?, ?, ?)"
     ),
     updateStock: e.prepare("UPDATE products SET stock = stock - ? WHERE id = ?"),
-    selectById: e.prepare(`SELECT ${se} FROM sales WHERE id = ?`),
+    selectById: e.prepare(`SELECT ${ie} FROM sales WHERE id = ?`),
     /**
      * LEFT JOIN a products para mostrar nombre/codigo actuales. NO es
      * snapshot; para el snapshot real a nivel linea, agregar columnas
@@ -1318,7 +1321,7 @@ function Nt(e) {
      ORDER BY si.id ASC`
     ),
     findPageFiltered: e.prepare(`
-      SELECT ${se}
+      SELECT ${ie}
         FROM sales
        WHERE (@search IS NULL
               OR lower(customer_name_snapshot) LIKE '%' || lower(@search) || '%'
@@ -1347,9 +1350,11 @@ function Nt(e) {
         COALESCE(SUM(subtotal), 0)        AS subtotal,
         COALESCE(SUM(tax_amount), 0)      AS tax_amount,
         COALESCE(SUM(total), 0)           AS total,
+        COALESCE(SUM(CASE WHEN COALESCE(payment_method,'cash') != 'credit' THEN total ELSE 0 END), 0) AS cash_total,
         currency_code
       FROM sales
-      WHERE date(date) = date('now', 'localtime')
+      WHERE status = 'active'
+        AND date(date) = date('now', 'localtime')
       GROUP BY currency_code
     `),
     markVoided: e.prepare(
@@ -1486,15 +1491,15 @@ function Nt(e) {
         r.userId ?? null,
         r.userName ?? null
       ).lastInsertRowid;
-      for (const i of r.items) {
-        const o = n.getProductForMove.get(i.id), c = (o == null ? void 0 : o.stock) ?? 0;
-        n.insertItem.run(s, i.id, i.qty, i.price), n.updateStock.run(i.qty, i.id), n.insertMovement.run({
-          product_id: i.id,
-          product_name: (o == null ? void 0 : o.name) ?? "",
+      for (const o of r.items) {
+        const c = n.getProductForMove.get(o.id), i = (c == null ? void 0 : c.stock) ?? 0;
+        n.insertItem.run(s, o.id, o.qty, o.price), n.updateStock.run(o.qty, o.id), n.insertMovement.run({
+          product_id: o.id,
+          product_name: (c == null ? void 0 : c.name) ?? "",
           type: "sale",
-          qty: i.qty,
-          qty_before: c,
-          qty_after: c - i.qty,
+          qty: o.qty,
+          qty_before: i,
+          qty_after: i - o.qty,
           reference_type: "sale",
           reference_id: s,
           notes: null,
@@ -1514,15 +1519,15 @@ function Nt(e) {
     voidSale: e.transaction((r, a) => {
       if (n.markVoided.run(r.saleId).changes === 0) return !1;
       n.insertVoid.run(r.saleId, r.reason, r.userId ?? null);
-      for (const i of a) {
-        const o = n.getProductForMove.get(i.product_id), c = (o == null ? void 0 : o.stock) ?? 0;
-        n.restoreStock.run(i.qty, i.product_id), n.insertMovement.run({
-          product_id: i.product_id,
-          product_name: (o == null ? void 0 : o.name) ?? i.product_name ?? "",
+      for (const o of a) {
+        const c = n.getProductForMove.get(o.product_id), i = (c == null ? void 0 : c.stock) ?? 0;
+        n.restoreStock.run(o.qty, o.product_id), n.insertMovement.run({
+          product_id: o.product_id,
+          product_name: (c == null ? void 0 : c.name) ?? o.product_name ?? "",
           type: "in",
-          qty: i.qty,
-          qty_before: c,
-          qty_after: c + i.qty,
+          qty: o.qty,
+          qty_before: i,
+          qty_after: i + o.qty,
           reference_type: "sale_void",
           reference_id: r.saleId,
           notes: `Anulación venta #${r.saleId}`,
@@ -1550,12 +1555,12 @@ function Nt(e) {
      * @param {{ limit: number, offset: number, search?: string|null, from?: string|null, to?: string|null, status?: string|null }} opts
      * @returns {SaleRow[]}
      */
-    findPage({ limit: r, offset: a, search: s = null, from: i = null, to: o = null, status: c = null }) {
-      return n.findPageFiltered.all({ limit: r, offset: a, search: s, from: i, to: o, status: c });
+    findPage({ limit: r, offset: a, search: s = null, from: o = null, to: c = null, status: i = null }) {
+      return n.findPageFiltered.all({ limit: r, offset: a, search: s, from: o, to: c, status: i });
     },
     /** @param {{ search?: string|null, from?: string|null, to?: string|null, status?: string|null }} [opts] */
-    countAll({ search: r = null, from: a = null, to: s = null, status: i = null } = {}) {
-      return /** @type {{ total: number }} */ n.countFiltered.get({ search: r, from: a, to: s, status: i }).total;
+    countAll({ search: r = null, from: a = null, to: s = null, status: o = null } = {}) {
+      return /** @type {{ total: number }} */ n.countFiltered.get({ search: r, from: a, to: s, status: o }).total;
     },
     /**
      * Resumen del día actual (fecha local del servidor/electron).
@@ -1645,8 +1650,8 @@ function Nt(e) {
     }
   };
 }
-const Rt = 200, It = 1;
-function St(e) {
+const ft = 200, It = 1;
+function yt(e) {
   if (!e || !Array.isArray(e.items) || e.items.length === 0)
     throw Object.assign(new Error("La venta debe contener al menos un item"), {
       code: "SALE_EMPTY"
@@ -1670,33 +1675,33 @@ function St(e) {
       code: "SALE_INVALID_CUSTOMER"
     });
 }
-function Ot(e, n, t, r) {
+function At(e, n, t, r) {
   const a = Math.pow(10, r), s = (d) => Math.round(d * a) / a;
   if (t) {
     const d = s(e), E = s(d - d / (1 + n));
     return { subtotal: s(d - E), taxAmount: E, total: d };
   }
-  const i = s(e), o = s(i * n), c = s(i + o);
-  return { subtotal: i, taxAmount: o, total: c };
+  const o = s(e), c = s(o * n), i = s(o + c);
+  return { subtotal: o, taxAmount: c, total: i };
 }
-function ft(e, n, t, r) {
+function Lt(e, n, t, r) {
   return {
     /**
      * @param {SaleInput} input
      * @returns {SaleCreatedResult}
      */
     create(a) {
-      St(a);
+      yt(a);
       const s = (
         /** @type {number} */
         n.get("tax_rate")
-      ), i = (
+      ), o = (
         /** @type {boolean} */
         n.get("tax_included_in_price")
-      ), o = (
+      ), c = (
         /** @type {string} */
         n.get("currency_code")
-      ), c = (
+      ), i = (
         /** @type {number} */
         n.get("decimal_places")
       );
@@ -1706,34 +1711,34 @@ function ft(e, n, t, r) {
         n.get("tax_enabled");
       } catch {
       }
-      const E = a.customerId ?? It, m = t.requireById(E), _ = a.items.reduce((D, F) => D + F.price * F.qty, 0), N = a.discountType ?? "none", T = a.discountValue ?? 0, p = Math.pow(10, c), R = (D) => Math.round(D * p) / p;
-      let g = 0;
-      N === "percent" && T > 0 ? g = R(_ * (T / 100)) : N === "fixed" && T > 0 && (g = R(Math.min(T, _)));
-      const U = R(Math.max(0, _ - g)), { subtotal: M, taxAmount: B, total: b } = d ? Ot(U, s, i, c) : { subtotal: U, taxAmount: 0, total: U }, C = e.insertSale({
+      const E = a.customerId ?? It, m = t.requireById(E), _ = a.items.reduce((F, P) => F + P.price * P.qty, 0), T = a.discountType ?? "none", N = a.discountValue ?? 0, p = Math.pow(10, i), R = (F) => Math.round(F * p) / p;
+      let O = 0;
+      T === "percent" && N > 0 ? O = R(_ * (N / 100)) : T === "fixed" && N > 0 && (O = R(Math.min(N, _)));
+      const v = R(Math.max(0, _ - O)), { subtotal: B, taxAmount: q, total: w } = d ? At(v, s, o, i) : { subtotal: v, taxAmount: 0, total: v }, M = e.insertSale({
         items: a.items,
-        subtotal: M,
+        subtotal: B,
         taxRate: s,
-        taxAmount: B,
-        total: b,
-        currencyCode: o,
+        taxAmount: q,
+        total: w,
+        currencyCode: c,
         customerId: E,
         customerNameSnapshot: m.name,
         customerNitSnapshot: m.nit,
         paymentMethod: a.paymentMethod ?? "cash",
         clientType: a.clientType ?? "cf",
-        discountType: N,
-        discountValue: T,
-        discountAmount: g,
+        discountType: T,
+        discountValue: N,
+        discountAmount: O,
         userId: a.userId,
         userName: a.userName
       });
       return {
-        saleId: typeof C == "bigint" ? Number(C) : C,
-        subtotal: M,
+        saleId: typeof M == "bigint" ? Number(M) : M,
+        subtotal: B,
         taxRate: s,
-        taxAmount: B,
-        total: b,
-        currencyCode: o,
+        taxAmount: q,
+        total: w,
+        currencyCode: c,
         customerId: E,
         customerName: m.name,
         customerNit: m.nit
@@ -1748,29 +1753,29 @@ function ft(e, n, t, r) {
         throw Object.assign(new Error(`sale id invalido: ${a}`), { code: "SALE_INVALID_ID" });
       const s = e.findSaleById(a);
       if (!s) return null;
-      const i = e.findSaleItems(a);
-      return { ...s, items: i };
+      const o = e.findSaleItems(a);
+      return { ...s, items: o };
     },
     /**
      * @param {{ page?: number, pageSize?: number }} [opts]
      * @returns {SaleListResult}
      */
     list(a = {}) {
-      var N, T, p, R;
+      var T, N, p, R;
       const s = Number.isInteger(a.page) && /** @type {number} */
       a.page > 0 ? (
         /** @type {number} */
         a.page
-      ) : 1, i = Number.isInteger(a.pageSize) && /** @type {number} */
+      ) : 1, o = Number.isInteger(a.pageSize) && /** @type {number} */
       a.pageSize > 0 ? (
         /** @type {number} */
         a.pageSize
-      ) : 50, o = Math.min(i, Rt), c = (s - 1) * o, d = ((N = a.search) == null ? void 0 : N.trim()) || null, E = ((T = a.from) == null ? void 0 : T.trim()) || null, m = ((p = a.to) == null ? void 0 : p.trim()) || null, _ = ((R = a.status) == null ? void 0 : R.trim()) || null;
+      ) : 50, c = Math.min(o, ft), i = (s - 1) * c, d = ((T = a.search) == null ? void 0 : T.trim()) || null, E = ((N = a.from) == null ? void 0 : N.trim()) || null, m = ((p = a.to) == null ? void 0 : p.trim()) || null, _ = ((R = a.status) == null ? void 0 : R.trim()) || null;
       return {
-        data: e.findPage({ limit: o, offset: c, search: d, from: E, to: m, status: _ }),
+        data: e.findPage({ limit: c, offset: i, search: d, from: E, to: m, status: _ }),
         total: e.countAll({ search: d, from: E, to: m, status: _ }),
         page: s,
-        pageSize: o
+        pageSize: c
       };
     },
     /**
@@ -1787,11 +1792,11 @@ function ft(e, n, t, r) {
         throw Object.assign(new Error(`Venta ${a.saleId} no encontrada`), { code: "SALE_NOT_FOUND" });
       if (s.status === "voided")
         throw Object.assign(new Error(`La venta ${a.saleId} ya está anulada`), { code: "SALE_ALREADY_VOIDED" });
-      const i = e.findSaleItems(a.saleId), o = e.voidSale(
+      const o = e.findSaleItems(a.saleId), c = e.voidSale(
         { saleId: a.saleId, reason: a.reason.trim(), userId: a.userId },
-        i
+        o
       );
-      return o && (r == null || r.log({
+      return c && (r == null || r.log({
         action: "sale_voided",
         entity: "sale",
         entityId: a.saleId,
@@ -1799,7 +1804,7 @@ function ft(e, n, t, r) {
         payload: { total: s.total, customer: s.customer_name_snapshot, reason: a.reason.trim() },
         userId: a.userId,
         userName: a.userName
-      })), { voided: o, saleId: a.saleId };
+      })), { voided: c, saleId: a.saleId };
     },
     /** Reporte del día: totales + top 5 productos. */
     dailyReport() {
@@ -1827,20 +1832,20 @@ function ft(e, n, t, r) {
     }
   };
 }
-function At(e) {
+function gt(e) {
   l.handle("sales:create", u((n, t) => e.create(t))), l.handle("sales:get-by-id", u((n, t) => e.getById(t))), l.handle("sales:list", u((n, t) => e.list(t))), l.handle("sales:daily-report", u(() => e.dailyReport())), l.handle("sales:void", u((n, t) => e.voidSale(t))), l.handle("sales:range-report", u((n, t) => e.rangeReport(t)));
 }
-const oe = "id, email, full_name, role, active, avatar, created_at, updated_at", yt = "id, email, full_name, role, password_hash, active, avatar, created_at, updated_at";
-function Lt(e) {
+const ce = "id, email, full_name, role, active, avatar, created_at, updated_at", ht = "id, email, full_name, role, password_hash, active, avatar, created_at, updated_at";
+function bt(e) {
   const n = {
     findAll: e.prepare(
-      `SELECT ${oe} FROM users ORDER BY role, full_name`
+      `SELECT ${ce} FROM users ORDER BY role, full_name`
     ),
     findById: e.prepare(
-      `SELECT ${oe} FROM users WHERE id = ?`
+      `SELECT ${ce} FROM users WHERE id = ?`
     ),
     findByEmail: e.prepare(
-      `SELECT ${yt} FROM users WHERE email = ? COLLATE NOCASE`
+      `SELECT ${ht} FROM users WHERE email = ? COLLATE NOCASE`
     ),
     insert: e.prepare(
       `INSERT INTO users (email, full_name, role, password_hash)
@@ -1929,14 +1934,14 @@ function Lt(e) {
     }
   };
 }
-const ie = (
+const de = (
   /** @type {const} */
   ["admin", "cashier", "mechanic", "warehouse"]
 );
-function W(e) {
-  return Ue("sha256").update(e).digest("hex");
+function $(e) {
+  return Ce("sha256").update(e).digest("hex");
 }
-function gt(e) {
+function Ut(e) {
   function n(r) {
     if (!Number.isInteger(r) || r <= 0)
       throw Object.assign(new Error(`user id invalido: ${r}`), { code: "USER_INVALID_ID" });
@@ -1969,44 +1974,44 @@ function gt(e) {
         throw Object.assign(new Error("Credenciales incorrectas"), { code: "AUTH_INVALID" });
       if (s.active === 0)
         throw Object.assign(new Error("Usuario desactivado"), { code: "AUTH_INACTIVE" });
-      if (s.password_hash !== W(a))
+      if (s.password_hash !== $(a))
         throw Object.assign(new Error("Credenciales incorrectas"), { code: "AUTH_INVALID" });
-      const { password_hash: i, ...o } = s;
-      return o;
+      const { password_hash: o, ...c } = s;
+      return c;
     },
     /**
      * @param {{ email: string, full_name: string, role: string, password: string }} input
      */
     create(r) {
-      const a = (r.email ?? "").trim().toLowerCase(), s = (r.full_name ?? "").trim(), i = r.role;
+      const a = (r.email ?? "").trim().toLowerCase(), s = (r.full_name ?? "").trim(), o = r.role;
       if (!a) throw Object.assign(new Error("Email requerido"), { code: "USER_MISSING_EMAIL" });
       if (!s) throw Object.assign(new Error("Nombre requerido"), { code: "USER_MISSING_NAME" });
-      if (!ie.includes(
+      if (!de.includes(
         /** @type {any} */
-        i
+        o
       ))
-        throw Object.assign(new Error(`Rol invalido: ${i}`), { code: "USER_INVALID_ROLE" });
+        throw Object.assign(new Error(`Rol invalido: ${o}`), { code: "USER_INVALID_ROLE" });
       if (!r.password || r.password.length < 6)
         throw Object.assign(new Error("Contraseña minimo 6 caracteres"), { code: "USER_WEAK_PASSWORD" });
       if (e.findByEmailWithHash(a)) throw Object.assign(new Error("El email ya está en uso"), { code: "USER_EMAIL_TAKEN" });
-      const c = e.create({ email: a, full_name: s, role: i, password_hash: W(r.password) });
-      return e.findById(c);
+      const i = e.create({ email: a, full_name: s, role: o, password_hash: $(r.password) });
+      return e.findById(i);
     },
     /**
      * @param {number} id
      * @param {{ full_name?: string, role?: string }} patch
      */
     update(r, a) {
-      const s = t(r), i = (a.full_name ?? s.full_name).trim(), o = a.role ?? s.role;
-      if (!i) throw Object.assign(new Error("Nombre requerido"), { code: "USER_MISSING_NAME" });
-      if (!ie.includes(
+      const s = t(r), o = (a.full_name ?? s.full_name).trim(), c = a.role ?? s.role;
+      if (!o) throw Object.assign(new Error("Nombre requerido"), { code: "USER_MISSING_NAME" });
+      if (!de.includes(
         /** @type {any} */
-        o
+        c
       ))
-        throw Object.assign(new Error(`Rol invalido: ${o}`), { code: "USER_INVALID_ROLE" });
-      if (s.role === "admin" && o !== "admin" && e.findAll().filter((d) => d.role === "admin" && d.active === 1).length <= 1)
+        throw Object.assign(new Error(`Rol invalido: ${c}`), { code: "USER_INVALID_ROLE" });
+      if (s.role === "admin" && c !== "admin" && e.findAll().filter((d) => d.role === "admin" && d.active === 1).length <= 1)
         throw Object.assign(new Error("Debe existir al menos un administrador activo"), { code: "USER_LAST_ADMIN" });
-      return e.update(r, { full_name: i, role: o }), e.findById(r);
+      return e.update(r, { full_name: o, role: c }), e.findById(r);
     },
     /**
      * @param {number} id
@@ -2015,7 +2020,7 @@ function gt(e) {
     changePassword(r, a) {
       if (t(r), !a || a.length < 6)
         throw Object.assign(new Error("Contraseña minimo 6 caracteres"), { code: "USER_WEAK_PASSWORD" });
-      return e.updatePassword(r, W(a)), e.findById(r);
+      return e.updatePassword(r, $(a)), e.findById(r);
     },
     /**
      * @param {number} id
@@ -2034,17 +2039,17 @@ function gt(e) {
      */
     setActive(r, a) {
       const s = t(r);
-      if (!a && s.role === "admin" && e.findAll().filter((o) => o.role === "admin" && o.active === 1).length <= 1)
+      if (!a && s.role === "admin" && e.findAll().filter((c) => c.role === "admin" && c.active === 1).length <= 1)
         throw Object.assign(new Error("Debe existir al menos un administrador activo"), { code: "USER_LAST_ADMIN" });
       return e.setActive(r, a ? 1 : 0), e.findById(r);
     }
   };
 }
-function ht(e) {
+function Ct(e) {
   l.handle("users:login", u((n, t, r) => e.login(t, r))), l.handle("users:list", u(() => e.list())), l.handle("users:get-by-id", u((n, t) => e.getById(t))), l.handle("users:create", u((n, t) => e.create(t))), l.handle("users:update", u((n, t, r) => e.update(t, r))), l.handle("users:change-password", u((n, t, r) => e.changePassword(t, r))), l.handle("users:set-active", u((n, t, r) => e.setActive(t, r))), l.handle("users:update-avatar", u((n, t, r) => e.updateAvatar(t, r)));
 }
-const Ut = 200;
-function bt(e) {
+const Dt = 200;
+function vt(e) {
   const n = {
     insert: e.prepare(`
       INSERT INTO audit_log (action, entity, entity_id, description, payload_json, user_id, user_name)
@@ -2088,25 +2093,25 @@ function bt(e) {
      * @returns {{ data: AuditRow[], total: number, page: number, pageSize: number }}
      */
     findPage(t = {}) {
-      const r = t.page ?? 1, a = Math.min(t.pageSize ?? 50, Ut), s = (r - 1) * a, i = {
+      const r = t.page ?? 1, a = Math.min(t.pageSize ?? 50, Dt), s = (r - 1) * a, o = {
         action: t.action ?? null,
         entity: t.entity ?? null,
         from: t.from ?? null,
         to: t.to ?? null,
         limit: a,
         offset: s
-      }, o = (
+      }, c = (
         /** @type {AuditRow[]} */
-        n.selectPage.all(i)
-      ), c = (
+        n.selectPage.all(o)
+      ), i = (
         /** @type {{ total: number }} */
-        n.countFiltered.get(i).total
+        n.countFiltered.get(o).total
       );
-      return { data: o, total: c, page: r, pageSize: a };
+      return { data: c, total: i, page: r, pageSize: a };
     }
   };
 }
-function Ct(e) {
+function wt(e) {
   return {
     /**
      * @param {import('./audit.repository.js').AuditEntry} entry
@@ -2122,10 +2127,10 @@ function Ct(e) {
     }
   };
 }
-function Dt(e) {
+function Mt(e) {
   l.handle("audit:list", u((n, t) => e.list(t)));
 }
-function wt(e) {
+function Ft(e) {
   const n = {
     findOpen: e.prepare(
       "SELECT * FROM cash_sessions WHERE status = 'open' ORDER BY opened_at DESC LIMIT 1"
@@ -2163,9 +2168,28 @@ function wt(e) {
       `SELECT COALESCE(SUM(total), 0) AS total
          FROM sales
         WHERE status = 'active'
+          AND payment_method != 'credit'
           AND date >= (SELECT opened_at FROM cash_sessions WHERE id = ?)
           AND (? IS NULL OR date < ?)`
       // closed_at o NULL si está abierta
+    ),
+    receivablePaymentsForSession: e.prepare(
+      `SELECT COALESCE(SUM(amount), 0) AS total
+         FROM receivable_payments
+        WHERE created_at >= (SELECT opened_at FROM cash_sessions WHERE id = ?)
+          AND (? IS NULL OR created_at < ?)`
+    ),
+    salesTotalToday: e.prepare(
+      `SELECT COALESCE(SUM(total), 0) AS total
+         FROM sales
+        WHERE status = 'active'
+          AND payment_method != 'credit'
+          AND DATE(date, 'localtime') = DATE('now', 'localtime')`
+    ),
+    receivablePaymentsTotalToday: e.prepare(
+      `SELECT COALESCE(SUM(amount), 0) AS total
+         FROM receivable_payments
+        WHERE DATE(created_at, 'localtime') = DATE('now', 'localtime')`
     )
   };
   return {
@@ -2206,7 +2230,7 @@ function wt(e) {
       return Number(n.insertMovement.run(t).lastInsertRowid);
     },
     /**
-     * Suma de ventas activas durante la sesión.
+     * Suma de ventas activas (no crédito) durante la sesión.
      * @param {number} sessionId
      * @param {string|null} closedAt
      * @returns {number}
@@ -2217,10 +2241,39 @@ function wt(e) {
         n.salesTotalForSession.get(t, r, r)
       );
       return (a == null ? void 0 : a.total) ?? 0;
+    },
+    /**
+     * Suma de abonos a cuentas por cobrar durante la sesión.
+     * @param {number} sessionId
+     * @param {string|null} closedAt
+     * @returns {number}
+     */
+    receivablePaymentsTotal(t, r) {
+      const a = (
+        /** @type {{ total: number }} */
+        n.receivablePaymentsForSession.get(t, r, r)
+      );
+      return (a == null ? void 0 : a.total) ?? 0;
+    },
+    /** Suma de ventas activas (no crédito) del día de hoy. */
+    salesTotalToday() {
+      const t = (
+        /** @type {{ total: number }} */
+        n.salesTotalToday.get()
+      );
+      return (t == null ? void 0 : t.total) ?? 0;
+    },
+    /** Suma de abonos CxC del día de hoy. */
+    receivablePaymentsTodayTotal() {
+      const t = (
+        /** @type {{ total: number }} */
+        n.receivablePaymentsTotalToday.get()
+      );
+      return (t == null ? void 0 : t.total) ?? 0;
     }
   };
 }
-function vt(e) {
+function Bt(e) {
   function n(t) {
     if (t !== "admin")
       throw Object.assign(new Error("Solo el administrador puede gestionar la caja"), { code: "CASH_FORBIDDEN" });
@@ -2240,8 +2293,8 @@ function vt(e) {
     getSession(t) {
       const r = e.findById(t);
       if (!r) throw Object.assign(new Error("Sesión no encontrada"), { code: "CASH_NOT_FOUND" });
-      const a = e.movementsForSession(t), s = e.salesTotal(t, r.closed_at);
-      return { session: r, movements: a, salesTotal: s };
+      const a = e.movementsForSession(t), s = e.salesTotal(t, r.closed_at), o = e.receivablePaymentsTotal(t, r.closed_at);
+      return { session: r, movements: a, salesTotal: s, receivablePaymentsTotal: o };
     },
     /**
      * Abre una nueva sesión de caja. Solo admin.
@@ -2252,58 +2305,58 @@ function vt(e) {
         throw Object.assign(new Error("Ya hay una caja abierta"), { code: "CASH_ALREADY_OPEN" });
       if (typeof s != "number" || s < 0)
         throw Object.assign(new Error("Monto inicial inválido"), { code: "CASH_INVALID_AMOUNT" });
-      const o = e.open({
+      const c = e.open({
         opened_by: t,
         opened_by_name: r,
         opening_amount: s
       });
-      return e.findById(o);
+      return e.findById(c);
     },
     /**
      * Cierra la sesión abierta. Solo admin.
      * @param {{ userId: number, userName: string, role: string, closingAmount: number, notes?: string }} input
      */
-    closeSession({ userId: t, userName: r, role: a, closingAmount: s, notes: i }) {
+    closeSession({ userId: t, userName: r, role: a, closingAmount: s, notes: o }) {
       n(a);
-      const o = e.findOpen();
-      if (!o)
+      const c = e.findOpen();
+      if (!c)
         throw Object.assign(new Error("No hay caja abierta"), { code: "CASH_NOT_OPEN" });
       if (typeof s != "number" || s < 0)
         throw Object.assign(new Error("Monto de cierre inválido"), { code: "CASH_INVALID_AMOUNT" });
-      const c = e.salesTotal(o.id, null), d = e.movementsForSession(o.id), E = d.filter((T) => T.type === "in").reduce((T, p) => T + p.amount, 0), m = d.filter((T) => T.type === "out").reduce((T, p) => T + p.amount, 0), _ = o.opening_amount + c + E - m, N = s - _;
+      const i = e.salesTotalToday(), d = e.receivablePaymentsTodayTotal(), E = e.movementsForSession(c.id), m = E.filter((p) => p.type === "in").reduce((p, R) => p + R.amount, 0), _ = E.filter((p) => p.type === "out").reduce((p, R) => p + R.amount, 0), T = c.opening_amount + i + d + m - _, N = s - T;
       return e.close({
-        id: o.id,
+        id: c.id,
         closed_by: t,
         closed_by_name: r,
         closing_amount: s,
-        expected_amount: _,
+        expected_amount: T,
         difference: N,
-        notes: i ?? null
-      }), e.findById(o.id);
+        notes: o ?? null
+      }), e.findById(c.id);
     },
     /**
      * Agrega un movimiento manual (ingreso o egreso). Solo admin.
      * @param {{ userId: number, role: string, type: 'in'|'out', amount: number, concept: string }} input
      */
-    addMovement({ userId: t, role: r, type: a, amount: s, concept: i }) {
+    addMovement({ userId: t, role: r, type: a, amount: s, concept: o }) {
       n(r);
-      const o = e.findOpen();
-      if (!o)
+      const c = e.findOpen();
+      if (!c)
         throw Object.assign(new Error("No hay caja abierta"), { code: "CASH_NOT_OPEN" });
       if (!["in", "out"].includes(a))
         throw Object.assign(new Error("Tipo de movimiento inválido"), { code: "CASH_INVALID_TYPE" });
       if (!s || s <= 0)
         throw Object.assign(new Error("Monto inválido"), { code: "CASH_INVALID_AMOUNT" });
-      if (!(i != null && i.trim()))
+      if (!(o != null && o.trim()))
         throw Object.assign(new Error("Concepto requerido"), { code: "CASH_MISSING_CONCEPT" });
-      return { id: e.insertMovement({ session_id: o.id, type: a, amount: s, concept: i.trim(), created_by: t }), session_id: o.id, type: a, amount: s, concept: i, created_by: t };
+      return { id: e.insertMovement({ session_id: c.id, type: a, amount: s, concept: o.trim(), created_by: t }), session_id: c.id, type: a, amount: s, concept: o, created_by: t };
     }
   };
 }
-function Mt(e) {
+function qt(e) {
   l.handle("cash:get-open", u(() => e.getOpenSession())), l.handle("cash:list", u(() => e.listSessions())), l.handle("cash:get-session", u((n, t) => e.getSession(t))), l.handle("cash:open", u((n, t) => e.openSession(t))), l.handle("cash:close", u((n, t) => e.closeSession(t))), l.handle("cash:add-movement", u((n, t) => e.addMovement(t)));
 }
-function Bt(e) {
+function Pt(e) {
   const n = {
     // suppliers
     findAllSuppliers: e.prepare(
@@ -2377,7 +2430,7 @@ function Bt(e) {
       "UPDATE products SET cost = @cost WHERE id = @id"
     ),
     getProductForMove: e.prepare(
-      "SELECT id, name, stock FROM products WHERE id = ?"
+      "SELECT id, name, stock, cost FROM products WHERE id = ?"
     ),
     insertMovement: e.prepare(`
       INSERT INTO stock_movements
@@ -2434,21 +2487,22 @@ function Bt(e) {
      * Marca orden como recibida, actualiza qty_received en items y suma al stock.
      * @param {number} orderId
      * @param {{ id: number, qty_received: number }[]} receivedItems
+     * @param {boolean} updatePrices  Si true actualiza el costo del producto al costo de la orden
      */
-    receiveOrder: e.transaction((t, r) => {
-      let a = 0;
-      for (const i of r) {
-        n.updateItemReceived.run(i);
-        const o = n.findItemsByOrder.all(t).find((c) => c.id === i.id);
-        if (o != null && o.product_id && i.qty_received > 0) {
-          const c = n.getProductForMove.get(o.product_id), d = (c == null ? void 0 : c.stock) ?? 0;
-          n.addStock.run({ id: o.product_id, qty: i.qty_received }), o.unit_cost > 0 && n.updateProductCost.run({ id: o.product_id, cost: o.unit_cost }), n.insertMovement.run({
-            product_id: o.product_id,
-            product_name: (c == null ? void 0 : c.name) ?? o.product_name,
+    receiveOrder: e.transaction((t, r, a) => {
+      let s = 0;
+      for (const c of r) {
+        n.updateItemReceived.run(c);
+        const i = n.findItemsByOrder.all(t).find((d) => d.id === c.id);
+        if (i != null && i.product_id && c.qty_received > 0) {
+          const d = n.getProductForMove.get(i.product_id), E = (d == null ? void 0 : d.stock) ?? 0;
+          n.addStock.run({ id: i.product_id, qty: c.qty_received }), a && i.unit_cost > 0 && n.updateProductCost.run({ id: i.product_id, cost: i.unit_cost }), n.insertMovement.run({
+            product_id: i.product_id,
+            product_name: (d == null ? void 0 : d.name) ?? i.product_name,
             type: "purchase",
-            qty: i.qty_received,
-            qty_before: d,
-            qty_after: d + i.qty_received,
+            qty: c.qty_received,
+            qty_before: E,
+            qty_after: E + c.qty_received,
             reference_type: "purchase",
             reference_id: t,
             notes: null,
@@ -2456,14 +2510,33 @@ function Bt(e) {
             created_by_name: null
           });
         }
-        a += ((o == null ? void 0 : o.unit_cost) ?? 0) * i.qty_received;
+        s += ((i == null ? void 0 : i.unit_cost) ?? 0) * c.qty_received;
       }
-      const s = (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace("T", " ");
-      n.updateOrderStatus.run({ id: t, status: "received", received_at: s, total_cost: a });
-    })
+      const o = (/* @__PURE__ */ new Date()).toISOString().slice(0, 19).replace("T", " ");
+      n.updateOrderStatus.run({ id: t, status: "received", received_at: o, total_cost: s });
+    }),
+    /**
+     * Devuelve los items de una orden con el costo actual del producto en catálogo,
+     * para detectar variaciones antes de confirmar recepción.
+     * @param {number} orderId
+     */
+    priceVariations(t) {
+      return n.findItemsByOrder.all(t).map((a) => {
+        if (!a.product_id) return { ...a, current_cost: null, has_variation: !1 };
+        const s = (
+          /** @type {{ cost: number }|undefined} */
+          n.getProductForMove.get(a.product_id)
+        ), o = (s == null ? void 0 : s.cost) ?? 0;
+        return {
+          ...a,
+          current_cost: o,
+          has_variation: a.unit_cost > 0 && Math.abs(a.unit_cost - o) > 1e-3
+        };
+      });
+    }
   };
 }
-function Ft(e) {
+function kt(e) {
   function n(t) {
     if (t !== "admin")
       throw Object.assign(new Error("Solo el administrador puede gestionar compras"), { code: "PURCHASES_FORBIDDEN" });
@@ -2477,31 +2550,31 @@ function Ft(e) {
       return e.findSupplierById(t) ?? null;
     },
     createSupplier(t, r) {
-      var i, o, c, d, E;
+      var o, c, i, d, E;
       n(r);
       const a = (t.name ?? "").trim();
       if (!a) throw Object.assign(new Error("Nombre del proveedor requerido"), { code: "SUPPLIER_MISSING_NAME" });
       const s = e.createSupplier({
         name: a,
-        contact_name: ((i = t.contact_name) == null ? void 0 : i.trim()) || null,
-        phone: ((o = t.phone) == null ? void 0 : o.trim()) || null,
-        email: ((c = t.email) == null ? void 0 : c.trim()) || null,
+        contact_name: ((o = t.contact_name) == null ? void 0 : o.trim()) || null,
+        phone: ((c = t.phone) == null ? void 0 : c.trim()) || null,
+        email: ((i = t.email) == null ? void 0 : i.trim()) || null,
         address: ((d = t.address) == null ? void 0 : d.trim()) || null,
         notes: ((E = t.notes) == null ? void 0 : E.trim()) || null
       });
       return e.findSupplierById(s);
     },
     updateSupplier(t, r, a) {
-      var o, c, d, E, m;
+      var c, i, d, E, m;
       n(a);
       const s = e.findSupplierById(t);
       if (!s) throw Object.assign(new Error("Proveedor no encontrado"), { code: "SUPPLIER_NOT_FOUND" });
-      const i = (r.name ?? s.name).trim();
-      if (!i) throw Object.assign(new Error("Nombre requerido"), { code: "SUPPLIER_MISSING_NAME" });
+      const o = (r.name ?? s.name).trim();
+      if (!o) throw Object.assign(new Error("Nombre requerido"), { code: "SUPPLIER_MISSING_NAME" });
       return e.updateSupplier(t, {
-        name: i,
-        contact_name: ((o = r.contact_name) == null ? void 0 : o.trim()) ?? s.contact_name,
-        phone: ((c = r.phone) == null ? void 0 : c.trim()) ?? s.phone,
+        name: o,
+        contact_name: ((c = r.contact_name) == null ? void 0 : c.trim()) ?? s.contact_name,
+        phone: ((i = r.phone) == null ? void 0 : i.trim()) ?? s.phone,
         email: ((d = r.email) == null ? void 0 : d.trim()) ?? s.email,
         address: ((E = r.address) == null ? void 0 : E.trim()) ?? s.address,
         notes: ((m = r.notes) == null ? void 0 : m.trim()) ?? s.notes
@@ -2524,7 +2597,7 @@ function Ft(e) {
      * @param {{ supplierId: number, notes?: string, items: { productId?: number, productName: string, productCode?: string, qtyOrdered: number, unitCost: number }[], userId: number, userName: string, role: string }} input
      */
     createOrder(t) {
-      var a, s, i, o;
+      var a, s, o, c;
       if (n(t.role), !t.supplierId) throw Object.assign(new Error("Proveedor requerido"), { code: "ORDER_MISSING_SUPPLIER" });
       if (!((a = t.items) != null && a.length)) throw Object.assign(new Error("Agrega al menos un producto"), { code: "ORDER_EMPTY" });
       const r = e.createOrder({
@@ -2533,16 +2606,16 @@ function Ft(e) {
         created_by: t.userId,
         created_by_name: t.userName
       });
-      for (const c of t.items) {
-        if (!((i = c.productName) != null && i.trim())) throw Object.assign(new Error("Nombre de producto requerido"), { code: "ITEM_MISSING_NAME" });
-        if (c.qtyOrdered <= 0) throw Object.assign(new Error("Cantidad debe ser mayor a 0"), { code: "ITEM_INVALID_QTY" });
+      for (const i of t.items) {
+        if (!((o = i.productName) != null && o.trim())) throw Object.assign(new Error("Nombre de producto requerido"), { code: "ITEM_MISSING_NAME" });
+        if (i.qtyOrdered <= 0) throw Object.assign(new Error("Cantidad debe ser mayor a 0"), { code: "ITEM_INVALID_QTY" });
         e.insertItem({
           order_id: r,
-          product_id: c.productId ?? null,
-          product_name: c.productName.trim(),
-          product_code: ((o = c.productCode) == null ? void 0 : o.trim()) || null,
-          qty_ordered: c.qtyOrdered,
-          unit_cost: c.unitCost ?? 0
+          product_id: i.productId ?? null,
+          product_name: i.productName.trim(),
+          product_code: ((c = i.productCode) == null ? void 0 : c.trim()) || null,
+          qty_ordered: i.qtyOrdered,
+          unit_cost: i.unitCost ?? 0
         });
       }
       return e.findOrderById(r);
@@ -2555,8 +2628,17 @@ function Ft(e) {
       return e.updateOrderStatus(t, "sent", null, a.total_cost), e.findOrderById(t);
     },
     /**
-     * Recibe la orden: actualiza stock y costo de productos.
-     * @param {{ orderId: number, role: string, items: { id: number, qty_received: number }[] }} input
+     * Devuelve los items de la orden comparados con el costo actual en catálogo.
+     * Útil para mostrar al usuario si hay variaciones de precio antes de confirmar.
+     * @param {{ orderId: number, role: string }} input
+     */
+    priceVariations(t) {
+      if (n(t.role), !e.findOrderById(t.orderId)) throw Object.assign(new Error("Orden no encontrada"), { code: "ORDER_NOT_FOUND" });
+      return e.priceVariations(t.orderId);
+    },
+    /**
+     * Recibe la orden: actualiza stock. Si updatePrices=true también actualiza el costo.
+     * @param {{ orderId: number, role: string, items: { id: number, qty_received: number }[], updatePrices?: boolean }} input
      */
     receiveOrder(t) {
       var a;
@@ -2566,7 +2648,7 @@ function Ft(e) {
       if (!["draft", "sent"].includes(r.status))
         throw Object.assign(new Error("Esta orden ya fue recibida o cancelada"), { code: "ORDER_INVALID_STATUS" });
       if (!((a = t.items) != null && a.length)) throw Object.assign(new Error("Sin items para recibir"), { code: "ORDER_EMPTY" });
-      return e.receiveOrder(t.orderId, t.items), e.findOrderById(t.orderId);
+      return e.receiveOrder(t.orderId, t.items, t.updatePrices ?? !1), e.findOrderById(t.orderId);
     },
     cancelOrder(t, r) {
       n(r);
@@ -2578,10 +2660,10 @@ function Ft(e) {
     }
   };
 }
-function qt(e) {
-  l.handle("suppliers:list", u(() => e.listSuppliers())), l.handle("suppliers:get", u((n, t) => e.getSupplier(t))), l.handle("suppliers:create", u((n, t, r) => e.createSupplier(t, r))), l.handle("suppliers:update", u((n, t, r, a) => e.updateSupplier(t, r, a))), l.handle("suppliers:set-active", u((n, t, r, a) => e.setSupplierActive(t, r, a))), l.handle("purchases:list", u(() => e.listOrders())), l.handle("purchases:get", u((n, t) => e.getOrder(t))), l.handle("purchases:create", u((n, t) => e.createOrder(t))), l.handle("purchases:mark-sent", u((n, t, r) => e.markSent(t, r))), l.handle("purchases:receive", u((n, t) => e.receiveOrder(t))), l.handle("purchases:cancel", u((n, t, r) => e.cancelOrder(t, r)));
+function Ht(e) {
+  l.handle("suppliers:list", u(() => e.listSuppliers())), l.handle("suppliers:get", u((n, t) => e.getSupplier(t))), l.handle("suppliers:create", u((n, t, r) => e.createSupplier(t, r))), l.handle("suppliers:update", u((n, t, r, a) => e.updateSupplier(t, r, a))), l.handle("suppliers:set-active", u((n, t, r, a) => e.setSupplierActive(t, r, a))), l.handle("purchases:list", u(() => e.listOrders())), l.handle("purchases:get", u((n, t) => e.getOrder(t))), l.handle("purchases:create", u((n, t) => e.createOrder(t))), l.handle("purchases:mark-sent", u((n, t, r) => e.markSent(t, r))), l.handle("purchases:price-variations", u((n, t) => e.priceVariations(t))), l.handle("purchases:receive", u((n, t) => e.receiveOrder(t))), l.handle("purchases:cancel", u((n, t, r) => e.cancelOrder(t, r)));
 }
-function Pt(e) {
+function xt(e) {
   const n = {
     findAll: e.prepare(`
       SELECT * FROM receivables ORDER BY
@@ -2615,6 +2697,23 @@ function Pt(e) {
       VALUES
         (@receivable_id, @amount, @payment_method, @notes, @created_by, @created_by_name)
     `),
+    // pagos de hoy
+    paymentsToday: e.prepare(`
+      SELECT
+        COALESCE(SUM(amount), 0)  AS total,
+        COUNT(*)                  AS count
+      FROM receivable_payments
+      WHERE DATE(created_at) = DATE('now', 'localtime')
+    `),
+    // pagos en un rango de fechas
+    paymentsForRange: e.prepare(`
+      SELECT
+        COALESCE(SUM(amount), 0)  AS total,
+        COUNT(*)                  AS count
+      FROM receivable_payments
+      WHERE DATE(created_at) >= @from
+        AND DATE(created_at) <= @to
+    `),
     // summary
     summary: e.prepare(`
       SELECT
@@ -2629,8 +2728,8 @@ function Pt(e) {
     `)
   }, t = e.transaction((r, a) => {
     n.insertPayment.run(a);
-    const s = n.findById.get(r), i = (s.amount_paid ?? 0) + a.amount, o = i >= s.amount ? "paid" : "partial";
-    return n.updateStatus.run({ id: r, amount_paid: i, status: o }), n.findById.get(r);
+    const s = n.findById.get(r), o = (s.amount_paid ?? 0) + a.amount, c = o >= s.amount ? "paid" : "partial";
+    return n.updateStatus.run({ id: r, amount_paid: o, status: c }), n.findById.get(r);
   });
   return {
     findAll() {
@@ -2654,10 +2753,17 @@ function Pt(e) {
     applyPayment: t,
     getSummary() {
       return n.summary.get();
+    },
+    getPaymentsToday() {
+      return n.paymentsToday.get();
+    },
+    /** @param {{ from: string, to: string }} range */
+    getPaymentsForRange({ from: r, to: a }) {
+      return n.paymentsForRange.get({ from: r, to: a });
     }
   };
 }
-function kt(e) {
+function Xt(e) {
   return {
     list() {
       return e.findAll();
@@ -2671,24 +2777,31 @@ function kt(e) {
     getSummary() {
       return e.getSummary();
     },
+    getPaymentsToday() {
+      return e.getPaymentsToday();
+    },
+    /** @param {{ from: string, to: string }} range */
+    getPaymentsForRange({ from: n, to: t }) {
+      return e.getPaymentsForRange({ from: n, to: t });
+    },
     /**
      * @param {{ customerId?: number, customerName: string, customerNit?: string, description: string, amount: number, dueDate?: string, notes?: string, userId: number, userName: string }} input
      */
     create(n) {
-      var s, i, o, c;
+      var s, o, c, i;
       const t = (s = n.description) == null ? void 0 : s.trim();
       if (!t) throw Object.assign(new Error("Descripción requerida"), { code: "RECV_MISSING_DESC" });
-      if (!((i = n.customerName) != null && i.trim())) throw Object.assign(new Error("Nombre del cliente requerido"), { code: "RECV_MISSING_CUSTOMER" });
+      if (!((o = n.customerName) != null && o.trim())) throw Object.assign(new Error("Nombre del cliente requerido"), { code: "RECV_MISSING_CUSTOMER" });
       const r = Number(n.amount);
       if (isNaN(r) || r <= 0) throw Object.assign(new Error("Monto debe ser mayor a 0"), { code: "RECV_INVALID_AMOUNT" });
       const a = e.create({
         customer_id: n.customerId ?? null,
         customer_name: n.customerName.trim(),
-        customer_nit: ((o = n.customerNit) == null ? void 0 : o.trim()) || null,
+        customer_nit: ((c = n.customerNit) == null ? void 0 : c.trim()) || null,
         description: t,
         amount: r,
         due_date: n.dueDate || null,
-        notes: ((c = n.notes) == null ? void 0 : c.trim()) || null,
+        notes: ((i = n.notes) == null ? void 0 : i.trim()) || null,
         created_by: n.userId,
         created_by_name: n.userName
       });
@@ -2726,24 +2839,24 @@ function kt(e) {
     byCustomer(n) {
       if (!Number.isInteger(n) || n <= 0)
         throw Object.assign(new Error("customer_id inválido"), { code: "RECV_INVALID_CUSTOMER" });
-      const r = e.findByCustomer(n).filter((s) => ["pending", "partial"].includes(s.status)), a = r.reduce((s, i) => s + (i.amount - i.amount_paid), 0);
+      const r = e.findByCustomer(n).filter((s) => ["pending", "partial"].includes(s.status)), a = r.reduce((s, o) => s + (o.amount - o.amount_paid), 0);
       return { rows: r, balance: a };
     }
   };
 }
-function Ht(e) {
+function jt(e) {
   function n(t, r) {
     l.handle(t, async (a, ...s) => {
       try {
         return { ok: !0, data: await r(...s) };
-      } catch (i) {
-        return { ok: !1, error: { code: i.code ?? "RECV_ERROR", message: i.message } };
+      } catch (o) {
+        return { ok: !1, error: { code: o.code ?? "RECV_ERROR", message: o.message } };
       }
     });
   }
-  n("receivables:list", () => e.list()), n("receivables:get", (t) => e.getDetail(t)), n("receivables:summary", () => e.getSummary()), n("receivables:create", (t) => e.create(t)), n("receivables:apply-payment", (t) => e.applyPayment(t)), n("receivables:cancel", (t) => e.cancel(t)), n("receivables:by-customer", (t) => e.byCustomer(t));
+  n("receivables:list", () => e.list()), n("receivables:get", (t) => e.getDetail(t)), n("receivables:summary", () => e.getSummary()), n("receivables:payments-today", () => e.getPaymentsToday()), n("receivables:payments-range", (t) => e.getPaymentsForRange(t)), n("receivables:create", (t) => e.create(t)), n("receivables:apply-payment", (t) => e.applyPayment(t)), n("receivables:cancel", (t) => e.cancel(t)), n("receivables:by-customer", (t) => e.byCustomer(t));
 }
-function Xt(e) {
+function Vt(e) {
   const n = {
     findAll: e.prepare(`
       SELECT * FROM quotes
@@ -2781,12 +2894,12 @@ function Xt(e) {
       WHERE id=@id
     `)
   }, t = e.transaction((a, s) => {
-    const i = Number(n.insert.run(a).lastInsertRowid);
-    for (const o of s) n.insertItem.run({ ...o, quote_id: i });
-    return i;
-  }), r = e.transaction((a, s, i) => {
+    const o = Number(n.insert.run(a).lastInsertRowid);
+    for (const c of s) n.insertItem.run({ ...c, quote_id: o });
+    return o;
+  }), r = e.transaction((a, s, o) => {
     n.update.run({ ...s, id: a }), n.deleteItems.run(a);
-    for (const o of i) n.insertItem.run({ ...o, quote_id: a });
+    for (const c of o) n.insertItem.run({ ...c, quote_id: a });
   });
   return {
     findAll() {
@@ -2808,33 +2921,36 @@ function Xt(e) {
     }
   };
 }
-function xt(e, n, t, r) {
-  function a(o) {
-    const c = (
+function Yt(e, n, t, r, a) {
+  function s(i) {
+    const d = (
       /** @type {number} */
       n.get("tax_rate") ?? 0
-    ), d = o.reduce((m, _) => m + _.qty * _.unit_price, 0), E = Math.round(d * c * 100) / 100;
-    return { subtotal: d, tax_rate: c, tax_amount: E, total: d + E };
+    ), E = (
+      /** @type {boolean} */
+      n.get("tax_enabled") ?? !1
+    ), m = i.reduce((T, N) => T + N.qty * N.unit_price, 0), _ = E ? Math.round(m * d * 100) / 100 : 0;
+    return { subtotal: m, tax_rate: d, tax_amount: _, total: m + _ };
   }
-  function s(o) {
-    var c;
-    if (!(o != null && o.length)) throw Object.assign(new Error("Agrega al menos un producto"), { code: "QUOTE_EMPTY" });
-    for (const d of o) {
-      if (!((c = d.productName) != null && c.trim())) throw Object.assign(new Error("Nombre de producto requerido"), { code: "QUOTE_ITEM_NAME" });
-      if (d.qty <= 0) throw Object.assign(new Error("Cantidad debe ser mayor a 0"), { code: "QUOTE_ITEM_QTY" });
-      if (d.unitPrice < 0) throw Object.assign(new Error("Precio no puede ser negativo"), { code: "QUOTE_ITEM_PRICE" });
+  function o(i) {
+    var d;
+    if (!(i != null && i.length)) throw Object.assign(new Error("Agrega al menos un producto"), { code: "QUOTE_EMPTY" });
+    for (const E of i) {
+      if (!((d = E.productName) != null && d.trim())) throw Object.assign(new Error("Nombre de producto requerido"), { code: "QUOTE_ITEM_NAME" });
+      if (E.qty <= 0) throw Object.assign(new Error("Cantidad debe ser mayor a 0"), { code: "QUOTE_ITEM_QTY" });
+      if (E.unitPrice < 0) throw Object.assign(new Error("Precio no puede ser negativo"), { code: "QUOTE_ITEM_PRICE" });
     }
   }
-  function i(o) {
-    return o.map((c) => {
-      var d;
+  function c(i) {
+    return i.map((d) => {
+      var E;
       return {
-        product_id: c.productId ?? null,
-        product_name: c.productName.trim(),
-        product_code: ((d = c.productCode) == null ? void 0 : d.trim()) || null,
-        qty: c.qty,
-        unit_price: c.unitPrice,
-        subtotal: c.qty * c.unitPrice
+        product_id: d.productId ?? null,
+        product_name: d.productName.trim(),
+        product_code: ((E = d.productCode) == null ? void 0 : E.trim()) || null,
+        qty: d.qty,
+        unit_price: d.unitPrice,
+        subtotal: d.qty * d.unitPrice
       };
     });
   }
@@ -2842,136 +2958,145 @@ function xt(e, n, t, r) {
     list() {
       return e.findAll();
     },
-    getDetail(o) {
-      const c = e.findById(o);
-      if (!c) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
-      return { quote: c, items: e.findItems(o) };
+    getDetail(i) {
+      const d = e.findById(i);
+      if (!d) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
+      return { quote: d, items: e.findItems(i) };
     },
     /**
      * @param {{ customerId?: number, customerName: string, customerNit?: string, notes?: string, validUntil?: string, items: any[], userId: number, userName: string }} input
      */
-    create(o) {
-      var T, p, R;
-      if (!((T = o.customerName) != null && T.trim())) throw Object.assign(new Error("Nombre del cliente requerido"), { code: "QUOTE_MISSING_CUSTOMER" });
-      s(o.items);
-      const c = i(o.items), { subtotal: d, tax_rate: E, tax_amount: m, total: _ } = a(c), N = e.createQuote({
-        customer_id: o.customerId ?? null,
-        customer_name: o.customerName.trim(),
-        customer_nit: ((p = o.customerNit) == null ? void 0 : p.trim()) || null,
-        notes: ((R = o.notes) == null ? void 0 : R.trim()) || null,
-        valid_until: o.validUntil || null,
-        subtotal: d,
-        tax_rate: E,
-        tax_amount: m,
-        total: _,
-        created_by: o.userId,
-        created_by_name: o.userName
-      }, c);
+    create(i) {
+      var p, R, O;
+      if (!((p = i.customerName) != null && p.trim())) throw Object.assign(new Error("Nombre del cliente requerido"), { code: "QUOTE_MISSING_CUSTOMER" });
+      o(i.items);
+      const d = c(i.items), { subtotal: E, tax_rate: m, tax_amount: _, total: T } = s(d), N = e.createQuote({
+        customer_id: i.customerId ?? null,
+        customer_name: i.customerName.trim(),
+        customer_nit: ((R = i.customerNit) == null ? void 0 : R.trim()) || null,
+        notes: ((O = i.notes) == null ? void 0 : O.trim()) || null,
+        valid_until: i.validUntil || null,
+        subtotal: E,
+        tax_rate: m,
+        tax_amount: _,
+        total: T,
+        created_by: i.userId,
+        created_by_name: i.userName
+      }, d);
       return e.findById(N);
     },
     /**
      * @param {number} id
      * @param {{ customerId?: number, customerName: string, customerNit?: string, notes?: string, validUntil?: string, items: any[] }} input
      */
-    update(o, c) {
-      var p, R;
-      const d = e.findById(o);
-      if (!d) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
-      if (!["draft", "sent"].includes(d.status))
+    update(i, d) {
+      var R, O;
+      const E = e.findById(i);
+      if (!E) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
+      if (!["draft", "sent"].includes(E.status))
         throw Object.assign(new Error("Solo se pueden editar cotizaciones en borrador o enviadas"), { code: "QUOTE_NOT_EDITABLE" });
-      s(c.items);
-      const E = i(c.items), { subtotal: m, tax_rate: _, tax_amount: N, total: T } = a(E);
-      return e.updateQuote(o, {
-        customer_id: c.customerId ?? d.customer_id,
-        customer_name: (c.customerName ?? d.customer_name).trim(),
-        customer_nit: ((p = c.customerNit) == null ? void 0 : p.trim()) || d.customer_nit,
-        notes: ((R = c.notes) == null ? void 0 : R.trim()) || null,
-        valid_until: c.validUntil || null,
-        subtotal: m,
-        tax_rate: _,
+      o(d.items);
+      const m = c(d.items), { subtotal: _, tax_rate: T, tax_amount: N, total: p } = s(m);
+      return e.updateQuote(i, {
+        customer_id: d.customerId ?? E.customer_id,
+        customer_name: (d.customerName ?? E.customer_name).trim(),
+        customer_nit: ((R = d.customerNit) == null ? void 0 : R.trim()) || E.customer_nit,
+        notes: ((O = d.notes) == null ? void 0 : O.trim()) || null,
+        valid_until: d.validUntil || null,
+        subtotal: _,
+        tax_rate: T,
         tax_amount: N,
-        total: T
-      }, E), e.findById(o);
+        total: p
+      }, m), e.findById(i);
     },
-    markSent(o) {
-      const c = e.findById(o);
-      if (!c) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
-      if (c.status !== "draft") throw Object.assign(new Error("Solo se pueden enviar cotizaciones en borrador"), { code: "QUOTE_INVALID_STATUS" });
-      return e.updateStatus(o, "sent"), e.findById(o);
+    markSent(i) {
+      const d = e.findById(i);
+      if (!d) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
+      if (d.status !== "draft") throw Object.assign(new Error("Solo se pueden enviar cotizaciones en borrador"), { code: "QUOTE_INVALID_STATUS" });
+      return e.updateStatus(i, "sent"), e.findById(i);
     },
-    accept(o) {
-      const c = e.findById(o);
-      if (!c) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
-      if (!["draft", "sent"].includes(c.status)) throw Object.assign(new Error("Estado inválido para aceptar"), { code: "QUOTE_INVALID_STATUS" });
-      return e.updateStatus(o, "accepted"), e.findById(o);
+    accept(i) {
+      const d = e.findById(i);
+      if (!d) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
+      if (!["draft", "sent"].includes(d.status)) throw Object.assign(new Error("Estado inválido para aceptar"), { code: "QUOTE_INVALID_STATUS" });
+      return e.updateStatus(i, "accepted"), e.findById(i);
     },
-    reject(o) {
-      const c = e.findById(o);
-      if (!c) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
-      if (["converted", "cancelled"].includes(c.status)) throw Object.assign(new Error("No se puede rechazar esta cotización"), { code: "QUOTE_INVALID_STATUS" });
-      return e.updateStatus(o, "rejected"), e.findById(o);
+    reject(i) {
+      const d = e.findById(i);
+      if (!d) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
+      if (["converted", "cancelled"].includes(d.status)) throw Object.assign(new Error("No se puede rechazar esta cotización"), { code: "QUOTE_INVALID_STATUS" });
+      return e.updateStatus(i, "rejected"), e.findById(i);
     },
     /**
      * Convierte la cotización aceptada en una venta real.
      * @param {{ id: number, userId: number, userName: string }} input
      */
-    convertToSale(o) {
-      const c = e.findById(o.id);
-      if (!c) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
-      if (!["accepted", "sent", "draft"].includes(c.status))
+    convertToSale(i) {
+      const d = e.findById(i.id);
+      if (!d) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
+      if (!["accepted", "sent", "draft"].includes(d.status))
         throw Object.assign(new Error("Solo se pueden convertir cotizaciones activas"), { code: "QUOTE_INVALID_STATUS" });
-      const d = e.findItems(o.id);
-      if (!d.length) throw Object.assign(new Error("La cotización no tiene productos"), { code: "QUOTE_EMPTY" });
-      const E = d.filter((_) => _.product_id != null);
-      if (!E.length)
+      const E = e.findItems(i.id);
+      if (!E.length) throw Object.assign(new Error("La cotización no tiene productos"), { code: "QUOTE_EMPTY" });
+      const m = E.filter((T) => T.product_id != null);
+      if (!m.length)
         throw Object.assign(new Error("Para convertir a venta todos los items deben tener un producto del sistema"), { code: "QUOTE_NO_PRODUCTS" });
-      const m = t.create({
-        items: E.map((_) => ({
-          id: _.product_id,
-          qty: _.qty,
-          price: _.unit_price
+      const _ = t.create({
+        items: m.map((T) => ({
+          id: T.product_id,
+          qty: T.qty,
+          price: T.unit_price
         })),
-        customerId: c.customer_id ?? void 0
+        customerId: d.customer_id ?? void 0
       });
-      return e.markConverted(o.id, m.saleId), { quote: e.findById(o.id), sale: m };
+      return e.markConverted(i.id, _.saleId), { quote: e.findById(i.id), sale: _ };
     },
     /**
      * Crea una cuenta por cobrar desde una cotización aceptada.
+     * Descuenta stock para los ítems con product_id vinculado.
      * @param {{ id: number, dueDate?: string, notes?: string, userId: number, userName: string }} input
      */
-    convertToReceivable(o) {
-      const c = e.findById(o.id);
-      if (!c) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
-      if (!["accepted", "sent", "draft"].includes(c.status))
+    convertToReceivable(i) {
+      const d = e.findById(i.id);
+      if (!d) throw Object.assign(new Error("Cotización no encontrada"), { code: "QUOTE_NOT_FOUND" });
+      if (!["accepted", "sent", "draft"].includes(d.status))
         throw Object.assign(new Error("Solo se pueden convertir cotizaciones activas"), { code: "QUOTE_INVALID_STATUS" });
-      const d = r.create({
-        customerId: c.customer_id ?? void 0,
-        customerName: c.customer_name,
-        customerNit: c.customer_nit ?? void 0,
-        description: `Cotización #${c.id}${c.notes ? ` · ${c.notes}` : ""}`,
-        amount: c.total,
-        dueDate: o.dueDate || void 0,
-        notes: o.notes || void 0,
-        userId: o.userId,
-        userName: o.userName
+      const E = e.findItems(i.id);
+      for (const _ of E)
+        if (_.product_id && _.qty > 0)
+          try {
+            a.adjustStock(_.product_id, "exit", _.qty);
+          } catch {
+            console.warn(`[quotes] no se pudo descontar stock del producto ${_.product_id}`);
+          }
+      const m = r.create({
+        customerId: d.customer_id ?? void 0,
+        customerName: d.customer_name,
+        customerNit: d.customer_nit ?? void 0,
+        description: `Cotización #${d.id}${d.notes ? ` · ${d.notes}` : ""}`,
+        amount: d.total,
+        dueDate: i.dueDate || void 0,
+        notes: i.notes || void 0,
+        userId: i.userId,
+        userName: i.userName
       });
-      return e.updateStatus(o.id, "converted"), { quote: e.findById(o.id), receivable: d };
+      return e.updateStatus(i.id, "converted"), { quote: e.findById(i.id), receivable: m };
     }
   };
 }
-function jt(e) {
+function Wt(e) {
   function n(t, r) {
     l.handle(t, async (a, ...s) => {
       try {
         return { ok: !0, data: await r(...s) };
-      } catch (i) {
-        return { ok: !1, error: { code: i.code ?? "QUOTE_ERROR", message: i.message } };
+      } catch (o) {
+        return { ok: !1, error: { code: o.code ?? "QUOTE_ERROR", message: o.message } };
       }
     });
   }
   n("quotes:list", () => e.list()), n("quotes:get", (t) => e.getDetail(t)), n("quotes:create", (t) => e.create(t)), n("quotes:update", (t, r) => e.update(t, r)), n("quotes:mark-sent", (t) => e.markSent(t)), n("quotes:accept", (t) => e.accept(t)), n("quotes:reject", (t) => e.reject(t)), n("quotes:convert", (t) => e.convertToSale(t)), n("quotes:convert-receivable", (t) => e.convertToReceivable(t));
 }
-function Yt(e) {
+function Gt(e) {
   const n = {
     findAll: e.prepare(`
       SELECT * FROM expenses ORDER BY expense_date DESC, created_at DESC
@@ -3037,7 +3162,7 @@ function Yt(e) {
     }
   };
 }
-const $ = [
+const K = [
   "renta",
   "servicios",
   "sueldos",
@@ -3047,8 +3172,8 @@ const $ = [
   "publicidad",
   "impuestos",
   "otros"
-], ce = ["cash", "transfer", "card", "check"];
-function Vt(e) {
+], le = ["cash", "transfer", "card", "check"];
+function $t(e) {
   function n(r) {
     var a;
     if (!((a = r.description) != null && a.trim()))
@@ -3072,10 +3197,10 @@ function Vt(e) {
       var s;
       n(r);
       const a = e.create({
-        category: $.includes(r.category) ? r.category : "otros",
+        category: K.includes(r.category) ? r.category : "otros",
         description: r.description.trim(),
         amount: r.amount,
-        payment_method: ce.includes(r.payment_method) ? r.payment_method : "cash",
+        payment_method: le.includes(r.payment_method) ? r.payment_method : "cash",
         expense_date: r.expense_date || t(),
         notes: ((s = r.notes) == null ? void 0 : s.trim()) || null,
         created_by: r.created_by ?? null,
@@ -3084,17 +3209,17 @@ function Vt(e) {
       return e.findById(a);
     },
     update(r, a) {
-      var i;
+      var o;
       n(a);
       const s = e.findById(r);
       if (!s) throw Object.assign(new Error(`Gasto ${r} no encontrado`), { code: "EXP_NOT_FOUND" });
       return e.update(r, {
-        category: $.includes(a.category) ? a.category : "otros",
+        category: K.includes(a.category) ? a.category : "otros",
         description: a.description.trim(),
         amount: a.amount,
-        payment_method: ce.includes(a.payment_method) ? a.payment_method : "cash",
+        payment_method: le.includes(a.payment_method) ? a.payment_method : "cash",
         expense_date: a.expense_date || s.expense_date,
-        notes: ((i = a.notes) == null ? void 0 : i.trim()) || null
+        notes: ((o = a.notes) == null ? void 0 : o.trim()) || null
       }), e.findById(r);
     },
     remove(r) {
@@ -3102,28 +3227,28 @@ function Vt(e) {
       return e.remove(r), !0;
     },
     summary(r, a) {
-      const s = r || t(), i = a || t();
+      const s = r || t(), o = a || t();
       return {
-        ...e.getSummary(s, i),
-        byCategory: e.getByCategory(s, i)
+        ...e.getSummary(s, o),
+        byCategory: e.getByCategory(s, o)
       };
     },
-    categories: () => $
+    categories: () => K
   };
 }
-function Gt(e) {
+function Kt(e) {
   function n(t, r) {
     l.handle(t, async (a, ...s) => {
       try {
         return { ok: !0, data: await r(...s) };
-      } catch (i) {
-        return { ok: !1, error: { code: i.code ?? "EXP_ERROR", message: i.message } };
+      } catch (o) {
+        return { ok: !1, error: { code: o.code ?? "EXP_ERROR", message: o.message } };
       }
     });
   }
   n("expenses:list", (t) => e.list(t)), n("expenses:get", (t) => e.getById(t)), n("expenses:create", (t) => e.create(t)), n("expenses:update", (t, r) => e.update(t, r)), n("expenses:remove", (t) => e.remove(t)), n("expenses:summary", (t, r) => e.summary(t, r)), n("expenses:categories", () => e.categories());
 }
-function Wt(e) {
+function zt(e) {
   const n = {
     findAll: e.prepare("SELECT * FROM returns ORDER BY created_at DESC"),
     findBySale: e.prepare("SELECT * FROM returns WHERE sale_id = ? ORDER BY created_at DESC"),
@@ -3140,8 +3265,8 @@ function Wt(e) {
     restoreStock: e.prepare("UPDATE products SET stock = stock + ? WHERE id = ?")
   }, t = e.transaction((r, a) => {
     const s = Number(n.insertReturn.run(r).lastInsertRowid);
-    for (const i of a)
-      n.insertItem.run({ ...i, return_id: s }), n.restoreStock.run(i.qty_returned, i.product_id);
+    for (const o of a)
+      n.insertItem.run({ ...o, return_id: s }), n.restoreStock.run(o.qty_returned, o.product_id);
     return s;
   });
   return {
@@ -3160,7 +3285,7 @@ function Wt(e) {
     createReturn: t
   };
 }
-function $t(e, n) {
+function Qt(e, n) {
   return {
     list() {
       return e.findAll();
@@ -3184,8 +3309,8 @@ function $t(e, n) {
      * }} input
      */
     create(t) {
-      var o, c;
-      if (!((o = t.reason) != null && o.trim()) || t.reason.trim().length < 3)
+      var c, i;
+      if (!((c = t.reason) != null && c.trim()) || t.reason.trim().length < 3)
         throw Object.assign(new Error("El motivo debe tener al menos 3 caracteres"), { code: "RET_INVALID" });
       if (!Array.isArray(t.items) || t.items.length === 0)
         throw Object.assign(new Error("Selecciona al menos un producto a devolver"), { code: "RET_INVALID" });
@@ -3202,31 +3327,31 @@ function $t(e, n) {
         qty_returned: d.qtyReturned,
         unit_price: d.unitPrice,
         subtotal: Math.round(d.qtyReturned * d.unitPrice * 100) / 100
-      })), s = a.reduce((d, E) => d + E.subtotal, 0), i = e.createReturn({
+      })), s = a.reduce((d, E) => d + E.subtotal, 0), o = e.createReturn({
         sale_id: t.saleId,
         reason: t.reason.trim(),
-        notes: ((c = t.notes) == null ? void 0 : c.trim()) || null,
+        notes: ((i = t.notes) == null ? void 0 : i.trim()) || null,
         total_refund: Math.round(s * 100) / 100,
         created_by: t.createdBy ?? null,
         created_by_name: t.createdByName ?? null
       }, a);
-      return e.findById(i);
+      return e.findById(o);
     }
   };
 }
-function Kt(e) {
+function Zt(e) {
   function n(t, r) {
     l.handle(t, async (a, ...s) => {
       try {
         return { ok: !0, data: await r(...s) };
-      } catch (i) {
-        return { ok: !1, error: { code: i.code ?? "RET_ERROR", message: i.message } };
+      } catch (o) {
+        return { ok: !1, error: { code: o.code ?? "RET_ERROR", message: o.message } };
       }
     });
   }
   n("returns:list", () => e.list()), n("returns:list-by-sale", (t) => e.listBySale(t)), n("returns:get", (t) => e.getById(t)), n("returns:create", (t) => e.create(t));
 }
-function Qt(e) {
+function Jt(e) {
   const n = {
     findMovements: e.prepare(`
       SELECT * FROM stock_movements
@@ -3248,19 +3373,19 @@ function Qt(e) {
     getProductById: e.prepare("SELECT id, code, name, stock FROM products WHERE id = ?"),
     adjustStock: e.prepare("UPDATE products SET stock = stock + ? WHERE id = ?")
   }, t = e.transaction((r, a, s) => {
-    const i = n.getProductById.get(r);
-    if (!i) throw Object.assign(new Error(`Producto ${r} no encontrado`), { code: "INV_NOT_FOUND" });
-    const o = i.stock;
+    const o = n.getProductById.get(r);
+    if (!o) throw Object.assign(new Error(`Producto ${r} no encontrado`), { code: "INV_NOT_FOUND" });
+    const c = o.stock;
     n.adjustStock.run(a, r);
-    const c = o + a;
+    const i = c + a;
     return n.insertMovement.run({
       ...s,
       product_id: r,
-      product_name: i.name,
+      product_name: o.name,
       qty: Math.abs(a),
-      qty_before: o,
-      qty_after: c
-    }), { qtyBefore: o, qtyAfter: c, productName: i.name };
+      qty_before: c,
+      qty_after: i
+    }), { qtyBefore: c, qtyAfter: i, productName: o.name };
   });
   return {
     getStock() {
@@ -3275,7 +3400,7 @@ function Qt(e) {
     logAdjustment: t
   };
 }
-function zt(e) {
+function en(e) {
   return {
     getStock() {
       return e.getStock();
@@ -3294,66 +3419,66 @@ function zt(e) {
      * @param {{ productId: number, type: 'in'|'out'|'adjustment', qty: number, notes?: string, createdBy?: number, createdByName?: string }} input
      */
     adjust(n) {
-      const { productId: t, type: r, qty: a, notes: s, createdBy: i, createdByName: o } = n;
+      const { productId: t, type: r, qty: a, notes: s, createdBy: o, createdByName: c } = n;
       if (!Number.isInteger(t) || t <= 0)
         throw Object.assign(new Error("Producto inválido"), { code: "INV_INVALID" });
       if (!["in", "out", "adjustment"].includes(r))
         throw Object.assign(new Error("Tipo de movimiento inválido"), { code: "INV_INVALID" });
       if (!Number.isFinite(a) || a <= 0)
         throw Object.assign(new Error("La cantidad debe ser mayor a 0"), { code: "INV_INVALID" });
-      const c = r === "out" ? -a : a;
-      return e.logAdjustment(t, c, {
+      const i = r === "out" ? -a : a;
+      return e.logAdjustment(t, i, {
         type: r,
         reference_type: "manual",
         reference_id: null,
         notes: (s == null ? void 0 : s.trim()) || null,
-        created_by: i ?? null,
-        created_by_name: o ?? null
+        created_by: o ?? null,
+        created_by_name: c ?? null
       });
     }
   };
 }
-function Zt(e) {
+function tn(e) {
   function n(t, r) {
     l.handle(t, async (a, ...s) => {
       try {
         return { ok: !0, data: await r(...s) };
-      } catch (i) {
-        return { ok: !1, error: { code: i.code ?? "INV_ERROR", message: i.message } };
+      } catch (o) {
+        return { ok: !1, error: { code: o.code ?? "INV_ERROR", message: o.message } };
       }
     });
   }
   n("inventory:stock", () => e.getStock()), n("inventory:movements", (t) => e.getMovements(t)), n("inventory:adjust", (t) => e.adjust(t));
 }
-let X = null, Q = null, Z = 10;
-function ue() {
-  return v.join(y.getPath("userData"), "backups");
+let X = null, Q = null, J = 10;
+function _e() {
+  return U.join(I.getPath("userData"), "backups");
 }
-function Jt() {
-  const e = ue();
+function Te() {
+  const e = _e();
   return L.existsSync(e) || L.mkdirSync(e, { recursive: !0 }), e;
 }
-function en() {
+function pe() {
   return (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
 }
-function tn(e) {
+function nn(e) {
   const n = L.readdirSync(e).filter((t) => t.startsWith("backup_") && t.endsWith(".sqlite")).sort();
-  for (; n.length > Z; )
+  for (; n.length > J; )
     try {
-      L.unlinkSync(v.join(e, n.shift()));
+      L.unlinkSync(U.join(e, n.shift()));
     } catch {
     }
 }
-async function z(e) {
-  const n = Jt(), t = `backup_${en()}.sqlite`, r = v.join(n, t);
-  await e.backup(r), tn(n);
+async function Z(e) {
+  const n = Te(), t = `backup_${pe()}.sqlite`, r = U.join(n, t);
+  await e.backup(r), nn(n);
   const a = L.statSync(r).size;
   return console.log(`[backup] OK → ${t} (${(a / 1024).toFixed(1)} KB)`), { filename: t, path: r, size: a };
 }
-function nn() {
-  const e = ue();
+function rn() {
+  const e = _e();
   return L.existsSync(e) ? L.readdirSync(e).filter((n) => n.startsWith("backup_") && n.endsWith(".sqlite")).sort().reverse().map((n) => {
-    const t = v.join(e, n), r = L.statSync(t);
+    const t = U.join(e, n), r = L.statSync(t);
     return {
       filename: n,
       path: t,
@@ -3362,138 +3487,188 @@ function nn() {
     };
   }) : [];
 }
-function Ee(e, n = 720, t = 10) {
-  Q = e, Z = t, X && (clearInterval(X), X = null);
+function Ne(e, n = 720, t = 10) {
+  Q = e, J = t, X && (clearInterval(X), X = null);
   const r = n * 36e5;
-  setTimeout(() => z(e).catch((s) => console.error("[backup] error inicial:", s)), 6e4);
+  setTimeout(() => Z(e).catch((s) => console.error("[backup] error inicial:", s)), 6e4);
   let a = Date.now();
   X = setInterval(() => {
-    Date.now() - a >= r && (a = Date.now(), z(e).catch((s) => console.error("[backup] error periódico:", s)));
+    Date.now() - a >= r && (a = Date.now(), Z(e).catch((s) => console.error("[backup] error periódico:", s)));
   }, 36e5), console.log(`[backup] scheduler activo — intervalo: ${n} h · máx: ${t} copias`);
 }
-function rn(e, n) {
+async function an(e, n) {
+  if (!L.existsSync(n)) throw new Error(`Archivo no encontrado: ${n}`);
+  const t = Te(), r = `pre-restore_${pe()}.sqlite`, a = U.join(t, r);
+  await e.backup(a);
+  const s = U.join(I.getPath("userData"), "taller_pos.sqlite");
+  return tt(), L.copyFileSync(n, s), console.log(`[backup] restaurado desde ${n} → seguridad en ${r}`), { safetyBackup: r };
+}
+function sn(e, n) {
   if (!Q) {
     console.warn("[backup] updateBackupSchedule llamado antes de startBackupSchedule");
     return;
   }
-  Ee(Q, e, n ?? Z);
+  Ne(Q, e, n ?? J);
 }
-const an = /* @__PURE__ */ Object.assign({
-  "../database/migrations/001_init.sql": be,
-  "../database/migrations/002_settings.sql": Ce,
-  "../database/migrations/003_sales_tax_snapshot.sql": De,
-  "../database/migrations/004_customers.sql": we,
-  "../database/migrations/005_products_extended.sql": ve,
-  "../database/migrations/006_users.sql": Me,
-  "../database/migrations/007_settings_extended.sql": Be,
-  "../database/migrations/008_settings_theme.sql": Fe,
-  "../database/migrations/009_sales_payment.sql": qe,
-  "../database/migrations/010_sales_void_audit.sql": Pe,
-  "../database/migrations/011_users_avatar.sql": ke,
-  "../database/migrations/012_cash_sessions.sql": He,
-  "../database/migrations/013_purchases.sql": Xe,
-  "../database/migrations/014_receivables.sql": xe,
-  "../database/migrations/015_quotes.sql": je,
-  "../database/migrations/016_sales_discount.sql": Ye,
-  "../database/migrations/017_expenses.sql": Ve,
-  "../database/migrations/018_returns.sql": Ge,
-  "../database/migrations/019_stock_movements.sql": We,
-  "../database/migrations/020_backup_settings.sql": $e,
-  "../database/migrations/021_tax_enabled.sql": Ke,
-  "../database/migrations/022_printer_settings.sql": Qe,
-  "../database/migrations/023_categories.sql": ze
+const on = /* @__PURE__ */ Object.assign({
+  "../database/migrations/001_init.sql": De,
+  "../database/migrations/002_settings.sql": ve,
+  "../database/migrations/003_sales_tax_snapshot.sql": we,
+  "../database/migrations/004_customers.sql": Me,
+  "../database/migrations/005_products_extended.sql": Fe,
+  "../database/migrations/006_users.sql": Be,
+  "../database/migrations/007_settings_extended.sql": qe,
+  "../database/migrations/008_settings_theme.sql": Pe,
+  "../database/migrations/009_sales_payment.sql": ke,
+  "../database/migrations/010_sales_void_audit.sql": He,
+  "../database/migrations/011_users_avatar.sql": xe,
+  "../database/migrations/012_cash_sessions.sql": Xe,
+  "../database/migrations/013_purchases.sql": je,
+  "../database/migrations/014_receivables.sql": Ve,
+  "../database/migrations/015_quotes.sql": Ye,
+  "../database/migrations/016_sales_discount.sql": We,
+  "../database/migrations/017_expenses.sql": Ge,
+  "../database/migrations/018_returns.sql": $e,
+  "../database/migrations/019_stock_movements.sql": Ke,
+  "../database/migrations/020_backup_settings.sql": ze,
+  "../database/migrations/021_tax_enabled.sql": Qe,
+  "../database/migrations/022_printer_settings.sql": Ze,
+  "../database/migrations/023_categories.sql": Je
 });
-function sn() {
-  return Object.entries(an).map(([e, n]) => ({
+function cn() {
+  return Object.entries(on).map(([e, n]) => ({
     name: e.split("/").pop(),
     sql: n
   }));
 }
-function on() {
-  const e = Ze(), n = tt(e, sn());
+function dn() {
+  const e = et(), n = at(e, cn());
   console.log("[migrator] applied:", n.applied, "skipped:", n.skipped);
-  const t = nt(e), r = st(t);
+  const t = st(e), r = ct(t);
   r.init();
-  const a = it(e), s = ct(a), i = lt(e), o = ut(i), c = mt(e), d = Tt(c), E = bt(e), m = Ct(E), _ = Nt(e), N = ft(_, r, d, m), T = Lt(e), p = gt(T), R = wt(e), g = vt(R), U = Bt(e), M = Ft(U), B = Pt(e), b = kt(B), C = Xt(e), D = xt(C, r, N, b), F = Yt(e), _e = Vt(F), Te = Wt(e), pe = $t(Te, _), Ne = Qt(e), Re = zt(Ne);
-  ot(r), dt(s), Et(o), pt(d), At(N), ht(p), Dt(m), Mt(g), qt(M), Ht(b), jt(D), Gt(_e), Kt(pe), Zt(Re);
-  const Ie = Le.join(y.getPath("userData"), "taller_pos.sqlite");
-  l.handle("db:get-path", () => ({ ok: !0, data: Ie })), l.handle("db:backup", async () => {
+  const a = lt(e), s = ut(a), o = mt(e), c = _t(o), i = pt(e), d = Rt(i), E = vt(e), m = wt(E), _ = Ot(e), T = Lt(_, r, d, m), N = bt(e), p = Ut(N), R = Ft(e), O = Bt(R), v = Pt(e), B = kt(v), q = xt(e), w = Xt(q), M = Vt(e), F = Yt(M, r, T, w, c), P = Gt(e), Se = $t(P), Oe = zt(e), fe = Qt(Oe, _), Ie = Jt(e), ye = en(Ie);
+  dt(r), Et(s), Tt(c), St(d), gt(T), Ct(p), Mt(m), qt(O), Ht(B), jt(w), Wt(F), Kt(Se), Zt(fe), tn(ye);
+  const Ae = he.join(I.getPath("userData"), "taller_pos.sqlite");
+  l.handle("db:get-path", () => ({ ok: !0, data: Ae })), l.handle("db:backup", async () => {
     try {
-      const { filePath: I, canceled: S } = await Ae.showSaveDialog({
+      const { filePath: S, canceled: f } = await ne.showSaveDialog({
         title: "Guardar respaldo de base de datos",
         defaultPath: `backup_${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.sqlite`,
         filters: [{ name: "SQLite", extensions: ["sqlite"] }]
       });
-      return S || !I ? { ok: !0, data: null } : (await e.backup(I), { ok: !0, data: I });
-    } catch (I) {
-      return { ok: !1, error: { code: "BACKUP_ERROR", message: I.message } };
+      return f || !S ? { ok: !0, data: null } : (await e.backup(S), { ok: !0, data: S });
+    } catch (S) {
+      return { ok: !1, error: { code: "BACKUP_ERROR", message: S.message } };
     }
   }), l.handle("db:backup-now", async () => {
     try {
-      return { ok: !0, data: await z(e) };
-    } catch (I) {
-      return { ok: !1, error: { code: "BACKUP_ERROR", message: I.message } };
+      return { ok: !0, data: await Z(e) };
+    } catch (S) {
+      return { ok: !1, error: { code: "BACKUP_ERROR", message: S.message } };
     }
   }), l.handle("db:list-backups", () => {
     try {
-      return { ok: !0, data: nn() };
-    } catch (I) {
-      return { ok: !1, error: { code: "BACKUP_LIST_ERROR", message: I.message } };
+      return { ok: !0, data: rn() };
+    } catch (S) {
+      return { ok: !1, error: { code: "BACKUP_LIST_ERROR", message: S.message } };
     }
   });
-  const J = Number(r.get("backup_interval_hours") ?? 720) || 720, ee = Number(r.get("backup_max_copies") ?? 10) || 10;
-  l.handle("db:set-backup-interval", (I, S, q) => {
+  const ee = Number(r.get("backup_interval_hours") ?? 720) || 720, te = Number(r.get("backup_max_copies") ?? 10) || 10;
+  l.handle("db:restore", async (S, f) => {
     try {
-      const O = Math.max(1, Number(S) || J), w = Math.max(1, Number(q) || ee);
-      return rn(O, w), { ok: !0, data: { intervalHours: O, maxCopies: w } };
-    } catch (O) {
-      return { ok: !1, error: { code: "BACKUP_INTERVAL_ERROR", message: O.message } };
+      let A = f;
+      if (!A) {
+        const { filePaths: b, canceled: V } = await ne.showOpenDialog({
+          title: "Seleccionar respaldo para restaurar",
+          filters: [{ name: "SQLite", extensions: ["sqlite"] }],
+          properties: ["openFile"]
+        });
+        if (V || !b.length) return { ok: !0, data: null };
+        A = b[0];
+      }
+      const y = await an(e, A);
+      return setTimeout(() => {
+        I.relaunch(), I.exit(0);
+      }, 600), { ok: !0, data: y };
+    } catch (A) {
+      return { ok: !1, error: { code: "RESTORE_ERROR", message: A.message } };
     }
-  }), Ee(e, J, ee), l.handle("printer:list", async (I) => {
+  }), l.handle("db:set-backup-interval", (S, f, A) => {
     try {
-      const S = x.fromWebContents(I.sender);
-      return { ok: !0, data: (S ? await S.webContents.getPrintersAsync() : []).map((O) => ({ name: O.name, isDefault: O.isDefault })) };
-    } catch (S) {
-      return { ok: !1, error: { code: "PRINTER_LIST_ERROR", message: String(S.message) } };
+      const y = Math.max(1, Number(f) || ee), b = Math.max(1, Number(A) || te);
+      return sn(y, b), { ok: !0, data: { intervalHours: y, maxCopies: b } };
+    } catch (y) {
+      return { ok: !1, error: { code: "BACKUP_INTERVAL_ERROR", message: y.message } };
     }
-  }), l.handle("printer:print", async (I, S, q, O) => {
-    const w = {
+  }), Ne(e, ee, te), l.handle("printer:list", async (S) => {
+    try {
+      const f = j.fromWebContents(S.sender);
+      return { ok: !0, data: (f ? await f.webContents.getPrintersAsync() : []).map((y) => ({ name: y.name, isDefault: y.isDefault })) };
+    } catch (f) {
+      return { ok: !1, error: { code: "PRINTER_LIST_ERROR", message: String(f.message) } };
+    }
+  }), l.handle("printer:print", async (S, f, A, y) => {
+    const b = {
       "half-letter": { width: 139700, height: 215900 },
       letter: { width: 215900, height: 279400 },
       "thermal-80": { width: 8e4, height: 297e3 }
-    }, Se = w[O] ?? w["half-letter"], P = new x({ show: !1, webPreferences: { contextIsolation: !0 } });
+    }, V = b[y] ?? b["half-letter"], k = new j({ show: !1, webPreferences: { contextIsolation: !0 } });
     try {
-      return await P.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(S)), await new Promise((j) => {
-        P.webContents.print(
-          { silent: !0, deviceName: q || void 0, pageSize: Se },
-          (Oe, fe) => {
-            P.close(), j(Oe ? { ok: !0, data: null } : { ok: !1, error: { code: "PRINT_FAILED", message: fe } });
+      return await k.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(f)), await new Promise((Y) => {
+        k.webContents.print(
+          { silent: !0, deviceName: A || void 0, pageSize: V },
+          (Le, ge) => {
+            k.close(), Y(Le ? { ok: !0, data: null } : { ok: !1, error: { code: "PRINT_FAILED", message: ge } });
           }
         );
       });
-    } catch (j) {
-      return P.close(), { ok: !1, error: { code: "PRINT_ERROR", message: String(j.message) } };
+    } catch (Y) {
+      return k.close(), { ok: !1, error: { code: "PRINT_ERROR", message: String(Y.message) } };
     }
   });
 }
-let K = null;
-function me() {
-  K = new x({
+let z = null;
+function Re() {
+  z = new j({
     width: 1200,
     height: 800,
     webPreferences: {
-      preload: te(y.getAppPath(), "dist-electron", "preload.mjs"),
+      preload: re(I.getAppPath(), "dist-electron", "preload.mjs"),
       contextIsolation: !0,
       nodeIntegration: !1
     }
-  }), process.env.VITE_DEV_SERVER_URL ? K.loadURL(process.env.VITE_DEV_SERVER_URL) : K.loadFile(te(y.getAppPath(), "dist", "index.html"));
+  }), process.env.VITE_DEV_SERVER_URL ? z.loadURL(process.env.VITE_DEV_SERVER_URL) : z.loadFile(re(I.getAppPath(), "dist", "index.html"));
 }
-y.whenReady().then(() => {
-  ye.setApplicationMenu(null), on(), me();
+function ln() {
+  return ue.buildFromTemplate([
+    {
+      label: "Archivo",
+      submenu: [
+        { role: "quit", label: "Salir" }
+      ]
+    },
+    {
+      label: "Vista",
+      submenu: [
+        { role: "reload", label: "Recargar", accelerator: "CmdOrCtrl+R" },
+        { role: "forceReload", label: "Recargar (forzado)", accelerator: "CmdOrCtrl+Shift+R" },
+        { role: "toggleDevTools", label: "Herramientas de dev", accelerator: "F12" },
+        { type: "separator" },
+        { role: "resetZoom", label: "Zoom normal", accelerator: "CmdOrCtrl+0" },
+        { role: "zoomIn", label: "Acercar", accelerator: "CmdOrCtrl+=" },
+        { role: "zoomOut", label: "Alejar", accelerator: "CmdOrCtrl+-" },
+        { type: "separator" },
+        { role: "togglefullscreen", label: "Pantalla completa", accelerator: "F11" }
+      ]
+    }
+  ]);
+}
+I.whenReady().then(() => {
+  ue.setApplicationMenu(ln()), dn(), Re();
 });
-y.on("window-all-closed", () => {
-  process.platform !== "darwin" && y.quit();
+I.on("window-all-closed", () => {
+  process.platform !== "darwin" && I.quit();
 });
-y.on("activate", () => {
-  x.getAllWindows().length === 0 && me();
+I.on("activate", () => {
+  j.getAllWindows().length === 0 && Re();
 });

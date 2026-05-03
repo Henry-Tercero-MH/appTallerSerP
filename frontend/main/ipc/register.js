@@ -59,7 +59,7 @@ import { createInventoryRepository } from '../modules/inventory/inventory.reposi
 import { createInventoryService }    from '../modules/inventory/inventory.service.js'
 import { registerInventoryIpc }      from '../modules/inventory/inventory.ipc.js'
 
-import { startBackupSchedule, updateBackupSchedule, runBackup, listBackups } from '../database/backup.js'
+import { startBackupSchedule, updateBackupSchedule, runBackup, listBackups, restoreFromFile } from '../database/backup.js'
 
 const migrationModules = import.meta.glob('../database/migrations/*.sql', {
   query: '?raw',
@@ -123,7 +123,7 @@ export function bootstrap() {
   const receivables     = createReceivablesService(receivablesRepo)
 
   const quotesRepo = createQuotesRepository(db)
-  const quotes     = createQuotesService(quotesRepo, settings, sales, receivables)
+  const quotes     = createQuotesService(quotesRepo, settings, sales, receivables, products)
 
   const expensesRepo = createExpensesRepository(db)
   const expenses     = createExpensesService(expensesRepo)
@@ -191,6 +191,28 @@ export function bootstrap() {
   // Lee configuración de backup desde settings (defaults: 720 h · 10 copias)
   const intervalHours = Number(settings.get('backup_interval_hours') ?? 720) || 720
   const maxCopies     = Number(settings.get('backup_max_copies')     ?? 10)  || 10
+
+  // Restaurar DB desde un archivo .sqlite (con respaldo de seguridad previo)
+  ipcMain.handle('db:restore', async (_e, filePath) => {
+    try {
+      let srcPath = filePath
+      if (!srcPath) {
+        const { filePaths, canceled } = await dialog.showOpenDialog({
+          title: 'Seleccionar respaldo para restaurar',
+          filters: [{ name: 'SQLite', extensions: ['sqlite'] }],
+          properties: ['openFile'],
+        })
+        if (canceled || !filePaths.length) return { ok: true, data: null }
+        srcPath = filePaths[0]
+      }
+      const result = await restoreFromFile(db, srcPath)
+      // Relanzo la app después de que el IPC response llegue al renderer
+      setTimeout(() => { app.relaunch(); app.exit(0) }, 600)
+      return { ok: true, data: result }
+    } catch (err) {
+      return { ok: false, error: { code: 'RESTORE_ERROR', message: err.message } }
+    }
+  })
 
   // Permite cambiar el intervalo en caliente desde la UI de Configuración
   ipcMain.handle('db:set-backup-interval', (_e, hours, copies) => {

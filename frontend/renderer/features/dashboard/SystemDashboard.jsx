@@ -1,40 +1,67 @@
-import { useNavigate } from 'react-router-dom'
+import { useState }      from 'react'
+import { useNavigate }   from 'react-router-dom'
 import {
   ShoppingCart, ClipboardList, Package, Users,
   TrendingUp, TrendingDown, AlertTriangle, Landmark, Wallet,
-  CreditCard, ArrowUpRight, ArrowDownRight, Box,
+  CreditCard, ArrowDownRight, Box, CalendarDays,
 } from 'lucide-react'
 
 import { Card, CardContent } from '@/components/ui/card'
 import { Button }            from '@/components/ui/button'
-import { MoneyDisplay }      from '@/components/shared/MoneyDisplay'
 import { LoadingSpinner }    from '@/components/shared/LoadingSpinner'
 
-import { useDailyReport }        from '@/hooks/useSales'
-import { useInventoryProducts }  from '@/features/warehouses/inventoryStore'
-import { useOpenSession }        from '@/hooks/useCash'
-import { useReceivables, useReceivablesSummary } from '@/hooks/useReceivables'
+import { useDailyReport, useRangeReport }                                                 from '@/hooks/useSales'
+import { useInventoryProducts }                                                            from '@/features/warehouses/inventoryStore'
+import { useOpenSession }                                                                  from '@/hooks/useCash'
+import { useReceivables, useReceivablesSummary, useReceivablePaymentsToday, useReceivablePaymentsForRange } from '@/hooks/useReceivables'
 import { usePurchaseOrders }     from '@/hooks/usePurchases'
 import { useExpenseSummary }     from '@/hooks/useExpenses'
 import { useTaxSettings }        from '@/hooks/useSettings'
 import { ROUTES }                from '@/lib/constants'
 
+/** @param {string} ym  Formato YYYY-MM → devuelve { from, to } en YYYY-MM-DD */
+function monthRange(ym) {
+  const [y, m] = ym.split('-').map(Number)
+  const from   = `${ym}-01`
+  const last   = new Date(y, m, 0).getDate()
+  const to     = `${ym}-${String(last).padStart(2, '0')}`
+  return { from, to }
+}
+
 const dateFmt  = new Intl.DateTimeFormat('es-GT', { dateStyle: 'full' })
+/** @param {number|null|undefined} n */
 const fmtMoney = (n) => new Intl.NumberFormat('es-GT', { style: 'currency', currency: 'GTQ' }).format(n ?? 0)
+/** @param {string|null|undefined} s */
 const fmtDate  = (s) => s ? new Intl.DateTimeFormat('es-GT', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(s)) : '—'
 
 export default function SystemDashboard() {
   const navigate = useNavigate()
   const today    = new Date().toISOString().slice(0, 10)
+  const currentYM = today.slice(0, 7)
 
-  const { data: report,    isLoading: loadingReport }  = useDailyReport()
-  const { data: products = [] }                        = useInventoryProducts()
-  const { data: cashSession }                          = useOpenSession()
-  const { data: recvList = [] }                        = useReceivables()
-  const { data: recvSummary }                          = useReceivablesSummary()
-  const { data: orders = [] }                          = usePurchaseOrders()
-  const { data: expSummary }                           = useExpenseSummary(today, today)
-  const { enabled: taxEnabled }                        = useTaxSettings()
+  const [selectedMonth, setSelectedMonth] = useState(currentYM)
+  const { from: mFrom, to: mTo } = monthRange(selectedMonth)
+
+  const { data: report,       isLoading: loadingReport }  = useDailyReport()
+  const { data: monthReport,  isLoading: loadingMonth  }  = useRangeReport({ from: mFrom, to: mTo })
+  const { data: monthCxC }                                 = useReceivablePaymentsForRange(mFrom, mTo)
+  const { data: products = [] }                           = useInventoryProducts()
+  const { data: cashSession }                             = useOpenSession()
+  const { data: recvList = [] }                           = useReceivables()
+  const { data: recvSummary }                             = useReceivablesSummary()
+  const { data: paymentsToday }                           = useReceivablePaymentsToday()
+  const { data: orders = [] }                             = usePurchaseOrders()
+  const { data: expSummary }                              = useExpenseSummary(today, today)
+  const { enabled: taxEnabled }                           = useTaxSettings()
+
+  // Totales mensuales calculados desde rangeReport
+  const monthSaleCount  = monthReport?.series.reduce((s, d) => s + d.sale_count, 0) ?? 0
+  const monthTotal      = monthReport?.series.reduce((s, d) => s + d.total,      0) ?? 0
+  const monthCashTotal  = monthReport?.byPaymentMethod
+    .filter(m => m.method !== 'credit')
+    .reduce((s, m) => s + m.total, 0) ?? 0
+  const monthCxCTotal   = monthCxC?.total ?? 0
+  const monthGeneral    = monthCashTotal + monthCxCTotal
 
   const summary     = report?.summary ?? null
   const lowStock    = products.filter(p => p.is_active === 1 && p.stock <= p.min_stock)
@@ -127,8 +154,86 @@ export default function SystemDashboard() {
             <div className="db-kpi-grid">
               <KpiCard label="Transacciones"    value={summary?.sale_count ?? 0}             suffix="ventas"  icon={<ShoppingCart className="db-kpi-icon" />} />
               {taxEnabled && <KpiCard label="Subtotal"   value={fmtMoney(summary?.subtotal ?? 0)}             icon={<TrendingUp className="db-kpi-icon text-blue-500" />} suffix="" />}
-              <KpiCard label="Total cobrado"    value={fmtMoney(summary?.total ?? 0)}                         icon={<TrendingUp className="db-kpi-icon text-emerald-600" />} highlight />
+              <KpiCard label="Total ventas"     value={fmtMoney(summary?.total ?? 0)}                         icon={<TrendingUp className="db-kpi-icon" style={{ color: 'var(--accent-yellow)' }} />} yellow />
+              <KpiCard
+                label="Cobros CxC hoy"
+                value={fmtMoney(paymentsToday?.total ?? 0)}
+                suffix={paymentsToday?.count ? `${paymentsToday.count} abono${paymentsToday.count > 1 ? 's' : ''}` : undefined}
+                icon={<Wallet className="db-kpi-icon text-emerald-600" />}
+              />
               <KpiCard label="Gastos del día"   value={fmtMoney(expSummary?.today ?? 0)}                      icon={<TrendingDown className="db-kpi-icon text-red-500" />} danger />
+            </div>
+          )
+        }
+      </section>
+
+      {/* ── Total General hoy ───────────────────────────────────── */}
+      {!loadingReport && (
+        <Card className="border-2 border-emerald-400 bg-emerald-50/60">
+          <CardContent className="p-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Total General hoy</p>
+              <p className="text-2xl font-bold text-emerald-700 mt-0.5">
+                {fmtMoney((summary?.cash_total ?? 0) + (paymentsToday?.total ?? 0))}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Ventas cobradas {fmtMoney(summary?.cash_total ?? 0)}
+                &nbsp;+&nbsp;
+                Cobros CxC {fmtMoney(paymentsToday?.total ?? 0)}
+              </p>
+            </div>
+            <TrendingUp className="h-10 w-10 text-emerald-400 shrink-0" />
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── Resumen del mes ─────────────────────────────────────── */}
+      <section>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="db-section-title mb-0">Resumen del mes</h2>
+          <div className="flex items-center gap-2">
+            <CalendarDays className="h-4 w-4 text-muted-foreground" />
+            <input
+              type="month"
+              value={selectedMonth}
+              max={currentYM}
+              onChange={e => setSelectedMonth(e.target.value)}
+              className="border rounded-md px-2 py-1 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+        </div>
+        {loadingMonth
+          ? <div className="flex h-20 items-center justify-center"><LoadingSpinner /></div>
+          : (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Card>
+                <CardContent className="p-4">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Transacciones</p>
+                  <p className="text-2xl font-bold mt-1">{monthSaleCount}</p>
+                  <p className="text-xs text-muted-foreground">ventas</p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="p-4">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Total ventas</p>
+                  <p className="text-2xl font-bold mt-1 text-yellow-600">{fmtMoney(monthTotal)}</p>
+                  <p className="text-xs text-muted-foreground">incluye crédito</p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="p-4">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Cobros CxC</p>
+                  <p className="text-2xl font-bold mt-1 text-emerald-600">{fmtMoney(monthCxCTotal)}</p>
+                  <p className="text-xs text-muted-foreground">{monthCxC?.count ?? 0} abonos</p>
+                </CardContent>
+              </Card>
+              <Card className="border-2 border-emerald-400 bg-emerald-50/40">
+                <CardContent className="p-4">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wide font-semibold">Total General</p>
+                  <p className="text-2xl font-bold mt-1 text-emerald-700">{fmtMoney(monthGeneral)}</p>
+                  <p className="text-xs text-muted-foreground">cobrado + CxC</p>
+                </CardContent>
+              </Card>
             </div>
           )
         }
@@ -189,6 +294,10 @@ export default function SystemDashboard() {
               <div className="db-info-row">
                 <span className="db-info-label">Saldo pendiente</span>
                 <span className="db-info-value font-bold text-amber-600">{fmtMoney(recvSummary?.total_balance)}</span>
+              </div>
+              <div className="db-info-row">
+                <span className="db-info-label">Cobrado hoy</span>
+                <span className="db-info-value font-semibold text-emerald-600">{fmtMoney(paymentsToday?.total ?? 0)}</span>
               </div>
               <div className="db-info-row">
                 <span className="db-info-label">Cuentas activas</span>
@@ -342,21 +451,29 @@ export default function SystemDashboard() {
   )
 }
 
-function KpiCard({ label, value, suffix, icon, highlight = false, danger = false }) {
+/** @param {{ label:string, value:any, suffix?:string, icon:any, highlight?:boolean, danger?:boolean, yellow?:boolean }} props */
+function KpiCard({ label, value, suffix, icon, highlight = false, danger = false, yellow = false }) {
+  const cardClass = yellow
+    ? 'border-yellow-300/60'
+    : highlight ? 'border-primary/40 bg-primary/5'
+    : danger ? 'border-red-200 bg-red-50/50'
+    : undefined
+  const valClass = yellow ? '' : highlight ? 'text-primary' : danger ? 'text-red-600' : ''
   return (
-    <Card className={highlight ? 'border-primary/40 bg-primary/5' : danger ? 'border-red-200 bg-red-50/50' : undefined}>
+    <Card className={cardClass} style={yellow ? { background: 'var(--accent-yellow-light)' } : undefined}>
       <CardContent className="p-4">
         <div className="flex items-center gap-2 mb-2">
           {icon}
           <span className="text-xs text-muted-foreground">{label}</span>
         </div>
-        <div className={`text-xl font-bold ${highlight ? 'text-primary' : danger ? 'text-red-600' : ''}`}>{value}</div>
+        <div className={`text-xl font-bold ${valClass}`} style={yellow ? { color: 'var(--accent-yellow)' } : undefined}>{value}</div>
         {suffix && <p className="text-xs text-muted-foreground mt-0.5">{suffix}</p>}
       </CardContent>
     </Card>
   )
 }
 
+/** @param {{ label:string, icon:any, onClick:()=>void, primary?:boolean }} props */
 function QuickLink({ label, icon, onClick, primary = false }) {
   return (
     <button

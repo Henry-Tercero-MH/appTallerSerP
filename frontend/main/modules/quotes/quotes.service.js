@@ -3,13 +3,15 @@
  * @param {ReturnType<typeof import('../settings/settings.service.js').createSettingsService>} settings
  * @param {ReturnType<typeof import('../sales/sales.service.js').createSalesService>} sales
  * @param {ReturnType<typeof import('../receivables/receivables.service.js').createReceivablesService>} receivables
+ * @param {ReturnType<typeof import('../products/products.service.js').createProductsService>} products
  */
-export function createQuotesService(repo, settings, sales, receivables) {
+export function createQuotesService(repo, settings, sales, receivables, products) {
 
   function calcTotals(items) {
-    const taxRate  = /** @type {number} */ (settings.get('tax_rate') ?? 0)
-    const subtotal = items.reduce((s, i) => s + i.qty * i.unit_price, 0)
-    const taxAmt   = Math.round(subtotal * taxRate * 100) / 100
+    const taxRate    = /** @type {number} */ (settings.get('tax_rate') ?? 0)
+    const taxEnabled = /** @type {boolean} */ (settings.get('tax_enabled') ?? false)
+    const subtotal   = items.reduce((s, i) => s + i.qty * i.unit_price, 0)
+    const taxAmt     = taxEnabled ? Math.round(subtotal * taxRate * 100) / 100 : 0
     return { subtotal, tax_rate: taxRate, tax_amount: taxAmt, total: subtotal + taxAmt }
   }
 
@@ -146,6 +148,7 @@ export function createQuotesService(repo, settings, sales, receivables) {
 
     /**
      * Crea una cuenta por cobrar desde una cotización aceptada.
+     * Descuenta stock para los ítems con product_id vinculado.
      * @param {{ id: number, dueDate?: string, notes?: string, userId: number, userName: string }} input
      */
     convertToReceivable(input) {
@@ -153,6 +156,20 @@ export function createQuotesService(repo, settings, sales, receivables) {
       if (!quote) throw Object.assign(new Error('Cotización no encontrada'), { code: 'QUOTE_NOT_FOUND' })
       if (!['accepted', 'sent', 'draft'].includes(quote.status)) {
         throw Object.assign(new Error('Solo se pueden convertir cotizaciones activas'), { code: 'QUOTE_INVALID_STATUS' })
+      }
+
+      const items = repo.findItems(input.id)
+
+      // Descontar stock para items que tienen producto en catálogo
+      for (const it of items) {
+        if (it.product_id && it.qty > 0) {
+          try {
+            products.adjustStock(it.product_id, 'exit', it.qty)
+          } catch {
+            // Si el producto no existe o stock insuficiente, continuar igualmente
+            console.warn(`[quotes] no se pudo descontar stock del producto ${it.product_id}`)
+          }
+        }
       }
 
       const receivable = receivables.create({

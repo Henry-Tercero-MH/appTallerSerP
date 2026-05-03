@@ -10,6 +10,7 @@
 import fs   from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
+import { closeDb } from './connection.js'
 
 /** @type {ReturnType<typeof setInterval> | null} */
 let _timer = null
@@ -121,6 +122,37 @@ export function startBackupSchedule(db, intervalHours = 720, maxCopies = 10) {
   }, 3_600_000)
 
   console.log(`[backup] scheduler activo — intervalo: ${intervalHours} h · máx: ${maxCopies} copias`)
+}
+
+/**
+ * Restaura la base de datos desde un archivo .sqlite externo.
+ * 1. Crea un respaldo de seguridad del estado actual antes de sobreescribir.
+ * 2. Cierra la conexión para liberar el lock del archivo.
+ * 3. Reemplaza el archivo de DB con el seleccionado.
+ * Después de llamar esta función se debe relanzar la app.
+ *
+ * @param {import('better-sqlite3').Database} db
+ * @param {string} srcPath  Ruta absoluta del archivo .sqlite a restaurar
+ * @returns {Promise<{ safetyBackup: string }>}
+ */
+export async function restoreFromFile(db, srcPath) {
+  if (!fs.existsSync(srcPath)) throw new Error(`Archivo no encontrado: ${srcPath}`)
+
+  const dir            = ensureDir()
+  const safetyFilename = `pre-restore_${stamp()}.sqlite`
+  const safetyPath     = path.join(dir, safetyFilename)
+
+  // Respaldo de seguridad del estado actual antes de sobreescribir
+  await db.backup(safetyPath)
+
+  const dbPath = path.join(app.getPath('userData'), 'taller_pos.sqlite')
+
+  // Cerrar conexión para liberar el lock (crítico en Windows)
+  closeDb()
+
+  fs.copyFileSync(srcPath, dbPath)
+  console.log(`[backup] restaurado desde ${srcPath} → seguridad en ${safetyFilename}`)
+  return { safetyBackup: safetyFilename }
 }
 
 /**

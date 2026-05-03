@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import * as settingsService from '@/services/settingsService.js'
 import { settingsKeys } from './queryKeys.js'
+import { BRAND_NAME, BRAND_LOGO } from '@/lib/brand.js'
 
 /**
  * Settings agrupados por category. staleTime muy largo: los settings casi
@@ -43,10 +44,9 @@ export function useTaxSettings() {
 export function useBusinessSettings() {
   const { data } = useSettings()
   const b   = /** @type {Record<string,unknown>|undefined} */ (data?.business)
-  const app = /** @type {Record<string,unknown>|undefined} */ (data?.app)
   return {
-    name:        typeof app?.app_name         === 'string' && app.app_name         ? app.app_name         : (typeof b?.business_name === 'string' && b.business_name ? b.business_name : 'SerProMec'),
-    logo:        typeof b?.business_logo_base64 === 'string' ? b.business_logo_base64 : '',
+    name:        BRAND_NAME,
+    logo:        BRAND_LOGO,
     nit:         typeof b?.business_nit      === 'string' ? b.business_nit      : '',
     address:     typeof b?.business_address  === 'string' ? b.business_address  : '',
     phone:       typeof b?.business_phone    === 'string' ? b.business_phone    : '',

@@ -474,39 +474,45 @@ export default function SettingsPage() {
           ]}
         />
 
-        <LogoSection
-          current={typeof s.business_logo_base64 === 'string' ? s.business_logo_base64 : ''}
-          mut={setMut}
-        />
+        {false && (
+          <LogoSection
+            current={typeof s.business_logo_base64 === 'string' ? s.business_logo_base64 : ''}
+            mut={setMut}
+          />
+        )}
 
-        <ThemeSection
-          currentTheme={typeof s.app_theme === 'string' ? s.app_theme : 'crimson'}
-          appName={typeof s.app_name  === 'string' ? s.app_name  : 'SerProMec'}
-          setMut={setMut}
-          upsertMut={upsertMut}
-        />
+        {false && (
+          <ThemeSection
+            currentTheme={typeof s.app_theme === 'string' ? s.app_theme : 'crimson'}
+            appName={typeof s.app_name  === 'string' ? s.app_name  : 'SerProMec'}
+            setMut={setMut}
+            upsertMut={upsertMut}
+          />
+        )}
 
-        <SettingsSection
-          title="Moneda e impuestos"
-          icon={ShieldCheck}
-          mut={setMut}
-          defaults={{
-            currency_code:         s.currency_code         ?? 'GTQ',
-            currency_symbol:       s.currency_symbol       ?? 'Q',
-            decimal_places:        s.decimal_places        ?? 2,
-            tax_enabled:           s.tax_enabled           ?? false,
-            tax_rate:              s.tax_rate              ?? 0.12,
-            tax_included_in_price: s.tax_included_in_price ?? false,
-          }}
-          fields={[
-            { key: 'currency_code',        label: 'Código moneda (ISO 4217)', type: 'string',  hint: 'GTQ, USD, MXN…' },
-            { key: 'currency_symbol',      label: 'Símbolo',                  type: 'string' },
-            { key: 'decimal_places',       label: 'Decimales',                type: 'number' },
-            { key: 'tax_enabled',          label: 'Habilitar IVA',            type: 'boolean', hint: 'Activa el cálculo y visualización de IVA en toda la app' },
-            { key: 'tax_rate',             label: 'Tasa de IVA (decimal)',    type: 'number',  hint: '0.12 = 12 %' },
-            { key: 'tax_included_in_price',label: 'IVA embebido en el precio', type: 'boolean', hint: 'Activo: el IVA se extrae del precio ingresado. Inactivo: el IVA se agrega encima del precio base.' },
-          ]}
-        />
+        {false && (
+          <SettingsSection
+            title="Moneda e impuestos"
+            icon={ShieldCheck}
+            mut={setMut}
+            defaults={{
+              currency_code:         s.currency_code         ?? 'GTQ',
+              currency_symbol:       s.currency_symbol       ?? 'Q',
+              decimal_places:        s.decimal_places        ?? 2,
+              tax_enabled:           s.tax_enabled           ?? false,
+              tax_rate:              s.tax_rate              ?? 0.12,
+              tax_included_in_price: s.tax_included_in_price ?? false,
+            }}
+            fields={[
+              { key: 'currency_code',        label: 'Código moneda (ISO 4217)', type: 'string',  hint: 'GTQ, USD, MXN…' },
+              { key: 'currency_symbol',      label: 'Símbolo',                  type: 'string' },
+              { key: 'decimal_places',       label: 'Decimales',                type: 'number' },
+              { key: 'tax_enabled',          label: 'Habilitar IVA',            type: 'boolean', hint: 'Activa el cálculo y visualización de IVA en toda la app' },
+              { key: 'tax_rate',             label: 'Tasa de IVA (decimal)',    type: 'number',  hint: '0.12 = 12 %' },
+              { key: 'tax_included_in_price',label: 'IVA embebido en el precio', type: 'boolean', hint: 'Activo: el IVA se extrae del precio ingresado. Inactivo: el IVA se agrega encima del precio base.' },
+            ]}
+          />
+        )}
 
         <TicketSection s={s} setMut={setMut} />
 
@@ -547,12 +553,14 @@ function BackupSection({ settings: s }) {
   const savedHours = Number(s.backup_interval_hours ?? 720) || 720
   const savedMax   = Number(s.backup_max_copies     ?? 10)  || 10
 
-  const [intervalHours, setIntervalHours] = useState(savedHours)
-  const [maxCopies,     setMaxCopies]     = useState(savedMax)
-  const [backups,       setBackups]       = useState(/** @type {any[]} */ ([]))
-  const [loadingNow,    setLoadingNow]    = useState(false)
-  const [loadingExport, setLoadingExport] = useState(false)
-  const [savingCfg,     setSavingCfg]     = useState(false)
+  const [intervalHours,   setIntervalHours]   = useState(savedHours)
+  const [maxCopies,       setMaxCopies]       = useState(savedMax)
+  const [backups,         setBackups]         = useState(/** @type {any[]} */ ([]))
+  const [loadingNow,      setLoadingNow]      = useState(false)
+  const [loadingExport,   setLoadingExport]   = useState(false)
+  const [savingCfg,       setSavingCfg]       = useState(false)
+  const [restoring,       setRestoring]       = useState(false)
+  const [confirmRestore,  setConfirmRestore]  = useState(/** @type {string|null} */ (null))
 
   // Sincronizar si los settings cambian desde fuera
   useEffect(() => { setIntervalHours(savedHours) }, [savedHours])
@@ -608,6 +616,37 @@ function BackupSection({ settings: s }) {
     }
   }
 
+  /** Restaura desde un backup de la lista interna (recibe la ruta absoluta) */
+  async function handleRestoreFromPath(/** @type {string} */ filePath) {
+    setConfirmRestore(null)
+    setRestoring(true)
+    try {
+      const res = await api.db.restore(filePath)
+      if (!res.ok) { toast.error(res.error?.message ?? 'Error al restaurar'); return }
+      localStorage.setItem('db_just_restored', '1')
+      toast.success('Respaldo restaurado. La app se reiniciará en un momento…')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error al restaurar')
+      setRestoring(false)
+    }
+  }
+
+  /** Restaura abriendo el diálogo del sistema para elegir un archivo externo */
+  async function handleRestoreExternal() {
+    setRestoring(true)
+    try {
+      const res = await api.db.restore(undefined)
+      if (!res.ok) { toast.error(res.error?.message ?? 'Error al restaurar'); setRestoring(false); return }
+      if (res.data) {
+        localStorage.setItem('db_just_restored', '1')
+        toast.success('Respaldo restaurado. La app se reiniciará en un momento…')
+      } else setRestoring(false)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error al restaurar')
+      setRestoring(false)
+    }
+  }
+
   const configChanged = intervalHours !== savedHours || maxCopies !== savedMax
 
   return (
@@ -657,13 +696,17 @@ function BackupSection({ settings: s }) {
 
         {/* ── Acciones manuales ── */}
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" onClick={handleBackupNow} disabled={loadingNow}>
+          <Button size="sm" variant="outline" onClick={handleBackupNow} disabled={loadingNow || restoring}>
             <Database className="mr-1.5 h-3.5 w-3.5" />
             {loadingNow ? 'Respaldando...' : 'Respaldar ahora'}
           </Button>
-          <Button size="sm" variant="outline" onClick={handleExport} disabled={loadingExport}>
+          <Button size="sm" variant="outline" onClick={handleExport} disabled={loadingExport || restoring}>
             <Download className="mr-1.5 h-3.5 w-3.5" />
             {loadingExport ? 'Exportando...' : 'Exportar a archivo…'}
+          </Button>
+          <Button size="sm" variant="outline" onClick={handleRestoreExternal} disabled={restoring || loadingNow}>
+            <Download className="mr-1.5 h-3.5 w-3.5 rotate-180" />
+            {restoring ? 'Restaurando...' : 'Restaurar desde archivo…'}
           </Button>
         </div>
 
@@ -682,6 +725,7 @@ function BackupSection({ settings: s }) {
                       <th className="px-3 py-2 text-left font-medium text-muted-foreground">Archivo</th>
                       <th className="px-3 py-2 text-left font-medium text-muted-foreground">Fecha</th>
                       <th className="px-3 py-2 text-right font-medium text-muted-foreground">Tamaño</th>
+                      <th className="px-3 py-2" />
                     </tr>
                   </thead>
                   <tbody>
@@ -690,6 +734,16 @@ function BackupSection({ settings: s }) {
                         <td className="px-3 py-1.5 font-mono text-muted-foreground truncate max-w-[220px]">{b.filename}</td>
                         <td className="px-3 py-1.5">{fmtDate(b.createdAt)}</td>
                         <td className="px-3 py-1.5 text-right">{fmtBytes(b.size)}</td>
+                        <td className="px-3 py-1.5 text-right">
+                          <button
+                            type="button"
+                            disabled={restoring}
+                            onClick={() => setConfirmRestore(b.path)}
+                            className="text-primary hover:underline disabled:opacity-40"
+                          >
+                            Restaurar
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -698,6 +752,33 @@ function BackupSection({ settings: s }) {
             )
           }
         </div>
+
+        {/* ── Diálogo de confirmación de restauración ── */}
+        <Dialog open={!!confirmRestore} onOpenChange={(o) => { if (!o) setConfirmRestore(null) }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>¿Restaurar este respaldo?</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              Se guardará una copia de seguridad del estado actual y luego se reemplazará
+              la base de datos con el archivo seleccionado. <strong>La app se reiniciará automáticamente.</strong>
+            </p>
+            <p className="text-xs font-mono bg-muted rounded px-2 py-1 break-all">
+              {confirmRestore?.split('/').pop() ?? confirmRestore}
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" size="sm" onClick={() => setConfirmRestore(null)}>Cancelar</Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={restoring}
+                onClick={() => confirmRestore && handleRestoreFromPath(confirmRestore)}
+              >
+                {restoring ? 'Restaurando...' : 'Sí, restaurar'}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
 
       </CardContent>
     </Card>

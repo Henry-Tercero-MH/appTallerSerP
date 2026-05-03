@@ -14,6 +14,7 @@ export const dailyReportSchema = z.object({
     subtotal:      z.number(),
     tax_amount:    z.number(),
     total:         z.number(),
+    cash_total:    z.number().default(0),
     currency_code: z.string(),
   }).nullable(),
   topProducts: z.array(z.object({

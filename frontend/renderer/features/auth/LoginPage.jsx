@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -8,7 +9,7 @@ import { AlertCircle, LogIn } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card } from '@/components/ui/card'
 
 import { useAuthContext } from './AuthContext'
 import { useBusinessSettings } from '@/hooks/useSettings'
@@ -30,6 +31,16 @@ export default function LoginPage() {
   const { name: appName, logo } = useBusinessSettings()
   const [authError, setAuthError] = useState(/** @type {string | null} */ (null))
   const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    if (localStorage.getItem('db_just_restored')) {
+      localStorage.removeItem('db_just_restored')
+      toast.success('Base de datos restaurada exitosamente', {
+        description: 'Ingresa para continuar.',
+        duration: 6000,
+      })
+    }
+  }, [])
 
   const form = useForm({
     resolver: zodResolver(loginSchema),
@@ -127,10 +138,8 @@ export default function LoginPage() {
                 </Button>
               </form>
 
-              <p className="mt-6 border-t pt-4 text-center text-xs text-muted-foreground">
-                Admin: <span className="font-medium text-foreground">admin@taller.local</span>
-                {' / '}
-                <span className="font-medium text-foreground">admin123</span>
+              <p className="mt-6 border-t pt-4 text-center text-xs text-muted-foreground/60">
+                &copy; {new Date().getFullYear()} Mangueras del Sur. Todos los derechos reservados.
               </p>
             </div>
           </div>

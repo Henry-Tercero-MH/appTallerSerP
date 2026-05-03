@@ -36,7 +36,7 @@ const PAYMENT_LABELS = {
 /** Dimensiones del preview según el tamaño de papel configurado */
 const PAPER_CONFIG = {
   'thermal-80':  { dialogCls: 'max-w-xs',  previewWidth: '302px', fontSize: '11px', padding: '8px'  },
-  'half-letter': { dialogCls: 'max-w-xl',  previewWidth: '528px', fontSize: '12px', padding: '16px' },
+  'half-letter': { dialogCls: 'max-w-lg',  previewWidth: '460px', fontSize: '13px', padding: '14px' },
   'letter':      { dialogCls: 'max-w-3xl', previewWidth: '720px', fontSize: '13px', padding: '20px' },
 }
 
@@ -48,34 +48,45 @@ export function ReceiptModal({ data, business, taxEnabled = false, onClose }) {
   async function handlePrint() {
     const content = receiptRef.current?.innerHTML ?? ''
 
+    const isHalf   = paperSize === 'half-letter'
+    const isLetter = paperSize === 'letter'
+
     const pageSizeCss = {
-      'half-letter': '@page { size: 5.5in 8.5in; margin: 12mm 15mm; }',
+      'half-letter': '@page { size: 5.5in 8.5in; margin: 8mm 12mm; }',
       'letter':      '@page { size: 8.5in 11in;  margin: 15mm 20mm; }',
       'thermal-80':  '@page { size: 80mm auto;   margin: 2mm 3mm; }',
-    }[paperSize] ?? '@page { size: 5.5in 8.5in; margin: 12mm 15mm; }'
+    }[paperSize] ?? '@page { size: 5.5in 8.5in; margin: 8mm 12mm; }'
+
+    const baseFontSize  = isHalf ? '13px' : isLetter ? '13px' : '11px'
+    const lgFontSize    = isHalf ? '20px' : isLetter ? '18px' : '16px'
+    const smFontSize    = isHalf ? '11px' : isLetter ? '11px' : '10px'
+    const grandFontSize = isHalf ? '17px' : isLetter ? '16px' : '15px'
+    const imgSize       = isHalf ? 'max-width:110px;max-height:80px' : 'max-width:90px;max-height:70px'
 
     const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"/>
 <style>
   ${pageSizeCss}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Courier New', monospace; font-size: 12px; color: #000; }
+  body { font-family: 'Courier New', monospace; font-size: ${baseFontSize}; color: #000; }
   .receipt { width: 100%; max-width: 100%; }
-  .receipt-center { text-align: center; margin-bottom: 8px; }
+  .receipt-center { text-align: center; margin-bottom: 10px; }
   .receipt-bold { font-weight: bold; }
-  .receipt-lg { font-size: 16px; }
-  .receipt-sm { font-size: 10px; color: #444; }
-  .receipt-divider { border-top: 1px dashed #000; margin: 6px 0; }
+  .receipt-lg { font-size: ${lgFontSize}; letter-spacing: 0.02em; }
+  .receipt-sm { font-size: ${smFontSize}; color: #444; }
+  .receipt-divider { border-top: 1px dashed #000; margin: 7px 0; }
+  .receipt-divider-solid { border-top: 1.5px solid #000; margin: 7px 0; }
   .receipt-row { display: flex; justify-content: space-between; padding: 1px 0; }
-  .receipt-row-head { display: flex; justify-content: space-between; font-weight: bold; font-size: 10px; border-bottom: 1px solid #000; padding-bottom: 2px; margin-bottom: 2px; }
+  .receipt-row-head { display: flex; justify-content: space-between; font-weight: bold; font-size: ${smFontSize}; border-bottom: 1.5px solid #000; padding-bottom: 3px; margin-bottom: 3px; }
   .receipt-item-name { flex: 1; word-break: break-word; }
-  .receipt-item-qty   { width: 28px; text-align: center; }
-  .receipt-item-price { width: 64px; text-align: right; }
-  .receipt-item-sub   { width: 72px; text-align: right; }
+  .receipt-item-qty   { width: 32px; text-align: center; }
+  .receipt-item-price { width: 72px; text-align: right; }
+  .receipt-item-sub   { width: 80px; text-align: right; }
+  .receipt-totals-block { margin-left: auto; width: 55%; }
   .receipt-total-row { display: flex; justify-content: space-between; padding: 2px 0; }
-  .receipt-grand { display: flex; justify-content: space-between; font-size: 15px; font-weight: bold; border-top: 2px solid #000; padding-top: 5px; margin-top: 3px; }
-  .receipt-footer { text-align: center; margin-top: 12px; font-size: 11px; }
-  img { max-width: 90px; max-height: 70px; }
+  .receipt-grand { display: flex; justify-content: space-between; font-size: ${grandFontSize}; font-weight: bold; border-top: 2px solid #000; padding-top: 6px; margin-top: 4px; }
+  .receipt-footer { text-align: center; margin-top: 16px; font-size: ${smFontSize}; line-height: 1.6; }
+  img { ${imgSize}; }
 </style>
 </head><body>${content}</body></html>`
 
@@ -180,38 +191,41 @@ export function ReceiptModal({ data, business, taxEnabled = false, onClose }) {
 
             <div className="receipt-divider" />
 
-            {/* Totales */}
-            {discountAmount > 0 && (
-              <>
-                <div className="receipt-total-row">
-                  <span>Bruto:</span>
-                  <span>{fmtMoney(data.items.reduce((s, i) => s + i.price * i.qty, 0))}</span>
-                </div>
-                <div className="receipt-total-row">
-                  <span>Descuento{data.discount?.type === 'percent' ? ` (${data.discount.value}%)` : ''}:</span>
-                  <span>-{fmtMoney(discountAmount)}</span>
-                </div>
-              </>
-            )}
-            <div className="receipt-total-row">
-              <span>Subtotal:</span>
-              <span>{fmtMoney(data.subtotal)}</span>
-            </div>
-            {taxEnabled && (
+            {/* Totales alineados a la derecha */}
+            <div className="receipt-totals-block">
+              {discountAmount > 0 && (
+                <>
+                  <div className="receipt-total-row">
+                    <span>Bruto:</span>
+                    <span>{fmtMoney(data.items.reduce((s, i) => s + /** @type {number} */ (i.price) * i.qty, 0))}</span>
+                  </div>
+                  <div className="receipt-total-row">
+                    <span>Descuento{data.discount?.type === 'percent' ? ` (${data.discount.value}%)` : ''}:</span>
+                    <span>-{fmtMoney(discountAmount)}</span>
+                  </div>
+                </>
+              )}
               <div className="receipt-total-row">
-                <span>IVA ({Math.round(data.taxRate * 100)}%):</span>
-                <span>{fmtMoney(data.taxAmount)}</span>
+                <span>Subtotal:</span>
+                <span>{fmtMoney(data.subtotal)}</span>
               </div>
-            )}
-            <div className="receipt-total-row receipt-grand">
-              <span>TOTAL:</span>
-              <span>{fmtMoney(data.total)}</span>
+              {taxEnabled && (
+                <div className="receipt-total-row">
+                  <span>IVA ({Math.round(data.taxRate * 100)}%):</span>
+                  <span>{fmtMoney(data.taxAmount)}</span>
+                </div>
+              )}
+              <div className="receipt-total-row receipt-grand">
+                <span>TOTAL:</span>
+                <span>{fmtMoney(data.total)}</span>
+              </div>
             </div>
 
             {/* Footer */}
-            <div className="receipt-divider" />
+            <div className="receipt-divider" style={{ marginTop: '10px' }} />
             <div className="receipt-footer">
               <div className="receipt-bold">¡Gracias por su compra!</div>
+              <div style={{ marginTop: '4px' }}>© {new Date().getFullYear()} {/** negocio */}</div>
             </div>
           </div>
         </div>

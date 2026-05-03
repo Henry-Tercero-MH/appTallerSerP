@@ -126,7 +126,9 @@ export default function AppLayout() {
                     `nav-item${isActive ? ' nav-item-active' : ''}${collapsed ? ' nav-item-collapsed' : ''}`
                   }
                 >
-                  <Icon className="nav-icon" />
+                  <span className="relative">
+                    <Icon className="nav-icon" />
+                  </span>
                   {!collapsed && <span className="nav-label">{label}</span>}
                 </NavLink>
               ))}

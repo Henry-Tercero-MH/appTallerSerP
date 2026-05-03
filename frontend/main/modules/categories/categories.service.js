@@ -14,6 +14,7 @@ export function createCategoriesService(repo) {
       const trimmed = (name ?? '').trim()
       if (!trimmed) throw new Error('El nombre de la categoría es requerido')
       repo.update(id, trimmed)
+      return { id, name: trimmed, is_active: 1 }
     },
 
     setActive(id, active) {

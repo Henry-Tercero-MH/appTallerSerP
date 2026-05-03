@@ -241,6 +241,12 @@ export interface PurchaseReceiveInput {
   orderId: number
   role: string
   items: { id: number; qty_received: number }[]
+  updatePrices?: boolean
+}
+
+export interface PurchaseItemVariation extends PurchaseItemRow {
+  current_cost: number | null
+  has_variation: boolean
 }
 
 export interface CashSessionRow {
@@ -408,7 +414,7 @@ export interface RendererApi {
     create(saleData: SaleInput):                     Promise<IpcResponse<SaleCreatedResult>>
     getById(id: number):                             Promise<IpcResponse<SaleWithItems | null>>
     list(opts?: SaleListOptions):                    Promise<IpcResponse<SaleListResult>>
-    dailyReport():                                   Promise<IpcResponse<unknown>>
+    dailyReport():                                   Promise<IpcResponse<{ summary: { sale_count: number; subtotal: number; tax_amount: number; total: number; cash_total: number; currency_code: string } | null; topProducts: unknown[] }>>
     void(input: VoidSaleInput):                      Promise<IpcResponse<{ id: number }>>
   }
   audit: {
@@ -426,6 +432,7 @@ export interface RendererApi {
     get(id: number):                                      Promise<IpcResponse<PurchaseOrderDetail>>
     create(input: PurchaseCreateInput):                   Promise<IpcResponse<PurchaseOrderRow>>
     markSent(id: number, role: string):                   Promise<IpcResponse<PurchaseOrderRow>>
+    priceVariations(input: { orderId: number; role: string }): Promise<IpcResponse<PurchaseItemVariation[]>>
     receive(input: PurchaseReceiveInput):                 Promise<IpcResponse<PurchaseOrderRow>>
     cancel(id: number, role: string):                     Promise<IpcResponse<PurchaseOrderRow>>
   }
@@ -441,6 +448,8 @@ export interface RendererApi {
     list():                                              Promise<IpcResponse<ReceivableRow[]>>
     get(id: number):                                     Promise<IpcResponse<ReceivableDetail>>
     summary():                                           Promise<IpcResponse<ReceivableSummary>>
+    paymentsToday():                                     Promise<IpcResponse<{ total: number; count: number }>>
+    paymentsRange(range: { from: string; to: string }): Promise<IpcResponse<{ total: number; count: number }>>
     create(input: ReceivableCreateInput):                Promise<IpcResponse<ReceivableRow>>
     applyPayment(input: ApplyPaymentInput):              Promise<IpcResponse<ReceivableRow>>
     cancel(id: number):                                  Promise<IpcResponse<ReceivableRow>>

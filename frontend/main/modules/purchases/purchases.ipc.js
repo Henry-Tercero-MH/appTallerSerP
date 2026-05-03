@@ -15,6 +15,7 @@ export function registerPurchasesIpc(service) {
   ipcMain.handle('purchases:get',         wrap((_e, id) => service.getOrder(id)))
   ipcMain.handle('purchases:create',      wrap((_e, input) => service.createOrder(input)))
   ipcMain.handle('purchases:mark-sent',   wrap((_e, id, role) => service.markSent(id, role)))
-  ipcMain.handle('purchases:receive',     wrap((_e, input) => service.receiveOrder(input)))
+  ipcMain.handle('purchases:price-variations', wrap((_e, input) => service.priceVariations(input)))
+  ipcMain.handle('purchases:receive',          wrap((_e, input) => service.receiveOrder(input)))
   ipcMain.handle('purchases:cancel',      wrap((_e, id, role) => service.cancelOrder(id, role)))
 }

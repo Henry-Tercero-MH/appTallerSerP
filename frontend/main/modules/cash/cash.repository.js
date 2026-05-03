@@ -65,8 +65,27 @@ export function createCashRepository(db) {
       `SELECT COALESCE(SUM(total), 0) AS total
          FROM sales
         WHERE status = 'active'
+          AND payment_method != 'credit'
           AND date >= (SELECT opened_at FROM cash_sessions WHERE id = ?)
           AND (? IS NULL OR date < ?)` // closed_at o NULL si está abierta
+    ),
+    receivablePaymentsForSession: db.prepare(
+      `SELECT COALESCE(SUM(amount), 0) AS total
+         FROM receivable_payments
+        WHERE created_at >= (SELECT opened_at FROM cash_sessions WHERE id = ?)
+          AND (? IS NULL OR created_at < ?)`
+    ),
+    salesTotalToday: db.prepare(
+      `SELECT COALESCE(SUM(total), 0) AS total
+         FROM sales
+        WHERE status = 'active'
+          AND payment_method != 'credit'
+          AND DATE(date, 'localtime') = DATE('now', 'localtime')`
+    ),
+    receivablePaymentsTotalToday: db.prepare(
+      `SELECT COALESCE(SUM(amount), 0) AS total
+         FROM receivable_payments
+        WHERE DATE(created_at, 'localtime') = DATE('now', 'localtime')`
     ),
   }
 
@@ -115,13 +134,36 @@ export function createCashRepository(db) {
     },
 
     /**
-     * Suma de ventas activas durante la sesión.
+     * Suma de ventas activas (no crédito) durante la sesión.
      * @param {number} sessionId
      * @param {string|null} closedAt
      * @returns {number}
      */
     salesTotal(sessionId, closedAt) {
       const row = /** @type {{ total: number }} */ (stmts.salesTotalForSession.get(sessionId, closedAt, closedAt))
+      return row?.total ?? 0
+    },
+
+    /**
+     * Suma de abonos a cuentas por cobrar durante la sesión.
+     * @param {number} sessionId
+     * @param {string|null} closedAt
+     * @returns {number}
+     */
+    receivablePaymentsTotal(sessionId, closedAt) {
+      const row = /** @type {{ total: number }} */ (stmts.receivablePaymentsForSession.get(sessionId, closedAt, closedAt))
+      return row?.total ?? 0
+    },
+
+    /** Suma de ventas activas (no crédito) del día de hoy. */
+    salesTotalToday() {
+      const row = /** @type {{ total: number }} */ (stmts.salesTotalToday.get())
+      return row?.total ?? 0
+    },
+
+    /** Suma de abonos CxC del día de hoy. */
+    receivablePaymentsTodayTotal() {
+      const row = /** @type {{ total: number }} */ (stmts.receivablePaymentsTotalToday.get())
       return row?.total ?? 0
     },
   }

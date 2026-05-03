@@ -79,12 +79,13 @@ const api = {
   },
 
   purchases: {
-    list:       ()       => ipcRenderer.invoke('purchases:list'),
-    get:        (id)     => ipcRenderer.invoke('purchases:get', id),
-    create:     (input)  => ipcRenderer.invoke('purchases:create', input),
-    markSent:   (id, role)   => ipcRenderer.invoke('purchases:mark-sent', id, role),
-    receive:    (input)  => ipcRenderer.invoke('purchases:receive', input),
-    cancel:     (id, role)   => ipcRenderer.invoke('purchases:cancel', id, role),
+    list:            ()          => ipcRenderer.invoke('purchases:list'),
+    get:             (id)        => ipcRenderer.invoke('purchases:get', id),
+    create:          (input)     => ipcRenderer.invoke('purchases:create', input),
+    markSent:        (id, role)  => ipcRenderer.invoke('purchases:mark-sent', id, role),
+    priceVariations: (input)     => ipcRenderer.invoke('purchases:price-variations', input),
+    receive:         (input)     => ipcRenderer.invoke('purchases:receive', input),
+    cancel:          (id, role)  => ipcRenderer.invoke('purchases:cancel', id, role),
   },
 
   cash: {
@@ -114,6 +115,7 @@ const api = {
     listBackups:        () => ipcRenderer.invoke('db:list-backups'),
     setBackupInterval:  (hours, copies) => ipcRenderer.invoke('db:set-backup-interval', hours, copies),
     getPath:            () => ipcRenderer.invoke('db:get-path'),
+    restore:            (filePath) => ipcRenderer.invoke('db:restore', filePath),
   },
 
   expenses: {
@@ -140,13 +142,15 @@ const api = {
   },
 
   receivables: {
-    list:         ()       => ipcRenderer.invoke('receivables:list'),
-    get:          (id)     => ipcRenderer.invoke('receivables:get', id),
-    summary:      ()       => ipcRenderer.invoke('receivables:summary'),
-    create:       (input)  => ipcRenderer.invoke('receivables:create', input),
-    applyPayment: (input)  => ipcRenderer.invoke('receivables:apply-payment', input),
-    cancel:       (id)     => ipcRenderer.invoke('receivables:cancel', id),
-    byCustomer:   (id)     => ipcRenderer.invoke('receivables:by-customer', id),
+    list:          ()       => ipcRenderer.invoke('receivables:list'),
+    get:           (id)     => ipcRenderer.invoke('receivables:get', id),
+    summary:       ()       => ipcRenderer.invoke('receivables:summary'),
+    paymentsToday:  ()       => ipcRenderer.invoke('receivables:payments-today'),
+    paymentsRange:  (range)  => ipcRenderer.invoke('receivables:payments-range', range),
+    create:        (input)  => ipcRenderer.invoke('receivables:create', input),
+    applyPayment:  (input)  => ipcRenderer.invoke('receivables:apply-payment', input),
+    cancel:        (id)     => ipcRenderer.invoke('receivables:cancel', id),
+    byCustomer:    (id)     => ipcRenderer.invoke('receivables:by-customer', id),
   },
 
   printer: {

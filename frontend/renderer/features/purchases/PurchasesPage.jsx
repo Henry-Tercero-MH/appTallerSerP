@@ -1,12 +1,11 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
 import {
-  ShoppingBag, Truck, Plus, Eye, Ban, Send, PackageCheck,
-  RefreshCw, Pencil, Power, PowerOff,
+  ShoppingBag, Plus, Eye, Ban, Send, PackageCheck,
+  RefreshCw, AlertTriangle,
 } from 'lucide-react'
 
 import { PageHeader }     from '@/components/shared/PageHeader'
-import { MoneyDisplay }   from '@/components/shared/MoneyDisplay'
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { EmptyState }     from '@/components/shared/EmptyState'
 import { Button }         from '@/components/ui/button'
@@ -20,10 +19,13 @@ import {
   useSuppliers, usePurchaseOrders, usePurchaseOrder,
   useCreateOrder, useMarkSent, useReceiveOrder, useCancelOrder,
 } from '@/hooks/usePurchases'
+import { getPriceVariations } from '@/services/purchasesService'
 import { useProducts } from '@/hooks/useProducts'
 import { useAuthContext } from '@/features/auth/AuthContext'
 
+/** @param {string|null|undefined} s */
 const fmtDate  = (s) => s ? new Intl.DateTimeFormat('es-GT', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(s)) : '—'
+/** @param {number|null|undefined} n */
 const fmtMoney = (n) => new Intl.NumberFormat('es-GT', { style: 'currency', currency: 'GTQ' }).format(n ?? 0)
 
 const STATUS_LABEL = { draft: 'Borrador', sent: 'Enviada', received: 'Recibida', cancelled: 'Cancelada' }
@@ -50,14 +52,18 @@ function OrdersTab() {
   const markSentMut  = useMarkSent()
   const cancelMut    = useCancelOrder()
 
+  /** @param {number} id */
   async function handleMarkSent(id) {
+    if (!user) return
     try {
       await markSentMut.mutateAsync({ id, role: user.role })
       toast.success('Orden marcada como enviada')
     } catch (e) { toast.error(e instanceof Error ? e.message : 'Error') }
   }
 
+  /** @param {number} id */
   async function handleCancel(id) {
+    if (!user) return
     if (!confirm('¿Cancelar esta orden?')) return
     try {
       await cancelMut.mutateAsync({ id, role: user.role })
@@ -146,6 +152,9 @@ function OrdersTab() {
 
 // ── Modal: Nueva orden ───────────────────────────────────────────────────────
 
+/**
+ * @param {{ open: boolean, onClose: () => void, user: import('@/features/auth/useAuth').SessionUser|null }} props
+ */
 function NewOrderModal({ open, onClose, user }) {
   const [supplierId, setSupplierId] = useState('')
   const [notes, setNotes]           = useState('')
@@ -159,14 +168,17 @@ function NewOrderModal({ open, onClose, user }) {
     setItems(prev => [...prev, { productName: '', productCode: '', qtyOrdered: 1, unitCost: 0 }])
   }
 
+  /** @param {number} idx */
   function removeItem(idx) {
     setItems(prev => prev.filter((_, i) => i !== idx))
   }
 
+  /** @param {number} idx @param {string} field @param {unknown} value */
   function updateItem(idx, field, value) {
     setItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: value } : it))
   }
 
+  /** @param {number} idx @param {string|number} productId */
   function selectProduct(idx, productId) {
     const prod = products.find(p => p.id === Number(productId))
     if (prod) {
@@ -177,8 +189,10 @@ function NewOrderModal({ open, onClose, user }) {
     }
   }
 
+  /** @param {import('react').FormEvent} e */
   async function handleSubmit(e) {
     e.preventDefault()
+    if (!user) return
     if (!supplierId) { toast.error('Selecciona un proveedor'); return }
     if (items.length === 0) { toast.error('Agrega al menos un producto'); return }
     try {
@@ -279,6 +293,7 @@ function NewOrderModal({ open, onClose, user }) {
 
 // ── Modal: Detalle de orden ──────────────────────────────────────────────────
 
+/** @param {{ id: number|null, onClose: () => void }} props */
 function OrderDetailModal({ id, onClose }) {
   const { data, isLoading } = usePurchaseOrder(id)
 
@@ -339,34 +354,58 @@ function OrderDetailModal({ id, onClose }) {
 
 // ── Modal: Recibir mercadería ────────────────────────────────────────────────
 
+/**
+ * @param {{ id: number|null, onClose: () => void, user: import('@/features/auth/useAuth').SessionUser|null }} props
+ */
 function ReceiveOrderModal({ id, onClose, user }) {
   const { data, isLoading } = usePurchaseOrder(id)
-  const [received, setReceived] = useState(/** @type {Record<number, number>} */ ({}))
+  const [received,      setReceived]      = useState(/** @type {Record<number, number>} */ ({}))
+  const [updatePrices,  setUpdatePrices]  = useState(false)
+  const [variations,    setVariations]    = useState(/** @type {import('@/types/api').PurchaseItemVariation[]} */ ([]))
   const mut = useReceiveOrder()
 
-  function initReceived() {
-    if (data?.items) {
+  // Cargar variaciones de precio cuando se abre el modal
+  useEffect(() => {
+    if (!id || !user) return
+    setUpdatePrices(false)
+    setVariations([])
+    getPriceVariations({ orderId: id, role: user.role })
+      .then(v => setVariations(v))
+      .catch(() => {})
+  }, [id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** @param {import('react').FocusEvent} _ */
+  function initReceived(_) {
+    if (data?.items && Object.keys(received).length === 0) {
+      /** @type {Record<number, number>} */
       const init = {}
       data.items.forEach(item => { init[item.id] = item.qty_ordered })
       setReceived(init)
     }
   }
 
+  /** @param {import('react').FormEvent} e */
   async function handleSubmit(e) {
     e.preventDefault()
+    if (!user) return
     try {
       await mut.mutateAsync({
-        orderId: id,
-        role:    user.role,
-        items:   Object.entries(received).map(([itemId, qty]) => ({
+        orderId:      id ?? 0,
+        role:         user.role,
+        updatePrices,
+        items: Object.entries(received).map(([itemId, qty]) => ({
           id:           Number(itemId),
           qty_received: Number(qty),
         })),
       })
-      toast.success('Mercadería recibida y stock actualizado')
+      toast.success(updatePrices
+        ? 'Mercadería recibida — stock y costos actualizados'
+        : 'Mercadería recibida — stock actualizado')
       onClose()
     } catch (err) { toast.error(err instanceof Error ? err.message : 'Error') }
   }
+
+  const hasVariations = variations.some(v => v.has_variation)
 
   return (
     <Dialog open={!!id} onOpenChange={(o) => { if (!o) onClose() }}>
@@ -382,22 +421,51 @@ function ReceiveOrderModal({ id, onClose, user }) {
           : data && (
             <form onSubmit={handleSubmit} className="space-y-3">
               <p className="text-xs text-muted-foreground">Ajusta las cantidades recibidas. Al confirmar se sumará al stock.</p>
-              {data.items.map(item => (
-                <div key={item.id} className="po-receive-row">
-                  <span className="po-receive-name">
-                    {item.product_code && <span className="inv-code mr-1">{item.product_code}</span>}
-                    {item.product_name}
-                  </span>
-                  <span className="po-receive-ordered">Ord: {item.qty_ordered}</span>
-                  <Input
-                    type="number" min="0" step="0.01"
-                    className="po-receive-input"
-                    value={received[item.id] ?? item.qty_ordered}
-                    onFocus={() => { if (Object.keys(received).length === 0) initReceived() }}
-                    onChange={e => setReceived(prev => ({ ...prev, [item.id]: parseFloat(e.target.value) || 0 }))}
+
+              {data.items.map(item => {
+                const variation = variations.find(v => v.id === item.id)
+                return (
+                  <div key={item.id} className="po-receive-row">
+                    <span className="po-receive-name">
+                      {item.product_code && <span className="inv-code mr-1">{item.product_code}</span>}
+                      {item.product_name}
+                      {variation?.has_variation && (
+                        <span className="ml-2 text-amber-600 text-xs font-medium">
+                          costo anterior: {fmtMoney(variation.current_cost ?? 0)} → {fmtMoney(item.unit_cost)}
+                        </span>
+                      )}
+                    </span>
+                    <span className="po-receive-ordered">Ord: {item.qty_ordered}</span>
+                    <Input
+                      type="number" min="0" step="0.01"
+                      className="po-receive-input"
+                      value={received[item.id] ?? item.qty_ordered}
+                      onFocus={initReceived}
+                      onChange={e => setReceived(prev => ({ ...prev, [item.id]: parseFloat(e.target.value) || 0 }))}
+                    />
+                  </div>
+                )
+              })}
+
+              {hasVariations && (
+                <label className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={updatePrices}
+                    onChange={e => setUpdatePrices(e.target.checked)}
                   />
-                </div>
-              ))}
+                  <span className="text-sm">
+                    <span className="flex items-center gap-1 font-medium text-amber-700">
+                      <AlertTriangle className="h-3.5 w-3.5" /> Actualizar precio de costo en catálogo
+                    </span>
+                    <span className="text-xs text-amber-600 mt-0.5 block">
+                      Se detectaron variaciones de precio. Marca esta opción para actualizar el costo de los productos afectados.
+                    </span>
+                  </span>
+                </label>
+              )}
+
               <DialogFooter className="gap-2 pt-2">
                 <Button type="button" variant="outline" onClick={onClose}>Cancelar</Button>
                 <Button type="submit" disabled={mut.isPending}>

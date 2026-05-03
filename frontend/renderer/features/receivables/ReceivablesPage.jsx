@@ -21,7 +21,9 @@ import {
 } from '@/hooks/useReceivables'
 import { useAuthContext } from '@/features/auth/AuthContext'
 
+/** @param {string|null|undefined} s */
 const fmtDate  = (s) => s ? new Intl.DateTimeFormat('es-GT', { dateStyle: 'medium' }).format(new Date(s + 'T00:00:00')) : '—'
+/** @param {number|null|undefined} n */
 const fmtMoney = (n) => new Intl.NumberFormat('es-GT', { style: 'currency', currency: 'GTQ' }).format(n ?? 0)
 
 const STATUS_LABEL = { pending: 'Pendiente', partial: 'Parcial', paid: 'Pagada', cancelled: 'Cancelada' }
@@ -41,6 +43,7 @@ export default function ReceivablesPage() {
   const [newModal, setNewModal]         = useState(false)
   const [detailId, setDetailId]         = useState(/** @type {number|null} */ (null))
   const [payId, setPayId]               = useState(/** @type {number|null} */ (null))
+  const [cancelId, setCancelId]         = useState(/** @type {number|null} */ (null))
 
   const { data: list = [], isLoading, refetch, isFetching } = useReceivables()
   const { data: summary } = useReceivablesSummary()
@@ -57,12 +60,16 @@ export default function ReceivablesPage() {
     return matchStatus && matchSearch
   })
 
-  async function handleCancel(id) {
-    if (!confirm('¿Cancelar esta cuenta por cobrar?')) return
+  async function handleCancel() {
+    if (!cancelId) return
     try {
-      await cancelMut.mutateAsync(id)
+      await cancelMut.mutateAsync(cancelId)
       toast.success('Cuenta cancelada')
-    } catch (e) { toast.error(e instanceof Error ? e.message : 'Error') }
+      setCancelId(null)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Error')
+      setCancelId(null)
+    }
   }
 
   const isOverdue = (r) => r.due_date && r.due_date < new Date().toISOString().slice(0, 10) && ['pending', 'partial'].includes(r.status)
@@ -180,7 +187,7 @@ export default function ReceivablesPage() {
                               </button>
                             )}
                             {['pending', 'partial'].includes(r.status) && (
-                              <button className="sh-action-btn sh-void-btn" title="Cancelar" onClick={() => handleCancel(r.id)}>
+                              <button className="sh-action-btn sh-void-btn" title="Cancelar" onClick={() => setCancelId(r.id)}>
                                 <Ban className="h-3.5 w-3.5" />
                               </button>
                             )}
@@ -198,6 +205,45 @@ export default function ReceivablesPage() {
       <NewReceivableModal open={newModal} onClose={() => setNewModal(false)} user={user} />
       <ReceivableDetailModal id={detailId} onClose={() => setDetailId(null)} />
       <PaymentModal id={payId} onClose={() => setPayId(null)} user={user} />
+
+      {/* Confirmación de cancelación */}
+      <Dialog open={!!cancelId} onOpenChange={(o) => { if (!o) setCancelId(null) }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-600">
+              <Ban className="h-5 w-5" /> Cancelar cuenta por cobrar
+            </DialogTitle>
+            <DialogDescription>
+              Esta acción cancela la cuenta y no puede deshacerse.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 space-y-2">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+              <p>
+                <strong>El inventario NO se restaura automáticamente.</strong>{' '}
+                Los productos ya fueron entregados al cliente al crear esta cuenta.
+              </p>
+            </div>
+            <p className="pl-6 text-amber-700">
+              Si el cliente devuelve mercancía, registra la entrada desde{' '}
+              <strong>Inventario → Ajustes</strong>.
+            </p>
+          </div>
+          <DialogFooter className="gap-2 pt-1">
+            <Button variant="outline" onClick={() => setCancelId(null)}>
+              Atrás
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={cancelMut.isPending}
+              onClick={handleCancel}
+            >
+              {cancelMut.isPending ? 'Cancelando...' : 'Confirmar cancelación'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

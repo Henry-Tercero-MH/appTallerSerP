@@ -1,212 +1,290 @@
-# TallerPOS — Sistema de Punto de Venta para Taller Mecánico (Desktop Offline)
+# GestorERP — Mangueras del Sur
 
-> Aplicación de escritorio offline construida con Electron + React + SQLite.
-> Corre en cualquier PC con Windows sin internet, sin servidores externos, sin Docker.
+> Sistema ERP de escritorio offline para talleres y negocios pequeños.  
+> Electron 30 + React 18 + SQLite (better-sqlite3). Corre en Windows/Linux sin internet.
 
 ---
 
-## Arquitectura General
+## Inicio rápido
 
-```text
-[Aplicación de Escritorio (Electron)]
-│
-├── Proceso Main (Node.js)
-│   ├── Ciclo de vida de la app (main/index.js)
-│   ├── Base de datos local SQLite (main/database/)
-│   ├── Sistema de migraciones versionadas (main/database/migrator.js)
-│   └── Módulos IPC por dominio (main/modules/)
-│       ├── settings/   → configuración del negocio
-│       ├── products/   → inventario CRUD completo
-│       ├── customers/  → directorio de clientes
-│       └── sales/      → ventas, historial, reportes
-│
-├── IPC Bridge (Preload)
-│   └── main/preload.js → expone window.api al renderer (contextIsolation)
-│
-└── Proceso Renderer (React + Vite + Tailwind + shadcn/ui)
-    └── renderer/ → interfaz de usuario reactiva
+```bash
+cd frontend
+npm install                              # instala deps + compila better-sqlite3
+npm run dev                              # Vite + Electron en modo desarrollo
+npm run build                            # genera instalador en release/
 ```
 
+> **Error `cabecera ELF inválida`** → ejecuta `npx electron-rebuild -f -w better-sqlite3`  
+> (ocurre si `postinstall` falló al instalar)
+
 ---
 
-## Base de Datos (SQLite)
+## Arquitectura
 
-Se usa **SQLite** vía `better-sqlite3`. El archivo `taller_pos.sqlite` se crea automáticamente en:
-- **Windows:** `C:\Users\<usuario>\AppData\Roaming\TallerPOS\`
-- **Linux:** `~/.config/TallerPOS/`
+```
+GestorERP/
+├── main/                   Proceso Node.js (Electron main)
+│   ├── index.js            Punto de entrada: createWindow + bootstrap()
+│   ├── preload.js          Bridge IPC seguro → expone window.api
+│   ├── ipc/register.js     Bootstrap único: DB + migraciones + registro de todos los módulos IPC
+│   ├── database/
+│   │   ├── connection.js   Singleton SQLite con PRAGMAs (WAL, FK, journal_mode=NORMAL)
+│   │   ├── migrator.js     Runner con checksum SHA-256 (nunca edites una migración ya aplicada)
+│   │   ├── backup.js       Hot Backup automático (SQLite API) con scheduler configurable
+│   │   └── migrations/     001–023 archivos SQL versionados
+│   └── modules/            Un directorio por dominio, cada uno con:
+│       └── <dominio>/      *.repository.js · *.service.js · *.ipc.js
+│
+└── renderer/               Proceso React (Vite)
+    ├── main.jsx            Entry point: QueryProvider + AuthProvider + RouterProvider
+    ├── router/index.jsx    createHashRouter (hash requerido para Electron)
+    ├── layouts/            AppLayout · AuthLayout · ProtectedLayout · AdminRoute
+    ├── features/           Una carpeta por pantalla/dominio
+    ├── hooks/              React Query hooks por dominio
+    ├── services/           Capa IPC + validación Zod
+    ├── schemas/            Schemas Zod alineados a la DB
+    ├── stores/             Zustand (cartStore)
+    └── lib/                constants · pricing · reports · brand · themes · utils
+```
 
-Los datos persisten aunque se actualice el ejecutable.
+**Flujo de datos:**  
+`Renderer (hook) → service (Zod) → window.api (preload) → IPC → main service → repository → SQLite`
 
-### Migraciones
+**Respuesta IPC estándar:**  
+`{ ok: true, data: T }` | `{ ok: false, error: { code: string, message: string } }`
 
-Las migraciones corren automáticamente al iniciar la app, en orden, con checksum SHA-256 para detectar manipulaciones. Nunca edites una migración ya aplicada — crea una nueva.
+---
 
-| Archivo | Contenido |
-|---------|-----------|
-| `001_init.sql` | Tablas base: `products`, `sales`, `sale_items` + 5 productos semilla |
-| `002_settings.sql` | Tabla `settings` (moneda, impuesto, datos del negocio) |
-| `003_sales_tax_snapshot.sql` | Columnas snapshot de impuesto en `sales` |
-| `004_customers.sql` | Tabla `customers` + columnas snapshot en `sales` |
-| `005_products_extended.sql` | Columnas `category`, `brand`, `location`, `condition`, `min_stock`, `is_active` en `products` |
+## Base de Datos
+
+Archivo: `taller_pos.sqlite`  
+- **Windows:** `%APPDATA%\GestorERP\`  
+- **Linux:** `~/.config/GestorERP/`
+
+### Migraciones (001–023)
+
+| # | Archivo | Contenido |
+|---|---------|-----------|
+| 001 | `init.sql` | Tablas base: `products`, `sales`, `sale_items` + productos semilla |
+| 002 | `settings.sql` | Tabla `settings` (moneda, impuesto, datos del negocio) |
+| 003 | `sales_tax_snapshot.sql` | Columnas snapshot de impuesto en `sales` |
+| 004 | `customers.sql` | Tabla `customers` + snapshot en `sales`, Consumidor Final id=1 |
+| 005 | `products_extended.sql` | `category`, `brand`, `min_stock`, `is_active` en `products` |
+| 006 | `users.sql` | Tabla `users` con roles y contraseña hasheada |
+| 007 | `settings_extended.sql` | Configuraciones adicionales del negocio |
+| 008 | `settings_theme.sql` | Configuración de tema visual |
+| 009 | `sales_payment.sql` | `payment_method` y `client_type` en `sales` |
+| 010 | `sales_void_audit.sql` | Tabla `sale_voids`, `audit_log`, estado `voided` en `sales` |
+| 011 | `users_avatar.sql` | Columna `avatar` en `users` |
+| 012 | `cash_sessions.sql` | Tablas `cash_sessions` y `cash_movements` |
+| 013 | `purchases.sql` | Tablas `suppliers`, `purchase_orders`, `purchase_items` |
+| 014 | `receivables.sql` | Tablas `receivables` y `receivable_payments` |
+| 015 | `quotes.sql` | Tablas `quotes` y `quote_items` |
+| 016 | `sales_discount.sql` | `discount_type`, `discount_value`, `discount_amount` en `sales` |
+| 017 | `expenses.sql` | Tabla `expenses` (gastos del negocio) |
+| 018 | `returns.sql` | Tabla `returns` y `return_items` |
+| 019 | `stock_movements.sql` | Tabla `stock_movements` (bitácora de inventario) |
+| 020 | `backup_settings.sql` | Settings para backup automático |
+| 021 | `tax_enabled.sql` | Setting `tax_enabled` booleano |
+| 022 | `printer_settings.sql` | Settings de impresora (`default_printer`, `paper_size`) |
+| 023 | `categories.sql` | Tabla `categories` para productos |
 
 ---
 
 ## Módulos del Sistema
 
-| Módulo | Ruta | Estado | Descripción |
-|--------|------|--------|-------------|
-| Dashboard | `/` | Activo | KPIs del día, alertas de stock bajo, accesos rápidos |
-| POS / Facturación | `/ventas` | Activo | Carrito, descuentos, impuesto, método de pago |
-| Historial | `/historial` | Activo | Ventas paginadas, detalle con ítems, impresión de ticket |
-| Taller | `/taller` | Mock | UI base lista, lógica de órdenes de servicio pendiente |
-| Inventario | `/inventario` | Activo | CRUD completo conectado a SQLite, entradas/salidas de stock |
-| Clientes | `/clientes` | Activo | CRUD, NIT, búsqueda, Consumidor Final como fallback |
-| Reportes | `/reportes` | Activo | Ventas del día, subtotal/impuesto/total, top 5 productos |
+### Rutas y acceso
+
+| Ruta | Página | Acceso |
+|------|--------|--------|
+| `/` | Dashboard | Solo admin |
+| `/ventas` | Punto de Venta (POS) | Todos |
+| `/historial` | Historial de ventas | Todos |
+| `/inventario` | Inventario / Productos | Todos |
+| `/clientes` | Clientes | Solo admin |
+| `/reportes` | Reportes de ventas | Solo admin |
+| `/caja` | Caja (sesiones) | Solo admin |
+| `/compras` | Órdenes de compra | Solo admin |
+| `/cuentas-cobrar` | Cuentas por cobrar | Solo admin |
+| `/cotizaciones` | Cotizaciones | Solo admin |
+| `/gastos` | Gastos | Solo admin |
+| `/proveedores` | Proveedores | Solo admin |
+| `/usuarios` | Gestión de usuarios | Solo admin |
+| `/configuracion` | Configuración | Solo admin |
+| `/bitacora` | Bitácora/Auditoría | Solo admin |
+| `/taller` | Workshop (en desarrollo) | Todos |
+
+### Roles de usuario
+
+| Rol | Descripción |
+|-----|-------------|
+| `admin` | Acceso completo a todas las rutas y módulos |
+| `cashier` | Acceso a POS, historial e inventario |
+| `mechanic` | Acceso básico (POS, historial) |
+| `warehouse` | Acceso a inventario y almacén |
 
 ---
 
-## Estructura de Carpetas
+## Módulos Backend (main/modules)
 
-```text
-frontend/
-├── package.json              ← Scripts y dependencias
-├── vite.config.js            ← Vite + vite-plugin-electron + aliases @/
-│
-├── main/                     ← Proceso main de Electron (Node.js)
-│   ├── index.js              ← Punto de entrada: bootstrap() + createWindow()
-│   ├── preload.js            ← Puente IPC seguro → window.api
-│   ├── ipc/
-│   │   ├── register.js       ← Bootstrap: DB + migraciones + registro IPC
-│   │   └── response.js       ← Helper wrap() para envelope { ok, data/error }
-│   ├── database/
-│   │   ├── connection.js     ← Singleton SQLite con PRAGMAs (WAL, FK, NORMAL)
-│   │   ├── migrator.js       ← Runner de migraciones con checksum SHA-256
-│   │   └── migrations/       ← Archivos SQL versionados (001 a 005)
-│   └── modules/
-│       ├── settings/         ← settings.repository / service / ipc
-│       ├── products/         ← products.repository / service / ipc (CRUD + stock)
-│       ├── customers/        ← customers.repository / service / ipc
-│       └── sales/            ← sales.repository / service / ipc (+ daily report)
-│
-└── renderer/                 ← Proceso renderer (React)
-    ├── main.jsx              ← Entry point React
-    ├── App.jsx               ← QueryClient + AuthProvider + RouterProvider
-    ├── router/index.jsx      ← createHashRouter (hash requerido para Electron)
-    ├── layouts/
-    │   ├── AppLayout.jsx     ← Sidebar + navegación principal
-    │   ├── AuthLayout.jsx    ← Redirige a / si ya hay sesión activa
-    │   └── ProtectedLayout.jsx ← Redirige a /login si no hay sesión
-    ├── features/
-    │   ├── auth/             ← Login (sessionStorage), AuthContext
-    │   ├── dashboard/        ← SystemDashboard: KPIs + alertas + accesos rápidos
-    │   ├── pos/              ← POSPage: carrito de ventas
-    │   ├── sales/            ← SalesHistoryPage, SaleDetailDialog, ReportsPage
-    │   ├── clients/          ← ClientsPage, CustomerFormDialog
-    │   ├── warehouses/       ← InventoryPage, ProductForm, StockMovementModal
-    │   └── workshop/         ← WorkshopPage (mock, órdenes de servicio pendientes)
-    ├── hooks/                ← React Query hooks por dominio
-    │   ├── useProducts.js
-    │   ├── useCustomers.js
-    │   ├── useSales.js       ← incluye useDailyReport
-    │   └── useSettings.js
-    ├── services/             ← Capa IPC → validación Zod por dominio
-    │   ├── productsService.js
-    │   ├── customersService.js
-    │   ├── salesService.js
-    │   └── settingsService.js
-    ├── schemas/              ← Schemas Zod alineados a la DB real
-    └── lib/
-        ├── constants.js      ← ROUTES, APP_NAME, ROLES
-        └── mockData.js       ← Solo usado por auth (login temporal)
-```
+| Módulo | IPC base | Funciones principales |
+|--------|----------|-----------------------|
+| **settings** | `settings:*` | CRUD de configuraciones por clave/categoría, caché en memoria |
+| **categories** | `categories:*` | CRUD de categorías de productos |
+| **products** | `products:*` | CRUD + soft-delete + ajuste de stock + búsqueda |
+| **customers** | `customers:*` | CRUD + búsqueda + activar/desactivar |
+| **sales** | `sales:*` | Crear venta, historial paginado, reporte diario, reporte por rango, anular venta |
+| **users** | `users:*` | Login, CRUD, cambio de contraseña, avatar |
+| **audit** | `audit:*` | Listado paginado con filtros de bitácora |
+| **cash** | `cash:*` | Abrir/cerrar sesión, movimientos manuales, historial de sesiones |
+| **purchases** | `purchases:*` | Órdenes de compra, recepción con actualización de precios, variaciones |
+| **receivables** | `receivables:*` | CxC, abonos, resumen, pagos por rango de fechas |
+| **quotes** | `quotes:*` | Cotizaciones, conversión a venta o CxC, descuento de stock |
+| **expenses** | `expenses:*` | Gastos del negocio con categorías |
+| **returns** | `returns:*` | Devoluciones, restauración de stock |
+| **inventory** | `inventory:*` | Movimientos de stock, alertas de stock bajo |
+
+### Canales IPC adicionales (register.js)
+
+| Canal | Función |
+|-------|---------|
+| `db:backup` | Backup manual con diálogo "Guardar como…" |
+| `db:backup-now` | Backup automático a `userData/backups/` |
+| `db:list-backups` | Lista backups automáticos disponibles |
+| `db:restore` | Restaurar DB desde archivo (relanza la app) |
+| `db:set-backup-interval` | Cambiar intervalo del scheduler en caliente |
+| `db:get-path` | Ruta absoluta del archivo SQLite |
+| `printer:list` | Lista impresoras del sistema |
+| `printer:print` | Imprime HTML en ventana oculta (soporta `letter`, `half-letter`, `thermal-80`) |
 
 ---
 
-## Cómo iniciar el proyecto
+## Dashboard (SystemDashboard)
 
-### Requisitos previos
-- **Node.js** v18 o superior
-- **Windows** (probado en Windows 11) — también funciona en Linux
+Muestra tres niveles de información:
 
-### 1. Instalar dependencias y compilar módulos nativos
+**KPIs del día**
+- Transacciones · Total ventas · Cobros CxC hoy · Gastos del día
 
-```bash
-cd frontend
-npm install
-npx electron-rebuild -f -w better-sqlite3
-```
+**Total General hoy** *(card destacada)*  
+= Ventas cobradas (no crédito) + Cobros CxC del día
 
-> **Por qué el segundo paso:** `better-sqlite3` es un módulo nativo (C++) que debe compilarse
-> para el runtime interno de Electron, no para el Node.js del sistema. Sin este paso la app
-> arranca con pantalla en blanco y error en consola.
+**Resumen del mes** *(con selector de mes)*  
+- Transacciones · Total ventas · Cobros CxC · Total General del mes  
+- Selector `<input type="month">` que permite navegar a meses anteriores
 
-### 2. Levantar entorno de desarrollo
-
-```bash
-npm run dev
-```
-
-Levanta Vite (renderer) y abre la ventana de Electron automáticamente.
-
-**Importante:** No uses el navegador (`localhost:5173`) para desarrollar — `window.api`
-solo existe dentro de la ventana Electron, no en el navegador.
-
-### 3. Generar ejecutable instalable
-
-```bash
-npm run build
-```
-
-Genera un `.exe` instalable en `release/`. Ese archivo se puede copiar a cualquier PC
-sin necesidad de Node.js ni dependencias adicionales.
+**Secciones secundarias**
+- Estado de caja abierta/cerrada
+- Cuentas por cobrar (saldo pendiente, cobrado hoy, vencidas)
+- Compras pendientes
+- Stock bajo (productos bajo mínimo)
+- Alertas: stock crítico, cuentas próximas a vencer, cuentas vencidas
 
 ---
 
-## API IPC (`window.api`)
+## Caja (Sesiones)
 
-Todos los canales siguen el envelope estándar:
-`{ ok: true, data } | { ok: false, error: { code, message } }`
+- Solo admin puede abrir/cerrar sesión
+- Al **cerrar**, el monto esperado se calcula con:  
+  `apertura + ventas_cobradas_HOY + cobros_CxC_HOY + entradas_manuales − salidas_manuales`
+- Las ventas de crédito **no** cuentan en el cierre de caja
+- Al **ver** una sesión histórica, se muestra el rango completo de la sesión
+
+---
+
+## Cuentas por Cobrar (CxC)
+
+- Creación manual o automática al convertir una cotización a CxC
+- Estados: `pending` → `partial` → `paid` | `cancelled`
+- Al cancelar: el inventario **NO se restaura** (los productos ya fueron entregados)
+- Los abonos se reflejan en: Dashboard (KPI del día), cierre de caja y resumen mensual
+
+---
+
+## Cotizaciones
+
+- Flujo: Borrador → Enviada → convertir a **Venta directa** o **CxC**
+- Al convertir a venta/CxC se descuenta el stock automáticamente
+- Impresión en tamaño carta mediante `printer:print` con HTML autónomo
+
+---
+
+## Compras
+
+- Estados de orden: `draft` → `sent` → `received` | `cancelled`
+- Al recibir: opción de **actualizar precio de costo** si hay variación respecto al costo actual
+- Las ventas a crédito se excluyen del cálculo de caja pero se registran normalmente
+
+---
+
+## Sistema de Backup
+
+- **Automático:** scheduler con `setInterval`, guarda en `userData/backups/`
+- **Intervalo por defecto:** 720 horas (mensual), máximo 10 copias
+- **Configurable** desde Configuración sin reiniciar la app
+- **Manual:** diálogo nativo "Guardar como…" desde Configuración
+- **Restaurar:** abre la DB respaldada y relanza la app automáticamente
+
+---
+
+## Impresión
+
+La app usa `printer:print` con una ventana Electron oculta, no `window.print()`.  
+Tamaños soportados: `letter` (215×279 mm) · `half-letter` (139×215 mm) · `thermal-80` (80 mm).  
+Documentos que se pueden imprimir: cotizaciones, cierre de caja.
+
+---
+
+## Identidad Visual
 
 ```js
-// Productos
-window.api.products.list()
-window.api.products.listActive()
-window.api.products.search(query)
-window.api.products.create(input)
-window.api.products.update(id, patch)
-window.api.products.remove(id)              // soft-delete (is_active = 0)
-window.api.products.restore(id)
-window.api.products.adjustStock(id, type, qty)  // type: 'entry' | 'exit'
+// renderer/lib/brand.js — NO se sobreescribe con respaldos de DB
+export const BRAND_NAME = 'Mangueras del Sur'
+export const BRAND_LOGO = logoUrl   // renderer/assets/logo2.jpeg
+```
 
-// Clientes
-window.api.customers.list(opts)
-window.api.customers.search(query, opts)
-window.api.customers.getById(id)
-window.api.customers.create(input)
-window.api.customers.update(id, patch)
-window.api.customers.setActive(id, active)
+Los assets de logo deben estar en `renderer/assets/` (no en `public/`) para que Vite los procese.
 
-// Ventas
-window.api.sales.create(saleData)
-window.api.sales.list(opts)                 // paginado { page, pageSize }
-window.api.sales.getById(id)
-window.api.sales.dailyReport()              // KPIs del día + top 5 productos
+---
 
-// Configuración
-window.api.settings.getAll()
-window.api.settings.get(key)
-window.api.settings.set(key, value)
-window.api.settings.getByCategory(category)
+## Tecnologías
+
+| Categoría | Librería | Versión |
+|-----------|---------|---------|
+| Runtime | Electron | 30.5.1 |
+| BD | better-sqlite3 | 12.x |
+| UI Framework | React | 18.3 |
+| Build | Vite + vite-plugin-electron | 5.4 / 0.29 |
+| Router | react-router-dom | 7.x |
+| Server State | @tanstack/react-query | 5.x |
+| Client State | Zustand | 4.x |
+| Formularios | react-hook-form + Zod | 7.x / 3.x |
+| UI Components | shadcn/ui (Radix) + Tailwind | 3.4 |
+| Gráficas | Recharts | 3.x |
+| PDF/Excel | jsPDF + jspdf-autotable + xlsx | — |
+| Iconos | lucide-react + react-icons | — |
+| Notificaciones | Sonner | 1.x |
+| Fechas | date-fns | 4.x |
+
+---
+
+## Scripts disponibles
+
+```bash
+npm run dev          # Desarrollo (Vite + Electron)
+npm run build        # Build de producción + instalador (electron-builder)
+npm run lint         # ESLint
+npm run typecheck    # TypeScript check (checkJs: true, sin compilar)
 ```
 
 ---
 
-## Pendiente
+## Notas para desarrollo
 
-| Prioridad | Tarea |
-|-----------|-------|
-| Alta | **Órdenes de servicio (Workshop)** — esquema DB, IPC, UI completa. Es el diferenciador de un taller vs un POS genérico |
-| Media | **Cierre de caja** — apertura con monto inicial, corte del día por método de pago |
-| Media | **Método de pago en reportes** — agregar columna `payment_method` a `sales` para desglosar efectivo/tarjeta |
-| Baja | **Filtro por fecha en historial** — hoy solo pagina, no filtra por rango de fechas |
-| Baja | **Ticket con membrete configurable** — logo del negocio, formato 80mm para impresora térmica |
+- **`window.api`** solo existe en el renderer dentro de Electron, nunca en navegador
+- **Nunca editar** una migración ya aplicada — el checksum SHA-256 lo detectaría
+- **Ventas a crédito** (`payment_method = 'credit'`) no cuentan en cierre de caja ni en `cash_total`
+- **`dailySummary`** incluye el campo `cash_total` (ventas no-crédito activas del día)
+- El **Consumidor Final** es el cliente con `id = 1`, sembrado en migración 004
+- El **admin por defecto** se siembra en migración 006 (ver seed o settings)
+- Para desarrollo con TypeScript: `jsconfig.json` con `checkJs: true` y `api.d.ts` para `window.api`

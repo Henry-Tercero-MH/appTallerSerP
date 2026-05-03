@@ -14,11 +14,13 @@ export function registerReceivablesIpc(svc) {
     })
   }
 
-  handle('receivables:list',          ()        => svc.list())
-  handle('receivables:get',           (id)      => svc.getDetail(id))
-  handle('receivables:summary',       ()        => svc.getSummary())
-  handle('receivables:create',        (input)   => svc.create(input))
-  handle('receivables:apply-payment', (input)   => svc.applyPayment(input))
-  handle('receivables:cancel',        (id)      => svc.cancel(id))
-  handle('receivables:by-customer',   (id)      => svc.byCustomer(id))
+  handle('receivables:list',           ()        => svc.list())
+  handle('receivables:get',            (id)      => svc.getDetail(id))
+  handle('receivables:summary',        ()        => svc.getSummary())
+  handle('receivables:payments-today', ()        => svc.getPaymentsToday())
+  handle('receivables:payments-range', (range)   => svc.getPaymentsForRange(range))
+  handle('receivables:create',         (input)   => svc.create(input))
+  handle('receivables:apply-payment',  (input)   => svc.applyPayment(input))
+  handle('receivables:cancel',         (id)      => svc.cancel(id))
+  handle('receivables:by-customer',    (id)      => svc.byCustomer(id))
 }

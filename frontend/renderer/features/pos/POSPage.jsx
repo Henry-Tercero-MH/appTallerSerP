@@ -437,7 +437,7 @@ function POSInner() {
         </div>
 
         {/* Acciones */}
-        <div className="flex gap-2 px-3 pb-3">
+        <div className="flex gap-2 px-3 pb-2 pt-1">
           <Button
             variant="outline"
             size="sm"

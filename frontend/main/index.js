@@ -23,8 +23,33 @@ function createWindow() {
   }
 }
 
+function buildMenu() {
+  return Menu.buildFromTemplate([
+    {
+      label: 'Archivo',
+      submenu: [
+        { role: 'quit', label: 'Salir' },
+      ],
+    },
+    {
+      label: 'Vista',
+      submenu: [
+        { role: 'reload',       label: 'Recargar',             accelerator: 'CmdOrCtrl+R' },
+        { role: 'forceReload',  label: 'Recargar (forzado)',   accelerator: 'CmdOrCtrl+Shift+R' },
+        { role: 'toggleDevTools', label: 'Herramientas de dev', accelerator: 'F12' },
+        { type: 'separator' },
+        { role: 'resetZoom',    label: 'Zoom normal',          accelerator: 'CmdOrCtrl+0' },
+        { role: 'zoomIn',       label: 'Acercar',              accelerator: 'CmdOrCtrl+=' },
+        { role: 'zoomOut',      label: 'Alejar',               accelerator: 'CmdOrCtrl+-' },
+        { type: 'separator' },
+        { role: 'togglefullscreen', label: 'Pantalla completa', accelerator: 'F11' },
+      ],
+    },
+  ])
+}
+
 app.whenReady().then(() => {
-  Menu.setApplicationMenu(null)
+  Menu.setApplicationMenu(buildMenu())
   bootstrap()
   createWindow()
 })

@@ -25,8 +25,9 @@ export function createCashService(repo) {
       const session = repo.findById(sessionId)
       if (!session) throw Object.assign(new Error('Sesión no encontrada'), { code: 'CASH_NOT_FOUND' })
       const movements = repo.movementsForSession(sessionId)
-      const salesTotal = repo.salesTotal(sessionId, session.closed_at)
-      return { session, movements, salesTotal }
+      const salesTotal             = repo.salesTotal(sessionId, session.closed_at)
+      const receivablePaymentsTotal = repo.receivablePaymentsTotal(sessionId, session.closed_at)
+      return { session, movements, salesTotal, receivablePaymentsTotal }
     },
 
     /**
@@ -69,11 +70,12 @@ export function createCashService(repo) {
         throw Object.assign(new Error('Monto de cierre inválido'), { code: 'CASH_INVALID_AMOUNT' })
       }
 
-      const salesTotal  = repo.salesTotal(session.id, null)
+      const salesTotal              = repo.salesTotalToday()
+      const receivablePaymentsTotal = repo.receivablePaymentsTodayTotal()
       const movements   = repo.movementsForSession(session.id)
       const movIn       = movements.filter(m => m.type === 'in').reduce((s, m) => s + m.amount, 0)
       const movOut      = movements.filter(m => m.type === 'out').reduce((s, m) => s + m.amount, 0)
-      const expected    = session.opening_amount + salesTotal + movIn - movOut
+      const expected    = session.opening_amount + salesTotal + receivablePaymentsTotal + movIn - movOut
       const difference  = closingAmount - expected
 
       repo.close({
