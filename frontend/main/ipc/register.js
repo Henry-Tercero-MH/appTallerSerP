@@ -1,4 +1,5 @@
-import { ipcMain, dialog, app, BrowserWindow } from 'electron'
+import _electron from 'electron'
+const { ipcMain, dialog, app, BrowserWindow } = _electron
 import path from 'path'
 import { getDb } from '../database/connection.js'
 import { runMigrations } from '../database/migrator.js'
@@ -58,6 +59,10 @@ import { registerReturnsIpc }      from '../modules/returns/returns.ipc.js'
 import { createInventoryRepository } from '../modules/inventory/inventory.repository.js'
 import { createInventoryService }    from '../modules/inventory/inventory.service.js'
 import { registerInventoryIpc }      from '../modules/inventory/inventory.ipc.js'
+
+import { createLicenseRepository } from '../modules/license/license.repository.js'
+import { createLicenseService }    from '../modules/license/license.service.js'
+import { registerLicenseIpc }      from '../modules/license/license.ipc.js'
 
 import { startBackupSchedule, updateBackupSchedule, runBackup, listBackups, restoreFromFile } from '../database/backup.js'
 
@@ -134,6 +139,9 @@ export function bootstrap() {
   const inventoryRepo = createInventoryRepository(db)
   const inventory     = createInventoryService(inventoryRepo)
 
+  const licenseRepo = createLicenseRepository(db)
+  const license     = createLicenseService(licenseRepo, settings)
+
   registerSettingsIpc(settings)
   registerCategoriesIpc(categories)
   registerProductsIpc(products)
@@ -148,6 +156,7 @@ export function bootstrap() {
   registerExpensesIpc(expenses)
   registerReturnsIpc(returns_)
   registerInventoryIpc(inventory)
+  registerLicenseIpc(ipcMain, license)
 
   // ── Backup ──────────────────────────────────────────────────
   const dbPath = path.join(app.getPath('userData'), 'taller_pos.sqlite')

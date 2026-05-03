@@ -1,108 +1,216 @@
-import { useRef } from 'react'
 import { Printer, X } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Button }       from '@/components/ui/button'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { usePrinterSettings } from '@/hooks/useSettings'
 
-/** @param {number} n */
+/** @param {number} n @returns {string} */
 const fmtMoney = (n) => new Intl.NumberFormat('es-GT', { style: 'currency', currency: 'GTQ' }).format(n ?? 0)
-/** @param {Date} d */
-const fmtDate  = (d) => new Intl.DateTimeFormat('es-GT', { dateStyle: 'short', timeStyle: 'short', hour12: false }).format(d)
 
-/** @type {Record<string, string>} */
-const PAYMENT_LABELS = {
-  cash:     'Efectivo',
-  card:     'Tarjeta',
-  transfer: 'Transferencia',
-  credit:   'Crédito',
+const C_HEAD   = '#f5f5f5'   // fondo cabecera/tabla — gris claro
+const C_BORDER = '#111'      // bordes — negro suave
+const PRINT_COLOR = '-webkit-print-color-adjust:exact;print-color-adjust:exact;'
+const MIN_ROWS = 8           // filas mínimas en la tabla (rellena hoja)
+
+/**
+ * Genera el HTML del cuerpo del recibo (se usa tanto en el preview como en la impresión).
+ * Usa SOLO estilos inline para garantizar que el resultado sea igual en ambos contextos.
+ */
+/**
+ * @param {any} data
+ * @param {{ name: string, logo: string, nit: string, address: string, phone: string }} business
+ * @param {boolean} taxEnabled
+ * @returns {string}
+ */
+function buildInvoiceBody(data, business, taxEnabled) {
+  const dd   = String(data.date.getDate()).padStart(2, '0')
+  const mm   = String(data.date.getMonth() + 1).padStart(2, '0')
+  const yyyy = data.date.getFullYear()
+  const folio = String(data.saleId).padStart(6, '0')
+  const esCOntado = data.paymentMethod !== 'credit'
+
+  const discountAmount = data.discountAmount ?? (
+    data.discount?.type === 'percent'
+      ? data.items.reduce((s, i) => s + i.price * i.qty, 0) * (data.discount.value / 100)
+      : data.discount?.type === 'fixed' ? data.discount.value : 0
+  )
+
+  // ── Filas de items ────────────────────────────────────────────────
+  const itemRowsHtml = data.items.map(item => `
+    <tr>
+      <td style="text-align:center;border-bottom:1px solid #ddd;border-right:1px solid ${C_BORDER};padding:3px 4px;">${item.qty}</td>
+      <td style="border-bottom:1px solid #ddd;border-right:1px solid ${C_BORDER};padding:3px 8px;">${item.name}${item.price !== item.price ? '' : ''}</td>
+      <td style="text-align:right;border-bottom:1px solid #ddd;padding:3px 6px;">${fmtMoney(item.price * item.qty)}</td>
+    </tr>`).join('')
+
+  const emptyRows = Math.max(0, MIN_ROWS - data.items.length)
+  const emptyRowsHtml = Array.from({ length: emptyRows }, () => `
+    <tr style="height:22px;">
+      <td style="border-bottom:1px solid #eee;border-right:1px solid ${C_BORDER};">&nbsp;</td>
+      <td style="border-bottom:1px solid #eee;border-right:1px solid ${C_BORDER};">&nbsp;</td>
+      <td style="border-bottom:1px solid #eee;">&nbsp;</td>
+    </tr>`).join('')
+
+  // ── Fila de subtotales (solo si hay descuento o IVA) ──────────────
+  const extraTotals = []
+  if (discountAmount > 0) {
+    extraTotals.push(`<tr>
+      <td colspan="2" style="text-align:right;padding:2px 8px;font-size:0.85em;border-right:1px solid ${C_BORDER};">Descuento${data.discount?.type === 'percent' ? ` (${data.discount.value}%)` : ''}:</td>
+      <td style="text-align:right;padding:2px 6px;font-size:0.85em;">-${fmtMoney(discountAmount)}</td>
+    </tr>`)
+  }
+  if (taxEnabled && data.taxAmount > 0) {
+    extraTotals.push(`<tr>
+      <td colspan="2" style="text-align:right;padding:2px 8px;font-size:0.85em;border-right:1px solid ${C_BORDER};">IVA (${Math.round(data.taxRate * 100)}%):</td>
+      <td style="text-align:right;padding:2px 6px;font-size:0.85em;">${fmtMoney(data.taxAmount)}</td>
+    </tr>`)
+  }
+
+  return `
+  <div style="display:flex;flex-direction:column;width:100%;height:100%;font-family:Arial,sans-serif;font-size:13px;color:#111;">
+
+    <!-- ══ CABECERA ══════════════════════════════════════════════════ -->
+    <div style="display:flex;align-items:stretch;background:${C_HEAD};border:2px solid ${C_BORDER};gap:0;${PRINT_COLOR}">
+
+      <!-- Logo -->
+      <div style="padding:8px 10px;display:flex;align-items:center;justify-content:center;border-right:1px solid ${C_BORDER};min-width:80px;background:${C_HEAD};${PRINT_COLOR}">
+        ${business.logo
+          ? `<img src="${business.logo}" style="max-width:80px;max-height:60px;object-fit:contain;" />`
+          : ''}
+      </div>
+
+      <!-- Datos del negocio -->
+      <div style="flex:1;padding:8px 12px;display:flex;flex-direction:column;justify-content:center;">
+        <div style="font-size:1.25em;font-weight:800;letter-spacing:0.02em;">${business.name}</div>
+        ${business.nit     ? `<div style="font-size:0.8em;margin-top:2px;">NIT: ${business.nit}</div>` : ''}
+        ${business.address ? `<div style="font-size:0.8em;">${business.address}</div>` : ''}
+        ${business.phone   ? `<div style="font-size:0.8em;">Tel: ${business.phone}</div>` : ''}
+      </div>
+
+      <!-- Bloque FACTURA + tipo pago + fecha -->
+      <div style="border-left:1px solid ${C_BORDER};min-width:170px;display:flex;flex-direction:column;">
+        <!-- Título -->
+        <div style="background:${C_BORDER};color:#fff;text-align:center;font-weight:800;font-size:1em;padding:5px 0;letter-spacing:0.05em;${PRINT_COLOR}">
+          FACTURA
+        </div>
+        <!-- Tipo de pago -->
+        <div style="display:flex;gap:12px;justify-content:center;padding:4px 8px;font-size:0.85em;border-bottom:1px solid ${C_BORDER};">
+          <span>${esCOntado ? '☑' : '☐'} CONTADO</span>
+          <span>${!esCOntado ? '☑' : '☐'} CRÉDITO</span>
+        </div>
+        <!-- Fecha en cuadrícula -->
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);flex:1;">
+          <div style="text-align:center;font-size:0.75em;font-weight:700;padding:2px;border-right:1px solid ${C_BORDER};">DÍA</div>
+          <div style="text-align:center;font-size:0.75em;font-weight:700;padding:2px;border-right:1px solid ${C_BORDER};">MES</div>
+          <div style="text-align:center;font-size:0.75em;font-weight:700;padding:2px;">AÑO</div>
+          <div style="text-align:center;font-size:0.9em;padding:3px;border-top:1px solid ${C_BORDER};border-right:1px solid ${C_BORDER};">${dd}</div>
+          <div style="text-align:center;font-size:0.9em;padding:3px;border-top:1px solid ${C_BORDER};border-right:1px solid ${C_BORDER};">${mm}</div>
+          <div style="text-align:center;font-size:0.9em;padding:3px;border-top:1px solid ${C_BORDER};">${yyyy}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ CLIENTE ════════════════════════════════════════════════════ -->
+    <div style="display:flex;gap:0;border:2px solid ${C_BORDER};border-top:none;padding:5px 10px;align-items:center;font-size:0.9em;">
+      <div style="flex:1;">
+        Señor(a):&nbsp;
+        <span style="border-bottom:1px solid #999;display:inline-block;min-width:220px;padding-bottom:1px;">${data.customerName}</span>
+      </div>
+      <div>
+        NIT:&nbsp;
+        <span style="border-bottom:1px solid #999;display:inline-block;min-width:90px;padding-bottom:1px;">${data.customerNit || 'C/F'}</span>
+      </div>
+    </div>
+
+    <!-- ══ TABLA DE ITEMS ══════════════════════════════════════════════ -->
+    <table style="width:100%;border-collapse:collapse;border:2px solid ${C_BORDER};border-top:none;flex:1;">
+      <thead>
+        <tr style="background:${C_HEAD};${PRINT_COLOR}">
+          <th style="width:58px;text-align:center;border-bottom:2px solid ${C_BORDER};border-right:1px solid ${C_BORDER};padding:4px 2px;font-size:0.82em;">CANT.</th>
+          <th style="text-align:center;border-bottom:2px solid ${C_BORDER};border-right:1px solid ${C_BORDER};padding:4px 2px;font-size:0.82em;">DETALLE</th>
+          <th style="width:110px;text-align:center;border-bottom:2px solid ${C_BORDER};padding:4px 2px;font-size:0.82em;">TOTAL</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${itemRowsHtml}
+        ${emptyRowsHtml}
+        ${extraTotals.join('')}
+      </tbody>
+    </table>
+
+    <!-- ══ PIE ════════════════════════════════════════════════════════ -->
+    <div style="display:flex;align-items:center;border:2px solid ${C_BORDER};border-top:none;padding:5px 10px;gap:10px;font-size:0.85em;">
+      <div style="flex:1;">
+        Recibido conforme:&nbsp;
+        <span style="border-bottom:1px solid #999;display:inline-block;min-width:130px;">&nbsp;</span>
+      </div>
+      <div>Cód.&nbsp;#${folio}</div>
+      <div style="font-weight:800;font-size:1.1em;border:2px solid ${C_BORDER};padding:4px 14px;background:${C_HEAD};${PRINT_COLOR}">
+        Total&nbsp;${fmtMoney(data.total)}
+      </div>
+    </div>
+
+  </div>`
 }
+
+// ── Dimensiones: media carta horizontal = 8.5" × 5.5" → 816 × 528 px a 96 dpi
+const PREVIEW_W = 816
+const PREVIEW_H = 528
 
 /**
  * @param {{
- *   data: {
- *     saleId: number, date: Date,
- *     items: import('@/schemas/cart-item.schema').CartItem[],
- *     customerName: string, customerNit: string,
- *     paymentMethod: string,
- *     discount: { type: string, value: number },
- *     subtotal: number, taxAmount: number, total: number, taxRate: number,
- *     discountAmount?: number,
- *   } | null,
+ *   data: any,
  *   business: { name: string, logo: string, nit: string, address: string, phone: string },
  *   taxEnabled?: boolean,
  *   onClose: () => void,
  * }} props
  */
-/** Dimensiones del preview según el tamaño de papel configurado */
-const PAPER_CONFIG = {
-  'thermal-80':  { dialogCls: 'max-w-xs',  previewWidth: '302px', fontSize: '11px', padding: '8px'  },
-  'half-letter': { dialogCls: 'max-w-lg',  previewWidth: '460px', fontSize: '13px', padding: '14px' },
-  'letter':      { dialogCls: 'max-w-3xl', previewWidth: '720px', fontSize: '13px', padding: '20px' },
-}
-
 export function ReceiptModal({ data, business, taxEnabled = false, onClose }) {
-  const receiptRef = useRef(/** @type {HTMLDivElement|null} */ (null))
   const { printerName, paperSize } = usePrinterSettings()
-  const paper = PAPER_CONFIG[/** @type {keyof typeof PAPER_CONFIG} */ (paperSize)] ?? PAPER_CONFIG['half-letter']
 
   async function handlePrint() {
-    const content = receiptRef.current?.innerHTML ?? ''
+    if (!data) return
+    const body = buildInvoiceBody(data, business, taxEnabled)
 
-    const isHalf   = paperSize === 'half-letter'
-    const isLetter = paperSize === 'letter'
+    // Para thermal se mantiene el formato antiguo compacto; para carta/media carta se usa el formato factura
+    const isThermal = paperSize === 'thermal-80'
 
-    const pageSizeCss = {
-      'half-letter': '@page { size: 5.5in 8.5in; margin: 8mm 12mm; }',
-      'letter':      '@page { size: 8.5in 11in;  margin: 15mm 20mm; }',
-      'thermal-80':  '@page { size: 80mm auto;   margin: 2mm 3mm; }',
-    }[paperSize] ?? '@page { size: 5.5in 8.5in; margin: 8mm 12mm; }'
-
-    const baseFontSize  = isHalf ? '13px' : isLetter ? '13px' : '11px'
-    const lgFontSize    = isHalf ? '20px' : isLetter ? '18px' : '16px'
-    const smFontSize    = isHalf ? '11px' : isLetter ? '11px' : '10px'
-    const grandFontSize = isHalf ? '17px' : isLetter ? '16px' : '15px'
-    const imgSize       = isHalf ? 'max-width:110px;max-height:80px' : 'max-width:90px;max-height:70px'
+    const pageCss = isThermal
+      ? '@page { size: 80mm auto; margin: 2mm 3mm; }'
+      : '@page { size: 8.5in 5.5in landscape; margin: 6mm 10mm; }'   // media carta horizontal
 
     const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"/>
 <style>
-  ${pageSizeCss}
+  ${pageCss}
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Courier New', monospace; font-size: ${baseFontSize}; color: #000; }
-  .receipt { width: 100%; max-width: 100%; }
-  .receipt-center { text-align: center; margin-bottom: 10px; }
-  .receipt-bold { font-weight: bold; }
-  .receipt-lg { font-size: ${lgFontSize}; letter-spacing: 0.02em; }
-  .receipt-sm { font-size: ${smFontSize}; color: #444; }
-  .receipt-divider { border-top: 1px dashed #000; margin: 7px 0; }
-  .receipt-divider-solid { border-top: 1.5px solid #000; margin: 7px 0; }
-  .receipt-row { display: flex; justify-content: space-between; padding: 1px 0; }
-  .receipt-row-head { display: flex; justify-content: space-between; font-weight: bold; font-size: ${smFontSize}; border-bottom: 1.5px solid #000; padding-bottom: 3px; margin-bottom: 3px; }
-  .receipt-item-name { flex: 1; word-break: break-word; }
-  .receipt-item-qty   { width: 32px; text-align: center; }
-  .receipt-item-price { width: 72px; text-align: right; }
-  .receipt-item-sub   { width: 80px; text-align: right; }
-  .receipt-totals-block { margin-left: auto; width: 55%; }
-  .receipt-total-row { display: flex; justify-content: space-between; padding: 2px 0; }
-  .receipt-grand { display: flex; justify-content: space-between; font-size: ${grandFontSize}; font-weight: bold; border-top: 2px solid #000; padding-top: 6px; margin-top: 4px; }
-  .receipt-footer { text-align: center; margin-top: 16px; font-size: ${smFontSize}; line-height: 1.6; }
-  img { ${imgSize}; }
+  html, body { width: 100%; height: 100%; }
+  body { display: flex; justify-content: center; }
+  .wrap { display: flex; flex-direction: column; width: 100%; min-height: 100%; }
+  img { display: block; }
+  table { border-collapse: collapse; }
+  @media print {
+    html, body { width: 8.5in; height: 5.5in; }
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .wrap { min-height: 100%; }
+  }
 </style>
-</head><body>${content}</body></html>`
+</head>
+<body>
+  <div class="wrap">
+    ${body}
+  </div>
+</body></html>`
 
     if (printerName && window.api?.printer) {
-      const result = await window.api.printer.print(html, printerName, paperSize)
-      if (!result.ok) {
-        console.warn('[print] silent print failed, falling back to dialog:', result.error)
-        openPrintDialog(html)
-      }
+      const result = await window.api.printer.print(html, printerName, 'half-letter')
+      if (!result.ok) openPrintDialog(html)
     } else {
       openPrintDialog(html)
     }
   }
 
   function openPrintDialog(html) {
-    const win = window.open('', '_blank', 'width=500,height=750')
+    const win = window.open('', '_blank', 'width=860,height=600')
     if (!win) return
     win.document.write(html)
     win.document.close()
@@ -112,123 +220,41 @@ export function ReceiptModal({ data, business, taxEnabled = false, onClose }) {
 
   if (!data) return null
 
-  const discountAmount = data.discountAmount ?? (
-    data.discount?.type === 'percent'
-      ? (data.items.reduce((s, i) => s + i.price * i.qty, 0)) * (data.discount.value / 100)
-      : data.discount?.type === 'fixed' ? data.discount.value : 0
-  )
+  const body = buildInvoiceBody(data, business, taxEnabled)
 
   return (
     <Dialog open={!!data} onOpenChange={o => { if (!o) onClose() }}>
-      <DialogContent className={`${paper.dialogCls} p-0 gap-0 [&>button:last-child]:hidden`}>
+      {/* max-w-5xl ≈ 1024px para que quepan los 816px del preview + padding del dialog */}
+      <DialogContent className="max-w-5xl p-0 gap-0 [&>button:last-child]:hidden">
+
         {/* Toolbar */}
-        <div className="flex items-center justify-between px-4 py-3 border-b">
-          <span className="text-sm font-semibold">Recibo de venta</span>
-          <Button size="sm" onClick={handlePrint}>
-            <Printer className="mr-1.5 h-3.5 w-3.5" /> Imprimir
-          </Button>
-          <Button size="sm" variant="outline" onClick={onClose}>
-            <X className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-
-        {/* Receipt content */}
-        <div className="overflow-y-auto max-h-[80vh] bg-gray-100 flex justify-center" style={{ padding: paper.padding }}>
-          <div
-            ref={receiptRef}
-            className="receipt bg-white shadow-sm"
-            style={{ width: paper.previewWidth, fontSize: paper.fontSize, padding: paper.padding, fontFamily: "'Courier New', monospace" }}
-          >
-            {/* Header */}
-            <div className="receipt-center mb-2">
-              {business.logo && (
-                <img src={business.logo} alt={business.name} className="mx-auto mb-1 h-12 object-contain" />
-              )}
-              <div className="receipt-bold receipt-lg">{business.name}</div>
-              {business.nit     && <div className="receipt-sm">NIT: {business.nit}</div>}
-              {business.address && <div className="receipt-sm">{business.address}</div>}
-              {business.phone   && <div className="receipt-sm">Tel: {business.phone}</div>}
-            </div>
-
-            <div className="receipt-divider" />
-
-            {/* Folio + fecha */}
-            <div className="receipt-row">
-              <span className="receipt-bold">RECIBO #{String(data.saleId).padStart(6, '0')}</span>
-            </div>
-            <div className="receipt-row receipt-sm">
-              <span>{fmtDate(data.date)}</span>
-            </div>
-            <div className="receipt-row receipt-sm mt-0.5">
-              <span>Cliente: {data.customerName}</span>
-            </div>
-            <div className="receipt-row receipt-sm">
-              <span>NIT: {data.customerNit}</span>
-            </div>
-            <div className="receipt-row receipt-sm">
-              <span>Pago: {PAYMENT_LABELS[data.paymentMethod] ?? data.paymentMethod}</span>
-            </div>
-
-            <div className="receipt-divider" />
-
-            {/* Items */}
-            <div className="receipt-row-head">
-              <span className="receipt-item-name">DESCRIPCIÓN</span>
-              <span className="receipt-item-qty">QTY</span>
-              <span className="receipt-item-price">P/U</span>
-              <span className="receipt-item-sub">TOTAL</span>
-            </div>
-            {data.items.map((item, i) => (
-              <div key={i} className="mb-0.5">
-                <div className="receipt-row">
-                  <span className="receipt-item-name" style={{ wordBreak: 'break-word' }}>{item.name}</span>
-                  <span className="receipt-item-qty">{item.qty}</span>
-                  <span className="receipt-item-price">{fmtMoney(item.price)}</span>
-                  <span className="receipt-item-sub">{fmtMoney(item.price * item.qty)}</span>
-                </div>
-              </div>
-            ))}
-
-            <div className="receipt-divider" />
-
-            {/* Totales alineados a la derecha */}
-            <div className="receipt-totals-block">
-              {discountAmount > 0 && (
-                <>
-                  <div className="receipt-total-row">
-                    <span>Bruto:</span>
-                    <span>{fmtMoney(data.items.reduce((s, i) => s + /** @type {number} */ (i.price) * i.qty, 0))}</span>
-                  </div>
-                  <div className="receipt-total-row">
-                    <span>Descuento{data.discount?.type === 'percent' ? ` (${data.discount.value}%)` : ''}:</span>
-                    <span>-{fmtMoney(discountAmount)}</span>
-                  </div>
-                </>
-              )}
-              <div className="receipt-total-row">
-                <span>Subtotal:</span>
-                <span>{fmtMoney(data.subtotal)}</span>
-              </div>
-              {taxEnabled && (
-                <div className="receipt-total-row">
-                  <span>IVA ({Math.round(data.taxRate * 100)}%):</span>
-                  <span>{fmtMoney(data.taxAmount)}</span>
-                </div>
-              )}
-              <div className="receipt-total-row receipt-grand">
-                <span>TOTAL:</span>
-                <span>{fmtMoney(data.total)}</span>
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="receipt-divider" style={{ marginTop: '10px' }} />
-            <div className="receipt-footer">
-              <div className="receipt-bold">¡Gracias por su compra!</div>
-              <div style={{ marginTop: '4px' }}>© {new Date().getFullYear()} {/** negocio */}</div>
-            </div>
+        <div className="flex items-center justify-between px-4 py-3 border-b bg-white sticky top-0 z-10">
+          <span className="text-sm font-semibold">Factura — Vista previa (media carta horizontal)</span>
+          <div className="flex gap-2">
+            <Button size="sm" onClick={handlePrint}>
+              <Printer className="mr-1.5 h-3.5 w-3.5" /> Imprimir
+            </Button>
+            <Button size="sm" variant="outline" onClick={onClose}>
+              <X className="h-3.5 w-3.5" />
+            </Button>
           </div>
         </div>
+
+        {/* Preview: hoja de papel a escala real */}
+        <div className="overflow-auto bg-gray-300 flex justify-center items-start py-5"
+          style={{ maxHeight: 'calc(90vh - 56px)' }}>
+          <div
+            style={{
+              width:      PREVIEW_W,
+              height:     PREVIEW_H,
+              background: '#fff',
+              boxShadow:  '0 4px 16px rgba(0,0,0,0.18)',
+              overflow:   'hidden',
+            }}
+            dangerouslySetInnerHTML={{ __html: body }}
+          />
+        </div>
+
       </DialogContent>
     </Dialog>
   )

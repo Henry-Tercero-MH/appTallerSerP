@@ -1,4 +1,5 @@
-import { app, BrowserWindow, Menu } from 'electron'
+import _electron from 'electron'
+const { app, BrowserWindow, Menu } = _electron
 import { join } from 'node:path'
 import { bootstrap } from './ipc/register.js'
 

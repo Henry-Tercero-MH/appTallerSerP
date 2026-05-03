@@ -15,6 +15,7 @@ import { MoneyDisplay }   from '@/components/shared/MoneyDisplay'
 
 import { useSales } from '@/hooks/useSales'
 import { useTaxSettings } from '@/hooks/useSettings'
+import { useAuthContext } from '@/features/auth/AuthContext'
 import { SaleDetailDialog } from './SaleDetailDialog'
 import { VoidSaleDialog }   from './VoidSaleDialog'
 import { ReturnDialog }     from './ReturnDialog'
@@ -52,6 +53,8 @@ const STATUS_OPTS = [
 
 export default function SalesHistoryPage() {
   const { enabled: taxEnabled } = useTaxSettings()
+  const { user } = useAuthContext()
+  const isCashier = user?.role === 'cashier'
   const [page,          setPage]          = useState(1)
   const [openSaleId,    setOpenSaleId]    = useState(/** @type {number | null} */ (null))
   const [voidSale,      setVoidSale]      = useState(/** @type {any} */ (null))
@@ -85,6 +88,7 @@ export default function SalesHistoryPage() {
     from:    from  || undefined,
     to:      to    || undefined,
     status:  status || undefined,
+    userId:  isCashier ? user?.id : undefined,
   })
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1

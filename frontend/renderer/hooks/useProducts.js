@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import * as productsService from '@/services/productsService.js'
 import * as salesService from '@/services/salesService.js'
 import { productKeys, saleKeys } from './queryKeys.js'
+import { cashKeys } from './useCash.js'
 import { useDebouncedValue } from './useDebouncedValue.js'
 
 /**
@@ -70,6 +71,7 @@ export function useCreateSale() {
     onSuccess: (result) => {
       qc.invalidateQueries({ queryKey: productKeys.all })
       qc.invalidateQueries({ queryKey: saleKeys.all })
+      qc.invalidateQueries({ queryKey: cashKeys.all })
       // Los montos del toast vienen del main (autoritativos tras recalculo).
       const formatted = new Intl.NumberFormat('es-GT', {
         style: 'currency',

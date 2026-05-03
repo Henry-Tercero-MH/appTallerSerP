@@ -157,6 +157,10 @@ const api = {
     list:  ()                            => ipcRenderer.invoke('printer:list'),
     print: (html, deviceName, paperSize) => ipcRenderer.invoke('printer:print', html, deviceName, paperSize),
   },
+  license: {
+    status:   ()      => ipcRenderer.invoke('license:status'),
+    activate: (token) => ipcRenderer.invoke('license:activate', token),
+  },
 }
 
 contextBridge.exposeInMainWorld('api', api)

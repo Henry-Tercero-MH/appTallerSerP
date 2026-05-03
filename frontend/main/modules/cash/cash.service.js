@@ -27,6 +27,12 @@ export function createCashService(repo) {
       const movements = repo.movementsForSession(sessionId)
       const salesTotal             = repo.salesTotal(sessionId, session.closed_at)
       const receivablePaymentsTotal = repo.receivablePaymentsTotal(sessionId, session.closed_at)
+      // Para sesiones abiertas, calcular expected_amount en tiempo real (aún no guardado en DB)
+      if (session.status === 'open') {
+        const movIn  = movements.filter(m => m.type === 'in').reduce((s, m) => s + m.amount, 0)
+        const movOut = movements.filter(m => m.type === 'out').reduce((s, m) => s + m.amount, 0)
+        session.expected_amount = session.opening_amount + salesTotal + (receivablePaymentsTotal ?? 0) + movIn - movOut
+      }
       return { session, movements, salesTotal, receivablePaymentsTotal }
     },
 

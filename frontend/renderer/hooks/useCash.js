@@ -14,6 +14,7 @@ export function useOpenSession() {
     queryKey: cashKeys.open,
     queryFn:  cashService.getOpenSession,
     staleTime: 30_000,
+    refetchInterval: 60_000,
     refetchOnWindowFocus: true,
   })
 }
@@ -33,6 +34,7 @@ export function useCashSession(id) {
     queryKey: cashKeys.session(id),
     queryFn:  () => cashService.getSession(id),
     enabled:  !!id,
+    refetchInterval: 60_000,
   })
 }
 

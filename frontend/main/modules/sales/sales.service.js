@@ -217,10 +217,11 @@ export function createSalesService(repo, settings, customers, audit) {
       const from      = opts.from?.trim()    || null
       const to        = opts.to?.trim()      || null
       const status    = opts.status?.trim()  || null
+      const userId    = opts.userId != null ? Number(opts.userId) : null
 
       return {
-        data:  repo.findPage({ limit: pageSize, offset, search, from, to, status }),
-        total: repo.countAll({ search, from, to, status }),
+        data:  repo.findPage({ limit: pageSize, offset, search, from, to, status, userId }),
+        total: repo.countAll({ search, from, to, status, userId }),
         page,
         pageSize,
       }

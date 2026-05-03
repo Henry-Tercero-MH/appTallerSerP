@@ -120,6 +120,7 @@ export function createSalesRepository(db) {
          AND (@from   IS NULL OR date(date) >= @from)
          AND (@to     IS NULL OR date(date) <= @to)
          AND (@status IS NULL OR status = @status)
+         AND (@userId IS NULL OR created_by_user_id = @userId)
        ORDER BY id DESC
        LIMIT @limit OFFSET @offset
     `),
@@ -133,6 +134,7 @@ export function createSalesRepository(db) {
          AND (@from   IS NULL OR date(date) >= @from)
          AND (@to     IS NULL OR date(date) <= @to)
          AND (@status IS NULL OR status = @status)
+         AND (@userId IS NULL OR created_by_user_id = @userId)
     `),
 
     dailySummary: db.prepare(`
@@ -369,16 +371,16 @@ export function createSalesRepository(db) {
     },
 
     /**
-     * @param {{ limit: number, offset: number, search?: string|null, from?: string|null, to?: string|null, status?: string|null }} opts
+     * @param {{ limit: number, offset: number, search?: string|null, from?: string|null, to?: string|null, status?: string|null, userId?: number|null }} opts
      * @returns {SaleRow[]}
      */
-    findPage({ limit, offset, search = null, from = null, to = null, status = null }) {
-      return stmts.findPageFiltered.all({ limit, offset, search, from, to, status })
+    findPage({ limit, offset, search = null, from = null, to = null, status = null, userId = null }) {
+      return stmts.findPageFiltered.all({ limit, offset, search, from, to, status, userId })
     },
 
-    /** @param {{ search?: string|null, from?: string|null, to?: string|null, status?: string|null }} [opts] */
-    countAll({ search = null, from = null, to = null, status = null } = {}) {
-      const row = /** @type {{ total: number }} */ (stmts.countFiltered.get({ search, from, to, status }))
+    /** @param {{ search?: string|null, from?: string|null, to?: string|null, status?: string|null, userId?: number|null }} [opts] */
+    countAll({ search = null, from = null, to = null, status = null, userId = null } = {}) {
+      const row = /** @type {{ total: number }} */ (stmts.countFiltered.get({ search, from, to, status, userId }))
       return row.total
     },
 

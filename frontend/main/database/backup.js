@@ -9,7 +9,8 @@
 
 import fs   from 'node:fs'
 import path from 'node:path'
-import { app } from 'electron'
+import _electron from 'electron'
+const { app } = _electron
 import { closeDb } from './connection.js'
 
 /** @type {ReturnType<typeof setInterval> | null} */

@@ -7,14 +7,3 @@ CREATE TABLE IF NOT EXISTS categories (
   created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
--- Semilla: categorias que estaban hardcodeadas en el frontend
-INSERT OR IGNORE INTO categories (name) VALUES
-  ('Aceites y lubricantes'),
-  ('Frenos e hidráulico'),
-  ('Filtros'),
-  ('Bujías y encendido'),
-  ('Químicos y aerosoles'),
-  ('Refrigeración'),
-  ('Eléctrico'),
-  ('Servicios'),
-  ('Otro');

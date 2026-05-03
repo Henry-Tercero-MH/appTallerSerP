@@ -1,4 +1,5 @@
-import { ipcMain } from 'electron'
+import _electron from 'electron'
+const { ipcMain } = _electron
 import { wrap } from '../../ipc/response.js'
 
 /** @param {ReturnType<typeof import('./cash.service.js').createCashService>} service */

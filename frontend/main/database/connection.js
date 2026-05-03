@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3'
-import { app } from 'electron'
+import _electron from 'electron'
+const { app } = _electron
 import path from 'node:path'
 
 /** @type {import('better-sqlite3').Database | null} */

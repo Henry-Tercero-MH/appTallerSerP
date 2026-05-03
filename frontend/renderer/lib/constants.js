@@ -1,6 +1,7 @@
 export const APP_NAME = 'SerProMec';
 
 export const ROUTES = {
+  ACTIVATION: '/activacion',
   LOGIN:     '/login',
   DASHBOARD: '/',
   POS:       '/ventas',

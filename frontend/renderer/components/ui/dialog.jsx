@@ -24,17 +24,33 @@ const DialogOverlay = React.forwardRef(function DialogOverlay({ className, ...pr
 
 /** @type {React.ForwardRefExoticComponent<React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & React.RefAttributes<React.ComponentRef<typeof DialogPrimitive.Content>>>} */
 const DialogContent = React.forwardRef(function DialogContent({ className, children, ...props }, ref) {
+  // Detectar si el children ya contiene un DialogTitle para no duplicarlo
+  const hasTitle = React.Children.toArray(children).some(
+    (child) => React.isValidElement(child) &&
+      (child.type === DialogPrimitive.Title ||
+       (typeof child.type === 'function' && child.type.displayName === 'DialogTitle') ||
+       // DialogHeader suele contener DialogTitle
+       (React.isValidElement(child) && child.props?.children &&
+        React.Children.toArray(child.props.children).some(
+          (c) => React.isValidElement(c) && c.type === DialogPrimitive.Title
+        )))
+  )
+
   return (
     <DialogPortal>
       <DialogOverlay />
       <DialogPrimitive.Content
         ref={ref}
+        aria-describedby={undefined}
         className={cn(
           'fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 border bg-card p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out sm:rounded-lg',
           className
         )}
         {...props}
       >
+        {!hasTitle && (
+          <DialogPrimitive.Title className="sr-only">Diálogo</DialogPrimitive.Title>
+        )}
         {children}
         <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
           <X className="h-4 w-4" />

@@ -444,6 +444,10 @@ export interface RendererApi {
     close(input: CashCloseInput):                    Promise<IpcResponse<CashSessionRow>>
     addMovement(input: CashMovementInput):           Promise<IpcResponse<CashMovementRow>>
   }
+  license: {
+    status():                           Promise<IpcResponse<{ activated: boolean }>>
+    activate(token: string):            Promise<IpcResponse<{ activated: boolean }>>
+  }
   receivables: {
     list():                                              Promise<IpcResponse<ReceivableRow[]>>
     get(id: number):                                     Promise<IpcResponse<ReceivableDetail>>

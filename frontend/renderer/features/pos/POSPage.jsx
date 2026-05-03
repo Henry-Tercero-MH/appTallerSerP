@@ -25,12 +25,10 @@ import { computeBreakdown } from '@/lib/pricing'
 
 const DEFAULT_CUSTOMER_ID = 1
 
-/** @type {{ value: 'cash'|'credit'|'card'|'transfer', label: string }[]} */
+/** @type {{ value: 'cash'|'credit', label: string }[]} */
 const PAYMENT_METHODS = [
-  { value: 'cash',     label: 'Efectivo' },
-  { value: 'credit',   label: 'Crédito' },
-  { value: 'card',     label: 'Tarjeta' },
-  { value: 'transfer', label: 'Transferencia' },
+  { value: 'cash',   label: 'Efectivo' },
+  { value: 'credit', label: 'Crédito'  },
 ]
 
 /** @type {{ value: 'cf'|'registered'|'company', label: string }[]} */
@@ -113,6 +111,14 @@ function POSInner() {
     }
   }, [clientType])
 
+  // Al seleccionar crédito, quitar CF y limpiar el cliente seleccionado
+  useEffect(() => {
+    if (paymentMethod === 'credit' && clientType === 'cf') {
+      setClientType('registered')
+      setCustomerId(null)
+    }
+  }, [paymentMethod])
+
   // Categorías únicas de los productos cargados
   const categories = ['all', ...new Set(products.map(p => p.category).filter(Boolean))]
 
@@ -121,6 +127,10 @@ function POSInner() {
     : products.filter(p => p.category === category)
 
   function handleConfirm() {
+    if (paymentMethod === 'credit' && clientType === 'cf') {
+      toast.error('No se puede facturar a Consumidor Final con crédito')
+      return
+    }
     createSale.mutate(
       {
         items: items.map((i) => ({ id: i.productId, qty: i.qty, price: i.price })),
@@ -417,7 +427,7 @@ function POSInner() {
           <div className="grid gap-1">
             <label className="text-xs font-medium text-muted-foreground">Tipo de cliente</label>
             <div className="flex gap-1.5">
-              {CLIENT_TYPES.map((t) => (
+              {CLIENT_TYPES.filter(t => paymentMethod !== 'credit' || t.value !== 'cf').map((t) => (
                 <button
                   key={t.value}
                   type="button"

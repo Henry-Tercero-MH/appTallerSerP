@@ -1,4 +1,5 @@
-import { ipcMain } from 'electron'
+import _electron from 'electron'
+const { ipcMain } = _electron
 
 /** @param {ReturnType<typeof import('./inventory.service.js').createInventoryService>} svc */
 export function registerInventoryIpc(svc) {

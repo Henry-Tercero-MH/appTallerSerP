@@ -1,4 +1,5 @@
-import { ipcMain } from 'electron'
+import _electron from 'electron'
+const { ipcMain } = _electron
 
 /** @param {ReturnType<typeof import('./expenses.service.js').createExpensesService>} svc */
 export function registerExpensesIpc(svc) {

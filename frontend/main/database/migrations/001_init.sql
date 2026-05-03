@@ -27,11 +27,3 @@ CREATE TABLE IF NOT EXISTS sale_items (
   FOREIGN KEY (product_id) REFERENCES products(id)
 );
 
--- Data semilla. INSERT OR IGNORE garantiza idempotencia si alguna instalacion
--- ya la tuviera (por ejemplo una DB preexistente del bootstrap antiguo).
-INSERT OR IGNORE INTO products (code, name, price, stock) VALUES
-  ('ACE-001', 'Aceite de Motor 10W40 Chevron',    45.00,  12),
-  ('FIL-002', 'Filtro de Aceite ECOBREX',         15.50,   5),
-  ('FRE-003', 'Pastillas de Freno Ceramicas',    120.00,   8),
-  ('BAT-004', 'Bateria 12V 70Ah LTH',            650.00,   2),
-  ('SRV-001', 'Servicio de Diagnostico Escaner', 150.00, 999);

@@ -55,6 +55,10 @@ export const saleInputSchema = z.object({
   customerId:    z.number().int().positive().optional(),
   paymentMethod: z.enum(['cash', 'credit', 'card', 'transfer']).optional(),
   clientType:    z.enum(['cf', 'registered', 'company']).optional(),
+  discountType:  z.enum(['none', 'percent', 'fixed']).optional(),
+  discountValue: z.number().nonnegative().optional(),
+  userId:        z.number().int().positive().optional(),
+  userName:      z.string().optional(),
 })
 
 /** @typedef {z.infer<typeof saleInputSchema>} SaleInput */
